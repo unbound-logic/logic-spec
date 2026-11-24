@@ -41,7 +41,7 @@ All normative items below carry an explicit claim status label (`Consensus` or `
 3. `Consensus` **Stratified Reflection & Strict Positivity (Curry Firewall)** ([`layer4-implication-and-curry-barrier`](../docs/design-review.md#layer4-implication-and-curry-barrier)):
    - Every item `A` and judgment carries a stratification level `n ∈ ℕ` (and, during vertical evolution, an inquiry stage index `t ∈ ℕ`).
    - **Level Stratification**: Any reflection item `Refl_k(J)` asserting the status (`Open`, `Grounded`, `Excluded`, `Collision`) or provenance of a level-`k` judgment `J` (or stage-`t` inquiry state `Σ_t`) has level strictly `n ≥ k + 1` (and stage `≥ t + 1`). Same-level self-referential equivalence `K_n ≡ (K_n → Z)` is ill-formed.
-   - **Strict Positivity**: Recursive item or boundary definitions `X := F(X)` are admissible only when every occurrence of `X` in `F(X)` is **strictly positive** (never occurring to the left of `→` or inside an unguarded polarity flip `~` that feeds a conditional antecedent) and well-founded.
+   - **Strict Positivity**: Recursive item or boundary definitions `X := F(X)` are admissible only when every occurrence of `X` in `F(X)` is **strictly positive** (never occurring to the left of `→`, inside an unguarded polarity flip `~` that feeds a conditional antecedent, or inside a contravariant boundary constraint promotion `[X]` / universal quantifier domain `D` scoping an item) and well-founded.
 
 ---
 
