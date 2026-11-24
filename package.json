@@ -1,15 +1,24 @@
 {
   "name": "unbound-logic-spec-tools",
   "private": true,
-  "description": "Specification graph verification for unbound-logic/logic-spec.",
+  "description": "Reference kernel, tests, and specification verification for unbound-logic/logic-spec.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "spec-graph": "spec-graph check"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "spec-graph": "spec-graph check",
+    "spec-guard": "spec-guard",
+    "spec-guard:prove": "spec-guard prove",
+    "spec-guard:claims": "spec-guard claims",
+    "verify": "npm run typecheck && npm test && npm run spec-graph && npm run spec-guard && npm run spec-guard:prove && npm run spec-guard:claims"
   },
   "devDependencies": {
-    "@spec-family/spec-graph": "0.26.0"
+    "@spec-family/spec-graph": "0.26.0",
+    "@spec-family/spec-guard": "0.35.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
   }
 }

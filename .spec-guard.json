@@ -1,0 +1,12 @@
+{
+  "specs": ["spec/*.md"],
+  "strict": true,
+  "claims": {
+    "files": ["spec/*.md"],
+    "labels": {
+      "Consensus": { "evidence": "test" },
+      "Exploratory": {}
+    },
+    "testPrefixes": ["function test_"]
+  }
+}
