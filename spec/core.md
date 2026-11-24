@@ -43,8 +43,9 @@ All normative items below carry an explicit claim status label (`Consensus` or `
 3. `Consensus` **Stratified Reflection & Strict Positivity (Curry Firewall)** ([`layer4-implication-and-curry-barrier`](../docs/design-review.md#layer4-implication-and-curry-barrier)):
    - Every item `A` and judgment carries a stratification level `n ∈ ℕ` (and, during vertical evolution, an inquiry stage index `t ∈ ℕ`).
    - **Level Stratification**: Any reflection item `Refl_k(J)` asserting the status (`Open`, `Grounded`, `Excluded`, `Collision`) or provenance of a level-`k` judgment `J` (or stage-`t` inquiry state `Σ_t`) has level strictly `n ≥ k + 1` (and stage `≥ t + 1`). Same-level self-referential equivalence `K_n ≡ (K_n → Z)` is ill-formed.
-   - **Strict Positivity**: Recursive item or boundary definitions `X := F(X)` are admissible only when every occurrence of `X` in `F(X)` is **strictly positive** (never occurring to the left of `→`, inside an unguarded polarity flip `~` that feeds a conditional antecedent, or inside a contravariant boundary constraint promotion `[X]` / universal quantifier domain `D` scoping an item) and well-founded.
+   - **Strict Positivity (Single & Mutual Recursion)**: Finite recursive item or boundary definition systems `{X_i := F_i(X⃗)}` are admissible only when well-founded, level-stratified across every referenced definition, and **strictly positive**: no directed dependency cycle among `{X_i}` traverses a contravariant edge (occurring to the left of `→`, inside a polarity flip `~`, or inside a contravariant boundary constraint promotion `[X]` / universal quantifier domain `D` scoping an item).
    <!-- @assert-count target="test/syntax-and-curry.test.ts" symbol="function test_curry_firewall_blocks_all_four_vectors_and_allows_cross_stage" min="1" reason="Stratified reflection and Strict Positivity block all four Curry attack vectors" -->
+   <!-- @assert-count target="test/syntax-and-curry.test.ts" symbol="function test_mutual_recursion_curry_firewall_and_positive_systems" min="1" reason="Mutual-recursion Strict Positivity and cross-definition stratification are verified" -->
 
 ---
 
@@ -119,8 +120,10 @@ All normative items below carry an explicit claim status label (`Consensus` or `
     - **Quarantine Propagation**: If `(B', A)` enters `Collision` (for any non-empty `B' ⊑ B`), then:
       - `(B', A)` and the obstructed broad ground `(B, ±A)` lose `Live` authority immediately;
       - Any downstream derived ground `Y [π_Y]` whose DAG `π_Y` passes through an un-`Live` node loses `Live` authority, while `Y` remains `Live` if it possesses an independent well-founded DAG `π'_Y` whose nodes are all `Live`;
+      - **Stratified Quarantine (No Ghost Collisions)**: Transmissive rules gated on `Live` (`Scoped Cut`/`MP`, `∧I`/`∧E`, `∨I`/`∨E`, `⊥_B`, `≈_B`, and `imposs-excl`) never fire from definitively obstructed premises or falsified conditionals (e.g., `X → A` refuted by `+X ∧ -A`); defeated branches under obstruction cannot fabricate ghost collisions against independently grounded opposite polarities (realized via an alternating fixpoint over obstruction sets), while symmetric conflicts and downward heredity records remain preserved;
       - A **Revision Obligation** `Rev(B', A)` is recorded in `O_rev` until discharged via `Retract` or `RefineBoundary` (obeying M1 + M2).
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Inference Quarantine, upstream obstruction, and selective provenance survival are verified" -->
+    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_symmetric_conflict" min="1" reason="Stratified quarantine eliminates ghost collisions and preserves symmetric conflicts" -->
 
 11. `Consensus` **Structural Rules & Scoped Cut** ([`layer3-structural-rules-and-cut`](../docs/design-review.md#layer3-structural-rules-and-cut)):
     - **Reflexivity**: Local ground records (`⊩⁺`/`⊩⁻`) are preserved even under `Collision`, but reflexive transmission requires `Live` authorization.
@@ -131,7 +134,7 @@ All normative items below carry an explicit claim status label (`Consensus` or `
 
 12. `Consensus` **Connective & Quantifier Polarity Rules (on non-empty `B ≠ ⊥_B`)** ([`layer4-negation-vs-exclusion`](../docs/design-review.md#layer4-negation-vs-exclusion), [`layer4-implication-and-curry-barrier`](../docs/design-review.md#layer4-implication-and-curry-barrier), [`layer4-conjunction-disjunction-and-covers`](../docs/design-review.md#layer4-conjunction-disjunction-and-covers), [`layer5-content-and-coreference`](../docs/design-review.md#layer5-content-and-coreference)):
     - **Unsatisfiable Item `⊥`**:
-      - `⊩⁺ ⊥`: never holds on any `B ≠ ⊥_B`.
+      - `⊩⁺ ⊥`: base observations obey `⊥ ∉ G⁺` on every non-empty `B ≠ ⊥_B`, and no non-empty `B ≠ ⊥_B` ever holds a `Live` positive witness `B ⊩⁺ ⊥`.
       - `⊩⁻ ⊥`: holds structurally on every `B ≠ ⊥_B`.
     - **Strong Polarity Flip (`~A`, Sanskrit *paryudāsa*)**:
       - `B ⊩⁺ (~A)` ⟺ `B ⊩⁻ A`
@@ -139,7 +142,7 @@ All normative items below carry an explicit claim status label (`Consensus` or `
     - **Material Incompatibility (`A ⊥_B C ∈ C_B`)**:
       - If `B ⊩⁺ A [π]` is `Live`, derive `B ⊩⁻ C [Incompat(π, A ⊥_B C)]`; symmetrically, `Live` `B ⊩⁺ C [π]` derives `B ⊩⁻ A [Incompat(π, A ⊥_B C)]`.
     - **Structural Impossibility (`A → ⊥`)**:
-      - If adjoining `A` as a boundary constraint collapses `B` (`B ⊓ [A] = ⊥_B`), derive `B ⊩⁺ (A → ⊥)` and `B ⊩⁻ A` (double structural impossibility `(A → ⊥) → ⊥` does **not** derive `B ⊩⁺ A`).
+      - If adjoining `A` as a boundary constraint collapses `B` (`B ⊓ [A] = ⊥_B`), derive `B ⊩⁺ (A → ⊥)` and `B ⊩⁻ A`; moreover, any `Live` `B ⊩⁺ (A → ⊥)` induces `B ⊩⁻ A` (`imposs-excl`), while double structural impossibility `(A → ⊥) → ⊥` derives only `-(A → ⊥)` and does **not** derive `B ⊩⁺ A`.
     - **Conjunction (`A ∧ C`)**:
       - `B ⊩⁺ (A ∧ C)` ⟺ `B ⊩⁺ A` and `B ⊩⁺ C` (both `Live`, joining DAGs).
       - `B ⊩⁻ (A ∧ C)` ⟺ `B ⊩⁻ A` or `B ⊩⁻ C`.
@@ -156,6 +159,7 @@ All normative items below carry an explicit claim status label (`Consensus` or `
       - `B ⊩⁺ ∃(x : D) A(x)` ⟺ there exists concrete `w ∈ Dom(D)` with `B ⊩⁺ A(w)`.
       - `B ⊩⁻ ∃(x : D) A(x)` ⟺ generic structural exclusion showing `B ⊩⁻ A(x)` for all admissible `x ∈ Dom(D)`.
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_connective_and_quantifier_polarity_rules_with_cover_gluing" min="1" reason="All connective, quantifier, incompatibility, cover disjunction, and ∨E rules are verified" -->
+    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_bottom_non_witnessing_guard_and_imposs_contraposition" min="1" reason="Base bottom guard, Live non-witnessing of bottom, and imposs-excl without DNE are verified" -->
 
 ---
 
@@ -173,9 +177,10 @@ All normative items below carry an explicit claim status label (`Consensus` or `
     4. **`UL-Classical`** (Classical First-Order Specialization):
        - *Closure conditions*: Freeze `Σ` (no vertical updates), fix a closed atomic boundary `B* ≠ ⊥_B` (or a witnessed finite cover of atomic cells) with finest congruence `≈_{B*}`, enforce **`No-Gluts`**, enforce **`No-Gaps`** (no item is `Open` on any atomic cell), and restrict to object level `n = 0`.
        - *Derived Theorems*:
-         - **Bivalence & Provenance Projection**: Every item on `B*` is strictly `Grounded (+)` or `Excluded (-)`; provenance DAGs project safely onto `{1, 0}`.
+         - **Bivalence & Provenance Projection (`2` & `2^k`)**: On an atomic cell `B*`, every item is strictly `Grounded (+)` or `Excluded (-)` (2-element Boolean algebra `2`, projecting provenance DAGs safely onto `{1, 0}`); on a `k`-cell witnessed atomic cover `{B*_1, ..., B*_k} ▷ B`, `UL-Classical` recovers the product Boolean algebra `2^k` (every classical tautology such as `A ∨ ~A` holds globally `+` via `D2`, while contingent items may `split` across atomic cells without collapsing into global `-`).
          - **Negation Collapse**: On `B*`, `-(A → ⊥) ⟺ +A ∧ -⊥ ⟺ +A`, so by `No-Gaps` + `No-Gluts`, `+(A → ⊥) ⟺ -A ⟺ +(~A)`. Both `~A` and `A → ⊥` collapse extensionally to classical Boolean `¬A` with Double Negation Elimination.
          - **Material Implication Recovery**: On `B*`, `-(A → C) ⟺ +A ∧ -C`; by `No-Gaps`, every non-refuted conditional closes to `+(A → C) ⟺ (-A ∨ +C)`, while `No-Gluts` guarantees Modus Ponens never fires when `-A` holds.
          - **Excluded Middle & Connective Truth Tables**: `∧`, `∨` (via D2 cover over atomic cells), `∀`/`∃` (over `Dom(B*)`), and `≈_{B*}` recover classical truth tables, `+(A ∨ ~A)` (LEM), De Morgan quantifier duality, and Leibnizian equality `=`.
          - **Vacuous Explosion**: Under `No-Gluts`, the set of states satisfying both `+A` and `-A` is empty, so classical Explosion (`A, ~A ⊢ C`) holds vacuously as a specialization theorem without belonging to `UL-Core`.
     <!-- @assert-count target="test/specializations.test.ts" symbol="function test_four_tier_deductive_spectrum_and_classical_recovery" min="1" reason="Four-tier specialization spectrum and classical boundary recovery are verified" -->
+    <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_atomic_cover_2k_boolean_algebra_reporting" min="1" reason="Multi-cell 2^k atomic cover reporting distinguishing +, -, and split is verified" -->
