@@ -12,6 +12,8 @@ export type RoleArg = {
 
 export type Polarity = "+" | "-";
 
+export type ReflectionStatus = "Open" | "Grounded" | "Excluded" | "Collision";
+
 export type Item =
   | { readonly kind: "atom"; readonly relation: string; readonly roles: readonly RoleArg[] }
   | { readonly kind: "bottom" }
@@ -40,6 +42,8 @@ export type Item =
       readonly targetBoundary: string;
       readonly targetPolarity: Polarity;
       readonly targetItem: Item;
+      readonly targetStage?: number;
+      readonly targetStatus?: ReflectionStatus;
     }
   | { readonly kind: "ref"; readonly name: string };
 
@@ -123,14 +127,43 @@ export function exists(
     : { kind: "exists", variable, domain, body };
 }
 
-/** Stratified reflection Refl_k(B ⊩± A) on a judgment of level k < n. */
+/** Stratified reflection Refl_k(B ⊩± A) (optionally stage-indexed at Σ_t) on a judgment of level k < n. */
 export function refl(
   reflectedLevel: number,
   targetBoundary: string,
   targetPolarity: Polarity,
   targetItem: Item,
+  targetStage?: number,
 ): Item {
-  return { kind: "refl", reflectedLevel, targetBoundary, targetPolarity, targetItem };
+  return targetStage !== undefined
+    ? {
+        kind: "refl",
+        reflectedLevel,
+        targetBoundary,
+        targetPolarity,
+        targetItem,
+        targetStage,
+      }
+    : { kind: "refl", reflectedLevel, targetBoundary, targetPolarity, targetItem };
+}
+
+/** Cross-stage status reflection Refl_k@Σ_t(B : A == status) for stage t < currentStage. */
+export function reflStatus(
+  reflectedLevel: number,
+  targetStage: number,
+  targetBoundary: string,
+  targetItem: Item,
+  targetStatus: ReflectionStatus,
+): Item {
+  return {
+    kind: "refl",
+    reflectedLevel,
+    targetBoundary,
+    targetPolarity: "+",
+    targetItem,
+    targetStage,
+    targetStatus,
+  };
 }
 
 /** Named reference inside recursive definitions. */
@@ -173,6 +206,12 @@ export function itemKey(item: Item): string {
       return `∃(${item.variable}:${dom}).${itemKey(item.body)}`;
     }
     case "refl":
+      if (item.targetStatus !== undefined) {
+        return `Refl_${item.reflectedLevel}@Σ${item.targetStage ?? "?"}(${item.targetBoundary} : ${itemKey(item.targetItem)} == ${item.targetStatus})`;
+      }
+      if (item.targetStage !== undefined) {
+        return `Refl_${item.reflectedLevel}@Σ${item.targetStage}(${item.targetBoundary} ⊩${item.targetPolarity} ${itemKey(item.targetItem)})`;
+      }
       return `Refl_${item.reflectedLevel}(${item.targetBoundary} ⊩${item.targetPolarity} ${itemKey(item.targetItem)})`;
     case "ref":
       return `@${item.name}`;
@@ -239,13 +278,27 @@ export function substituteHandle(item: Item, variable: string, replacement: stri
           ? substituteHandle(item.domainConstraint, variable, replacement)
           : undefined,
       );
-    case "refl":
+    case "refl": {
+      const subTarget = substituteHandle(item.targetItem, variable, replacement);
+      if (item.targetStatus !== undefined) {
+        return {
+          kind: "refl",
+          reflectedLevel: item.reflectedLevel,
+          targetBoundary: item.targetBoundary,
+          targetPolarity: item.targetPolarity,
+          targetItem: subTarget,
+          targetStatus: item.targetStatus,
+          ...(item.targetStage !== undefined ? { targetStage: item.targetStage } : {}),
+        };
+      }
       return refl(
         item.reflectedLevel,
         item.targetBoundary,
         item.targetPolarity,
-        substituteHandle(item.targetItem, variable, replacement),
+        subTarget,
+        item.targetStage,
       );
+    }
   }
 }
 

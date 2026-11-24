@@ -2,7 +2,7 @@
  * Prawitz-style natural deduction proof verifier for UL-Core, UL-Minimal, and
  * UL-Intuitionistic: hypothetical sub-proof discharge (→I), open-domain schematic
  * ∀I with strict eigenvariable freshness, ∃E, standalone Cover-Gluing, boundary-scoped
- * congruence, and mode-isolated ⊥E (UL-Intuitionistic only).
+ * congruence, stratified cross-stage reflection (Refl_k@Σ_t), and mode-isolated ⊥E.
  *
  * Bridges verified derivations back into InquiryEngine with full base-leaf provenance.
  */
@@ -12,6 +12,7 @@ import { type EvaluationSnapshot, type InquiryEngine } from "./engine.ts";
 import {
   and,
   collectHandles,
+  computeItemLevel,
   equiv,
   exists,
   flip,
@@ -39,6 +40,7 @@ export type ProofViolation =
   | "eigenvariable-escape"
   | "inadmissible-term"
   | "non-native-relation"
+  | "stratification-violation"
   | "ex-falso-disallowed"
   | "open-assumptions";
 
@@ -122,6 +124,7 @@ export type ProofNode =
       readonly targetProof: ProofNode;
       readonly direction: "left-to-right" | "right-to-left";
     }
+  | { readonly kind: "refl-intro"; readonly boundary: string; readonly reflItem: Item }
   | { readonly kind: "ex-falso-bottom"; readonly bottomProof: ProofNode; readonly target: Item };
 
 export type DerivationResult =
@@ -185,932 +188,815 @@ function isHandleInAssumptions(
   return false;
 }
 
-function verifyNode(
-  boundaries: BoundarySystem,
+function verifyRoot(
+  engine: InquiryEngine,
   snapshot: EvaluationSnapshot,
   stateHandles: ReadonlySet<string>,
   mode: DeductionMode,
-  node: ProofNode,
-  assumptions: ReadonlyMap<string, ActiveAssumption>,
-  eigenScope: ReadonlyMap<string, string>,
+  rootNode: ProofNode,
 ): DerivationResult {
-  switch (node.kind) {
-    case "live-ground": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Boundary "${node.boundary}" must be a defined non-empty boundary.`,
-        };
-      }
-      const live = snapshot.liveGrounds(node.boundary, node.polarity, node.item);
-      const entry = live[0];
-      if (entry === undefined) {
-        return {
-          ok: false,
-          violation: "ground-not-live",
-          reason: `Ground (${node.boundary} ⊩${node.polarity} ${itemKey(node.item)}) is absent or quarantined.`,
-        };
-      }
-      let requiredBaseIds: readonly string[] = [];
-      if (entry.provenance.kind === "base") {
-        requiredBaseIds = [entry.provenance.baseId];
-      } else if (entry.provenance.kind === "derived") {
-        requiredBaseIds = entry.provenance.baseLeaves.filter((l) => !l.startsWith("@"));
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: node.polarity,
-        item: node.item,
-        requiredBaseIds,
-      };
-    }
+  const boundaries = engine.boundaries;
 
-    case "assume": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Assumption boundary "${node.boundary}" must be defined and non-empty.`,
-        };
-      }
-      const assumed = assumptions.get(node.assumptionId);
-      if (assumed === undefined) {
-        return {
-          ok: false,
-          violation: "unknown-assumption",
-          reason: `Unknown assumption "${node.assumptionId}".`,
-        };
-      }
-      if (!boundaries.refines(node.boundary, assumed.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Boundary "${node.boundary}" does not refine assumption scope "${assumed.boundary}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: "+",
-        item: assumed.item,
-        requiredBaseIds: [],
-      };
-    }
-
-    case "weaken-boundary": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.toBoundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Target boundary "${node.toBoundary}" must be defined and non-empty.`,
-        };
-      }
-      const inner = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.proof,
-        assumptions,
-        eigenScope,
-      );
-      if (!inner.ok) {
-        return inner;
-      }
-      if (!boundaries.refines(node.toBoundary, inner.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Cannot weaken: "${node.toBoundary}" does not refine "${inner.boundary}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: node.toBoundary,
-        polarity: inner.polarity,
-        item: inner.item,
-        requiredBaseIds: inner.requiredBaseIds,
-      };
-    }
-
-    case "implies-intro": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Conditional boundary "${node.boundary}" must be defined and non-empty.`,
-        };
-      }
-      if (assumptions.has(node.assumptionId)) {
-        return {
-          ok: false,
-          violation: "shadowed-assumption",
-          reason: `Assumption identifier "${node.assumptionId}" shadows an active outer assumption.`,
-        };
-      }
-      const nextAssumptions = new Map(assumptions);
-      nextAssumptions.set(node.assumptionId, {
-        boundary: node.boundary,
-        item: node.antecedent,
-      });
-      const bodyRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.body,
-        nextAssumptions,
-        eigenScope,
-      );
-      if (!bodyRes.ok) {
-        return bodyRes;
-      }
-      if (bodyRes.polarity !== "+" || bodyRes.boundary !== node.boundary) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `implies-intro body must derive (${node.boundary} ⊩+ consequent); got (${bodyRes.boundary} ⊩${bodyRes.polarity}).`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: "+",
-        item: implies(node.antecedent, bodyRes.item),
-        requiredBaseIds: bodyRes.requiredBaseIds,
-      };
-    }
-
-    case "implies-elim": {
-      const pRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.premise,
-        assumptions,
-        eigenScope,
-      );
-      if (!pRes.ok) {
-        return pRes;
-      }
-      const cRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.conditional,
-        assumptions,
-        eigenScope,
-      );
-      if (!cRes.ok) {
-        return cRes;
-      }
-      if (pRes.polarity !== "+" || cRes.polarity !== "+" || cRes.item.kind !== "implies") {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "implies-elim requires positive premise and positive conditional (A → C).",
-        };
-      }
-      if (itemKey(pRes.item) !== itemKey(cRes.item.antecedent)) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `implies-elim premise "${itemKey(pRes.item)}" does not match antecedent "${itemKey(cRes.item.antecedent)}".`,
-        };
-      }
-      const meetB = boundaries.meet(pRes.boundary, cRes.boundary);
-      if (meetB === BOT_BOUNDARY) {
-        return {
-          ok: false,
-          violation: "disjoint-meet",
-          reason: `Disjoint boundaries "${pRes.boundary}" and "${cRes.boundary}" cannot apply Scoped Cut.`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: meetB,
-        polarity: "+",
-        item: cRes.item.consequent,
-        requiredBaseIds: mergeSorted(pRes.requiredBaseIds, cRes.requiredBaseIds),
-      };
-    }
-
-    case "and-intro": {
-      const lRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.left,
-        assumptions,
-        eigenScope,
-      );
-      if (!lRes.ok) {
-        return lRes;
-      }
-      const rRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.right,
-        assumptions,
-        eigenScope,
-      );
-      if (!rRes.ok) {
-        return rRes;
-      }
-      if (lRes.polarity !== "+" || rRes.polarity !== "+") {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "and-intro requires positive witnesses on both conjuncts.",
-        };
-      }
-      const meetB = boundaries.meet(lRes.boundary, rRes.boundary);
-      if (meetB === BOT_BOUNDARY) {
-        return {
-          ok: false,
-          violation: "disjoint-meet",
-          reason: `Disjoint conjunct boundaries "${lRes.boundary}" and "${rRes.boundary}" have empty meet.`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: meetB,
-        polarity: "+",
-        item: and(lRes.item, rRes.item),
-        requiredBaseIds: mergeSorted(lRes.requiredBaseIds, rRes.requiredBaseIds),
-      };
-    }
-
-    case "and-elim": {
-      const pRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.pair,
-        assumptions,
-        eigenScope,
-      );
-      if (!pRes.ok) {
-        return pRes;
-      }
-      if (pRes.polarity !== "+" || pRes.item.kind !== "and") {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "and-elim requires a positive conjunction item (A ∧ C).",
-        };
-      }
-      return {
-        ok: true,
-        boundary: pRes.boundary,
-        polarity: "+",
-        item: node.side === "left" ? pRes.item.left : pRes.item.right,
-        requiredBaseIds: pRes.requiredBaseIds,
-      };
-    }
-
-    case "or-intro": {
-      const wRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.witness,
-        assumptions,
-        eigenScope,
-      );
-      if (!wRes.ok) {
-        return wRes;
-      }
-      if (wRes.polarity !== "+") {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "or-intro requires a positive witness.",
-        };
-      }
-      return {
-        ok: true,
-        boundary: wRes.boundary,
-        polarity: "+",
-        item: node.side === "left" ? or(wRes.item, node.other) : or(node.other, wRes.item),
-        requiredBaseIds: wRes.requiredBaseIds,
-      };
-    }
-
-    case "or-cover-intro": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Cover boundary "${node.boundary}" must be defined and non-empty.`,
-        };
-      }
-      const cells = node.cellProofs.map((cp) => cp.cell);
-      if (cells.length === 0 || !boundaries.isWitnessedCover(node.boundary, cells)) {
-        return {
-          ok: false,
-          violation: "unwitnessed-cover",
-          reason: `Cells [${cells.join(", ")}] do not form a witnessed exhaustive cover of "${node.boundary}".`,
-        };
-      }
-      const leftK = itemKey(node.left);
-      const rightK = itemKey(node.right);
-      const reqs: (readonly string[])[] = [];
-      for (const cp of node.cellProofs) {
-        const cRes = verifyNode(
-          boundaries,
-          snapshot,
-          stateHandles,
-          mode,
-          cp.proof,
-          assumptions,
-          eigenScope,
-        );
-        if (!cRes.ok) {
-          return cRes;
+  function verifyNode(
+    node: ProofNode,
+    assumptions: ReadonlyMap<string, ActiveAssumption>,
+    eigenScope: ReadonlyMap<string, string>,
+  ): DerivationResult {
+    switch (node.kind) {
+      case "live-ground": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Boundary "${node.boundary}" must be a defined non-empty boundary.`,
+          };
         }
-        const ck = itemKey(cRes.item);
-        if (cRes.polarity !== "+" || cRes.boundary !== cp.cell || (ck !== leftK && ck !== rightK)) {
+        const live = snapshot.liveGrounds(node.boundary, node.polarity, node.item);
+        const entry = live[0];
+        if (entry === undefined) {
+          return {
+            ok: false,
+            violation: "ground-not-live",
+            reason: `Ground (${node.boundary} ⊩${node.polarity} ${itemKey(node.item)}) is absent or quarantined.`,
+          };
+        }
+        let requiredBaseIds: readonly string[] = [];
+        if (entry.provenance.kind === "base") {
+          requiredBaseIds = [entry.provenance.baseId];
+        } else if (entry.provenance.kind === "derived") {
+          requiredBaseIds = entry.provenance.baseLeaves.filter((l) => !l.startsWith("@"));
+        }
+        return {
+          ok: true,
+          boundary: node.boundary,
+          polarity: node.polarity,
+          item: node.item,
+          requiredBaseIds,
+        };
+      }
+
+      case "assume": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Assumption boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        const assumed = assumptions.get(node.assumptionId);
+        if (assumed === undefined) {
+          return {
+            ok: false,
+            violation: "unknown-assumption",
+            reason: `Unknown assumption "${node.assumptionId}".`,
+          };
+        }
+        if (!boundaries.refines(node.boundary, assumed.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Boundary "${node.boundary}" does not refine assumption scope "${assumed.boundary}".`,
+          };
+        }
+        return {
+          ok: true,
+          boundary: node.boundary,
+          polarity: "+",
+          item: assumed.item,
+          requiredBaseIds: [],
+        };
+      }
+
+      case "weaken-boundary": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.toBoundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Target boundary "${node.toBoundary}" must be defined and non-empty.`,
+          };
+        }
+        const inner = verifyNode(node.proof, assumptions, eigenScope);
+        if (!inner.ok) {
+          return inner;
+        }
+        if (!boundaries.refines(node.toBoundary, inner.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Cannot weaken: "${node.toBoundary}" does not refine "${inner.boundary}".`,
+          };
+        }
+        return {
+          ok: true,
+          boundary: node.toBoundary,
+          polarity: inner.polarity,
+          item: inner.item,
+          requiredBaseIds: inner.requiredBaseIds,
+        };
+      }
+
+      case "implies-intro": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Conditional boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        if (assumptions.has(node.assumptionId)) {
+          return {
+            ok: false,
+            violation: "shadowed-assumption",
+            reason: `Assumption identifier "${node.assumptionId}" shadows an active outer assumption.`,
+          };
+        }
+        const nextAssumptions = new Map(assumptions);
+        nextAssumptions.set(node.assumptionId, {
+          boundary: node.boundary,
+          item: node.antecedent,
+        });
+        const bodyRes = verifyNode(node.body, nextAssumptions, eigenScope);
+        if (!bodyRes.ok) {
+          return bodyRes;
+        }
+        if (bodyRes.polarity !== "+" || bodyRes.boundary !== node.boundary) {
           return {
             ok: false,
             violation: "type-mismatch",
-            reason: `Cover cell "${cp.cell}" must witness +(${leftK}) or +(${rightK}) on "${cp.cell}".`,
+            reason: `implies-intro body must derive (${node.boundary} ⊩+ consequent); got (${bodyRes.boundary} ⊩${bodyRes.polarity}).`,
           };
         }
-        reqs.push(cRes.requiredBaseIds);
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: "+",
-        item: or(node.left, node.right),
-        requiredBaseIds: mergeSorted(...reqs),
-      };
-    }
-
-    case "or-elim": {
-      const dRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.disjunction,
-        assumptions,
-        eigenScope,
-      );
-      if (!dRes.ok) {
-        return dRes;
-      }
-      if (dRes.polarity !== "+" || dRes.item.kind !== "or") {
         return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "or-elim requires a positive disjunction (A ∨ C).",
+          ok: true,
+          boundary: node.boundary,
+          polarity: "+",
+          item: implies(node.antecedent, bodyRes.item),
+          requiredBaseIds: bodyRes.requiredBaseIds,
         };
-      }
-      if (assumptions.has(node.leftAssumpId) || assumptions.has(node.rightAssumpId)) {
-        return {
-          ok: false,
-          violation: "shadowed-assumption",
-          reason: "or-elim branch assumption identifier shadows an active outer assumption.",
-        };
-      }
-      const leftAssumptions = new Map(assumptions);
-      leftAssumptions.set(node.leftAssumpId, {
-        boundary: dRes.boundary,
-        item: dRes.item.left,
-      });
-      const lRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.leftBranch,
-        leftAssumptions,
-        eigenScope,
-      );
-      if (!lRes.ok) {
-        return lRes;
       }
 
-      const rightAssumptions = new Map(assumptions);
-      rightAssumptions.set(node.rightAssumpId, {
-        boundary: dRes.boundary,
-        item: dRes.item.right,
-      });
-      const rRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.rightBranch,
-        rightAssumptions,
-        eigenScope,
-      );
-      if (!rRes.ok) {
-        return rRes;
-      }
-
-      if (
-        lRes.polarity !== "+" ||
-        rRes.polarity !== "+" ||
-        lRes.boundary !== dRes.boundary ||
-        rRes.boundary !== dRes.boundary ||
-        itemKey(lRes.item) !== itemKey(rRes.item)
-      ) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `or-elim branches must positively derive the same item on "${dRes.boundary}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: dRes.boundary,
-        polarity: "+",
-        item: lRes.item,
-        requiredBaseIds: mergeSorted(
-          dRes.requiredBaseIds,
-          lRes.requiredBaseIds,
-          rRes.requiredBaseIds,
-        ),
-      };
-    }
-
-    case "cover-glue": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
-        return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Cover-glue boundary "${node.boundary}" must be defined and non-empty.`,
-        };
-      }
-      const cells = node.cellProofs.map((cp) => cp.cell);
-      if (cells.length === 0 || !boundaries.isWitnessedCover(node.boundary, cells)) {
-        return {
-          ok: false,
-          violation: "unwitnessed-cover",
-          reason: `Cells [${cells.join(", ")}] do not form a witnessed exhaustive cover of "${node.boundary}".`,
-        };
-      }
-      const targetK = itemKey(node.item);
-      let agreedPol: Polarity | undefined;
-      const reqs: (readonly string[])[] = [];
-      for (const cp of node.cellProofs) {
-        const cRes = verifyNode(
-          boundaries,
-          snapshot,
-          stateHandles,
-          mode,
-          cp.proof,
-          assumptions,
-          eigenScope,
-        );
+      case "implies-elim": {
+        const pRes = verifyNode(node.premise, assumptions, eigenScope);
+        if (!pRes.ok) {
+          return pRes;
+        }
+        const cRes = verifyNode(node.conditional, assumptions, eigenScope);
         if (!cRes.ok) {
           return cRes;
         }
-        if (cRes.boundary !== cp.cell || itemKey(cRes.item) !== targetK) {
+        if (pRes.polarity !== "+" || cRes.polarity !== "+" || cRes.item.kind !== "implies") {
           return {
             ok: false,
             violation: "type-mismatch",
-            reason: `cover-glue cell "${cp.cell}" must match item "${targetK}" on "${cp.cell}".`,
+            reason: "implies-elim requires positive premise and positive conditional (A → C).",
           };
+        }
+        if (itemKey(pRes.item) !== itemKey(cRes.item.antecedent)) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: `implies-elim premise "${itemKey(pRes.item)}" does not match antecedent "${itemKey(cRes.item.antecedent)}".`,
+          };
+        }
+        const meetB = boundaries.meet(pRes.boundary, cRes.boundary);
+        if (meetB === BOT_BOUNDARY) {
+          return {
+            ok: false,
+            violation: "disjoint-meet",
+            reason: `Disjoint boundaries "${pRes.boundary}" and "${cRes.boundary}" cannot apply Scoped Cut.`,
+          };
+        }
+        return {
+          ok: true,
+          boundary: meetB,
+          polarity: "+",
+          item: cRes.item.consequent,
+          requiredBaseIds: mergeSorted(pRes.requiredBaseIds, cRes.requiredBaseIds),
+        };
+      }
+
+      case "and-intro": {
+        const lRes = verifyNode(node.left, assumptions, eigenScope);
+        if (!lRes.ok) {
+          return lRes;
+        }
+        const rRes = verifyNode(node.right, assumptions, eigenScope);
+        if (!rRes.ok) {
+          return rRes;
+        }
+        if (lRes.polarity !== "+" || rRes.polarity !== "+") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "and-intro requires positive witnesses on both conjuncts.",
+          };
+        }
+        const meetB = boundaries.meet(lRes.boundary, rRes.boundary);
+        if (meetB === BOT_BOUNDARY) {
+          return {
+            ok: false,
+            violation: "disjoint-meet",
+            reason: `Disjoint conjunct boundaries "${lRes.boundary}" and "${rRes.boundary}" have empty meet.`,
+          };
+        }
+        return {
+          ok: true,
+          boundary: meetB,
+          polarity: "+",
+          item: and(lRes.item, rRes.item),
+          requiredBaseIds: mergeSorted(lRes.requiredBaseIds, rRes.requiredBaseIds),
+        };
+      }
+
+      case "and-elim": {
+        const pRes = verifyNode(node.pair, assumptions, eigenScope);
+        if (!pRes.ok) {
+          return pRes;
+        }
+        if (pRes.polarity !== "+" || pRes.item.kind !== "and") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "and-elim requires a positive conjunction item (A ∧ C).",
+          };
+        }
+        return {
+          ok: true,
+          boundary: pRes.boundary,
+          polarity: "+",
+          item: node.side === "left" ? pRes.item.left : pRes.item.right,
+          requiredBaseIds: pRes.requiredBaseIds,
+        };
+      }
+
+      case "or-intro": {
+        const wRes = verifyNode(node.witness, assumptions, eigenScope);
+        if (!wRes.ok) {
+          return wRes;
+        }
+        if (wRes.polarity !== "+") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "or-intro requires a positive witness.",
+          };
+        }
+        return {
+          ok: true,
+          boundary: wRes.boundary,
+          polarity: "+",
+          item: node.side === "left" ? or(wRes.item, node.other) : or(node.other, wRes.item),
+          requiredBaseIds: wRes.requiredBaseIds,
+        };
+      }
+
+      case "or-cover-intro": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Cover boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        const cells = node.cellProofs.map((cp) => cp.cell);
+        if (cells.length === 0 || !boundaries.isWitnessedCover(node.boundary, cells)) {
+          return {
+            ok: false,
+            violation: "unwitnessed-cover",
+            reason: `Cells [${cells.join(", ")}] do not form a witnessed exhaustive cover of "${node.boundary}".`,
+          };
+        }
+        const leftK = itemKey(node.left);
+        const rightK = itemKey(node.right);
+        const reqs: (readonly string[])[] = [];
+        for (const cp of node.cellProofs) {
+          const cRes = verifyNode(cp.proof, assumptions, eigenScope);
+          if (!cRes.ok) {
+            return cRes;
+          }
+          const ck = itemKey(cRes.item);
+          if (cRes.polarity !== "+" || cRes.boundary !== cp.cell || (ck !== leftK && ck !== rightK)) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `Cover cell "${cp.cell}" must witness +(${leftK}) or +(${rightK}) on "${cp.cell}".`,
+            };
+          }
+          reqs.push(cRes.requiredBaseIds);
+        }
+        return {
+          ok: true,
+          boundary: node.boundary,
+          polarity: "+",
+          item: or(node.left, node.right),
+          requiredBaseIds: mergeSorted(...reqs),
+        };
+      }
+
+      case "or-elim": {
+        const dRes = verifyNode(node.disjunction, assumptions, eigenScope);
+        if (!dRes.ok) {
+          return dRes;
+        }
+        if (dRes.polarity !== "+" || dRes.item.kind !== "or") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "or-elim requires a positive disjunction (A ∨ C).",
+          };
+        }
+        if (assumptions.has(node.leftAssumpId) || assumptions.has(node.rightAssumpId)) {
+          return {
+            ok: false,
+            violation: "shadowed-assumption",
+            reason: "or-elim branch assumption identifier shadows an active outer assumption.",
+          };
+        }
+        const leftAssumptions = new Map(assumptions);
+        leftAssumptions.set(node.leftAssumpId, {
+          boundary: dRes.boundary,
+          item: dRes.item.left,
+        });
+        const lRes = verifyNode(node.leftBranch, leftAssumptions, eigenScope);
+        if (!lRes.ok) {
+          return lRes;
+        }
+
+        const rightAssumptions = new Map(assumptions);
+        rightAssumptions.set(node.rightAssumpId, {
+          boundary: dRes.boundary,
+          item: dRes.item.right,
+        });
+        const rRes = verifyNode(node.rightBranch, rightAssumptions, eigenScope);
+        if (!rRes.ok) {
+          return rRes;
+        }
+
+        if (
+          lRes.polarity !== "+" ||
+          rRes.polarity !== "+" ||
+          lRes.boundary !== dRes.boundary ||
+          rRes.boundary !== dRes.boundary ||
+          itemKey(lRes.item) !== itemKey(rRes.item)
+        ) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: `or-elim branches must positively derive the same item on "${dRes.boundary}".`,
+          };
+        }
+        return {
+          ok: true,
+          boundary: dRes.boundary,
+          polarity: "+",
+          item: lRes.item,
+          requiredBaseIds: mergeSorted(
+            dRes.requiredBaseIds,
+            lRes.requiredBaseIds,
+            rRes.requiredBaseIds,
+          ),
+        };
+      }
+
+      case "cover-glue": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Cover-glue boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        const cells = node.cellProofs.map((cp) => cp.cell);
+        if (cells.length === 0 || !boundaries.isWitnessedCover(node.boundary, cells)) {
+          return {
+            ok: false,
+            violation: "unwitnessed-cover",
+            reason: `Cells [${cells.join(", ")}] do not form a witnessed exhaustive cover of "${node.boundary}".`,
+          };
+        }
+        const targetK = itemKey(node.item);
+        let agreedPol: Polarity | undefined;
+        const reqs: (readonly string[])[] = [];
+        for (const cp of node.cellProofs) {
+          const cRes = verifyNode(cp.proof, assumptions, eigenScope);
+          if (!cRes.ok) {
+            return cRes;
+          }
+          if (cRes.boundary !== cp.cell || itemKey(cRes.item) !== targetK) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `cover-glue cell "${cp.cell}" must match item "${targetK}" on "${cp.cell}".`,
+            };
+          }
+          if (agreedPol === undefined) {
+            agreedPol = cRes.polarity;
+          } else if (cRes.polarity !== agreedPol) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `cover-glue cells disagree on polarity for "${targetK}".`,
+            };
+          }
+          reqs.push(cRes.requiredBaseIds);
         }
         if (agreedPol === undefined) {
-          agreedPol = cRes.polarity;
-        } else if (cRes.polarity !== agreedPol) {
+          return {
+            ok: false,
+            violation: "unwitnessed-cover",
+            reason: "cover-glue requires at least one non-empty cell proof.",
+          };
+        }
+        return {
+          ok: true,
+          boundary: node.boundary,
+          polarity: agreedPol,
+          item: node.item,
+          requiredBaseIds: mergeSorted(...reqs),
+        };
+      }
+
+      case "forall-intro": {
+        if (
+          !isDefinedNonEmptyBoundary(boundaries, node.boundary) ||
+          !isDefinedNonEmptyBoundary(boundaries, node.domain)
+        ) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `forall-intro requires defined non-empty boundary "${node.boundary}" and domain "${node.domain}".`,
+          };
+        }
+        const qItem = forall(node.variable, node.domain, node.templateBody);
+        if (
+          eigenScope.has(node.eigenvar) ||
+          stateHandles.has(node.eigenvar) ||
+          isHandleInAssumptions(node.eigenvar, assumptions) ||
+          collectHandles(qItem).has(node.eigenvar)
+        ) {
+          return {
+            ok: false,
+            violation: "eigenvariable-not-fresh",
+            reason: `Eigenvariable "${node.eigenvar}" is not fresh with respect to Σ, assumptions, or template.`,
+          };
+        }
+        const nextEigen = new Map(eigenScope);
+        nextEigen.set(node.eigenvar, node.domain);
+        const bRes = verifyNode(node.body, assumptions, nextEigen);
+        if (!bRes.ok) {
+          return bRes;
+        }
+        const expectedBody = substituteHandle(node.templateBody, node.variable, node.eigenvar);
+        if (
+          bRes.polarity !== "+" ||
+          bRes.boundary !== node.boundary ||
+          itemKey(bRes.item) !== itemKey(expectedBody)
+        ) {
           return {
             ok: false,
             violation: "type-mismatch",
-            reason: `cover-glue cells disagree on polarity for "${targetK}".`,
+            reason: `forall-intro body must derive (${node.boundary} ⊩+ ${itemKey(expectedBody)}).`,
           };
         }
-        reqs.push(cRes.requiredBaseIds);
-      }
-      if (agreedPol === undefined) {
         return {
-          ok: false,
-          violation: "unwitnessed-cover",
-          reason: "cover-glue requires at least one non-empty cell proof.",
+          ok: true,
+          boundary: node.boundary,
+          polarity: "+",
+          item: qItem,
+          requiredBaseIds: bRes.requiredBaseIds,
         };
       }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: agreedPol,
-        item: node.item,
-        requiredBaseIds: mergeSorted(...reqs),
-      };
-    }
 
-    case "forall-intro": {
-      if (
-        !isDefinedNonEmptyBoundary(boundaries, node.boundary) ||
-        !isDefinedNonEmptyBoundary(boundaries, node.domain)
-      ) {
+      case "forall-elim": {
+        const uRes = verifyNode(node.universal, assumptions, eigenScope);
+        if (!uRes.ok) {
+          return uRes;
+        }
+        if (uRes.polarity !== "+" || uRes.item.kind !== "forall") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "forall-elim requires a positive universal item ∀(x : D) A(x).",
+          };
+        }
+        if (!isAdmissibleTerm(boundaries, node.term, uRes.item.domain, eigenScope)) {
+          return {
+            ok: false,
+            violation: "inadmissible-term",
+            reason: `Term "${node.term}" is neither a scoped eigenvariable nor an admissible handle in "${uRes.item.domain}".`,
+          };
+        }
         return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `forall-intro requires defined non-empty boundary "${node.boundary}" and domain "${node.domain}".`,
+          ok: true,
+          boundary: uRes.boundary,
+          polarity: "+",
+          item: substituteHandle(uRes.item.body, uRes.item.variable, node.term),
+          requiredBaseIds: uRes.requiredBaseIds,
         };
       }
-      const qItem = forall(node.variable, node.domain, node.templateBody);
-      if (
-        eigenScope.has(node.eigenvar) ||
-        stateHandles.has(node.eigenvar) ||
-        isHandleInAssumptions(node.eigenvar, assumptions) ||
-        collectHandles(qItem).has(node.eigenvar)
-      ) {
-        return {
-          ok: false,
-          violation: "eigenvariable-not-fresh",
-          reason: `Eigenvariable "${node.eigenvar}" is not fresh with respect to Σ, assumptions, or template.`,
-        };
-      }
-      const nextEigen = new Map(eigenScope);
-      nextEigen.set(node.eigenvar, node.domain);
-      const bRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.body,
-        assumptions,
-        nextEigen,
-      );
-      if (!bRes.ok) {
-        return bRes;
-      }
-      const expectedBody = substituteHandle(node.templateBody, node.variable, node.eigenvar);
-      if (
-        bRes.polarity !== "+" ||
-        bRes.boundary !== node.boundary ||
-        itemKey(bRes.item) !== itemKey(expectedBody)
-      ) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `forall-intro body must derive (${node.boundary} ⊩+ ${itemKey(expectedBody)}).`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: "+",
-        item: qItem,
-        requiredBaseIds: bRes.requiredBaseIds,
-      };
-    }
 
-    case "forall-elim": {
-      const uRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.universal,
-        assumptions,
-        eigenScope,
-      );
-      if (!uRes.ok) {
-        return uRes;
-      }
-      if (uRes.polarity !== "+" || uRes.item.kind !== "forall") {
+      case "exists-intro": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.domain)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Existential domain "${node.domain}" must be defined and non-empty.`,
+          };
+        }
+        if (!isAdmissibleTerm(boundaries, node.witnessTerm, node.domain, eigenScope)) {
+          return {
+            ok: false,
+            violation: "inadmissible-term",
+            reason: `Witness term "${node.witnessTerm}" is not admissible in domain "${node.domain}".`,
+          };
+        }
+        const wRes = verifyNode(node.witnessProof, assumptions, eigenScope);
+        if (!wRes.ok) {
+          return wRes;
+        }
+        const expected = substituteHandle(node.templateBody, node.variable, node.witnessTerm);
+        if (wRes.polarity !== "+" || itemKey(wRes.item) !== itemKey(expected)) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: `exists-intro witness proof must derive +(${itemKey(expected)}).`,
+          };
+        }
         return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "forall-elim requires a positive universal item ∀(x : D) A(x).",
+          ok: true,
+          boundary: wRes.boundary,
+          polarity: "+",
+          item: exists(node.variable, node.domain, node.templateBody),
+          requiredBaseIds: wRes.requiredBaseIds,
         };
       }
-      if (!isAdmissibleTerm(boundaries, node.term, uRes.item.domain, eigenScope)) {
-        return {
-          ok: false,
-          violation: "inadmissible-term",
-          reason: `Term "${node.term}" is neither a scoped eigenvariable nor an admissible handle in "${uRes.item.domain}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: uRes.boundary,
-        polarity: "+",
-        item: substituteHandle(uRes.item.body, uRes.item.variable, node.term),
-        requiredBaseIds: uRes.requiredBaseIds,
-      };
-    }
 
-    case "exists-intro": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.domain)) {
+      case "exists-elim": {
+        const eRes = verifyNode(node.existential, assumptions, eigenScope);
+        if (!eRes.ok) {
+          return eRes;
+        }
+        if (eRes.polarity !== "+" || eRes.item.kind !== "exists") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "exists-elim requires a positive existential item ∃(x : D) A(x).",
+          };
+        }
+        if (
+          eigenScope.has(node.witnessVar) ||
+          stateHandles.has(node.witnessVar) ||
+          isHandleInAssumptions(node.witnessVar, assumptions) ||
+          collectHandles(eRes.item).has(node.witnessVar)
+        ) {
+          return {
+            ok: false,
+            violation: "eigenvariable-not-fresh",
+            reason: `Existential witness variable "${node.witnessVar}" is not fresh.`,
+          };
+        }
+        if (assumptions.has(node.assumptionId)) {
+          return {
+            ok: false,
+            violation: "shadowed-assumption",
+            reason: `Assumption identifier "${node.assumptionId}" shadows an active outer assumption.`,
+          };
+        }
+        const nextEigen = new Map(eigenScope);
+        nextEigen.set(node.witnessVar, eRes.item.domain);
+        const nextAssumptions = new Map(assumptions);
+        nextAssumptions.set(node.assumptionId, {
+          boundary: eRes.boundary,
+          item: substituteHandle(eRes.item.body, eRes.item.variable, node.witnessVar),
+        });
+        const bRes = verifyNode(node.body, nextAssumptions, nextEigen);
+        if (!bRes.ok) {
+          return bRes;
+        }
+        if (bRes.polarity !== "+" || bRes.boundary !== eRes.boundary) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: `exists-elim body must derive (${eRes.boundary} ⊩+ E).`,
+          };
+        }
+        if (collectHandles(bRes.item).has(node.witnessVar)) {
+          return {
+            ok: false,
+            violation: "eigenvariable-escape",
+            reason: `Existential witness variable "${node.witnessVar}" escapes into conclusion "${itemKey(bRes.item)}".`,
+          };
+        }
         return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Existential domain "${node.domain}" must be defined and non-empty.`,
+          ok: true,
+          boundary: eRes.boundary,
+          polarity: "+",
+          item: bRes.item,
+          requiredBaseIds: mergeSorted(eRes.requiredBaseIds, bRes.requiredBaseIds),
         };
       }
-      if (!isAdmissibleTerm(boundaries, node.witnessTerm, node.domain, eigenScope)) {
-        return {
-          ok: false,
-          violation: "inadmissible-term",
-          reason: `Witness term "${node.witnessTerm}" is not admissible in domain "${node.domain}".`,
-        };
-      }
-      const wRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.witnessProof,
-        assumptions,
-        eigenScope,
-      );
-      if (!wRes.ok) {
-        return wRes;
-      }
-      const expected = substituteHandle(node.templateBody, node.variable, node.witnessTerm);
-      if (wRes.polarity !== "+" || itemKey(wRes.item) !== itemKey(expected)) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `exists-intro witness proof must derive +(${itemKey(expected)}).`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: wRes.boundary,
-        polarity: "+",
-        item: exists(node.variable, node.domain, node.templateBody),
-        requiredBaseIds: wRes.requiredBaseIds,
-      };
-    }
 
-    case "exists-elim": {
-      const eRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.existential,
-        assumptions,
-        eigenScope,
-      );
-      if (!eRes.ok) {
-        return eRes;
-      }
-      if (eRes.polarity !== "+" || eRes.item.kind !== "exists") {
+      case "flip-intro": {
+        const iRes = verifyNode(node.inner, assumptions, eigenScope);
+        if (!iRes.ok) {
+          return iRes;
+        }
         return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "exists-elim requires a positive existential item ∃(x : D) A(x).",
+          ok: true,
+          boundary: iRes.boundary,
+          polarity: iRes.polarity === "+" ? "-" : "+",
+          item: flip(iRes.item),
+          requiredBaseIds: iRes.requiredBaseIds,
         };
       }
-      if (
-        eigenScope.has(node.witnessVar) ||
-        stateHandles.has(node.witnessVar) ||
-        isHandleInAssumptions(node.witnessVar, assumptions) ||
-        collectHandles(eRes.item).has(node.witnessVar)
-      ) {
-        return {
-          ok: false,
-          violation: "eigenvariable-not-fresh",
-          reason: `Existential witness variable "${node.witnessVar}" is not fresh.`,
-        };
-      }
-      if (assumptions.has(node.assumptionId)) {
-        return {
-          ok: false,
-          violation: "shadowed-assumption",
-          reason: `Assumption identifier "${node.assumptionId}" shadows an active outer assumption.`,
-        };
-      }
-      const nextEigen = new Map(eigenScope);
-      nextEigen.set(node.witnessVar, eRes.item.domain);
-      const nextAssumptions = new Map(assumptions);
-      nextAssumptions.set(node.assumptionId, {
-        boundary: eRes.boundary,
-        item: substituteHandle(eRes.item.body, eRes.item.variable, node.witnessVar),
-      });
-      const bRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.body,
-        nextAssumptions,
-        nextEigen,
-      );
-      if (!bRes.ok) {
-        return bRes;
-      }
-      if (bRes.polarity !== "+" || bRes.boundary !== eRes.boundary) {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: `exists-elim body must derive (${eRes.boundary} ⊩+ E).`,
-        };
-      }
-      if (collectHandles(bRes.item).has(node.witnessVar)) {
-        return {
-          ok: false,
-          violation: "eigenvariable-escape",
-          reason: `Existential witness variable "${node.witnessVar}" escapes into conclusion "${itemKey(bRes.item)}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: eRes.boundary,
-        polarity: "+",
-        item: bRes.item,
-        requiredBaseIds: mergeSorted(eRes.requiredBaseIds, bRes.requiredBaseIds),
-      };
-    }
 
-    case "flip-intro": {
-      const iRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.inner,
-        assumptions,
-        eigenScope,
-      );
-      if (!iRes.ok) {
-        return iRes;
+      case "flip-elim": {
+        const iRes = verifyNode(node.inner, assumptions, eigenScope);
+        if (!iRes.ok) {
+          return iRes;
+        }
+        if (iRes.item.kind !== "flip") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "flip-elim requires an item of form ~A.",
+          };
+        }
+        return {
+          ok: true,
+          boundary: iRes.boundary,
+          polarity: iRes.polarity === "+" ? "-" : "+",
+          item: iRes.item.inner,
+          requiredBaseIds: iRes.requiredBaseIds,
+        };
       }
-      return {
-        ok: true,
-        boundary: iRes.boundary,
-        polarity: iRes.polarity === "+" ? "-" : "+",
-        item: flip(iRes.item),
-        requiredBaseIds: iRes.requiredBaseIds,
-      };
-    }
 
-    case "flip-elim": {
-      const iRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.inner,
-        assumptions,
-        eigenScope,
-      );
-      if (!iRes.ok) {
-        return iRes;
-      }
-      if (iRes.item.kind !== "flip") {
+      case "equiv-refl": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Reflexivity boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        if (!isAdmissibleTerm(boundaries, node.term, node.boundary, eigenScope)) {
+          return {
+            ok: false,
+            violation: "inadmissible-term",
+            reason: `Term "${node.term}" is not admissible in "${node.boundary}".`,
+          };
+        }
         return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "flip-elim requires an item of form ~A.",
+          ok: true,
+          boundary: node.boundary,
+          polarity: "+",
+          item: equiv(node.boundary, node.term, node.term),
+          requiredBaseIds: [],
         };
       }
-      return {
-        ok: true,
-        boundary: iRes.boundary,
-        polarity: iRes.polarity === "+" ? "-" : "+",
-        item: iRes.item.inner,
-        requiredBaseIds: iRes.requiredBaseIds,
-      };
-    }
 
-    case "equiv-refl": {
-      if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+      case "equiv-subst": {
+        const eqRes = verifyNode(node.equivProof, assumptions, eigenScope);
+        if (!eqRes.ok) {
+          return eqRes;
+        }
+        const tRes = verifyNode(node.targetProof, assumptions, eigenScope);
+        if (!tRes.ok) {
+          return tRes;
+        }
+        if (eqRes.polarity !== "+" || eqRes.item.kind !== "equiv" || tRes.item.kind !== "atom") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "equiv-subst requires positive (t1 ≈_B t2) and an atomic relational item.",
+          };
+        }
+        const meetB = boundaries.meet(eqRes.boundary, tRes.boundary);
+        if (meetB === BOT_BOUNDARY) {
+          return {
+            ok: false,
+            violation: "disjoint-meet",
+            reason: `Disjoint boundaries "${eqRes.boundary}" and "${tRes.boundary}" cannot substitute equivalence.`,
+          };
+        }
+        if (
+          !boundaries.refines(eqRes.boundary, eqRes.item.boundary) ||
+          !boundaries.hasNativeRelation(eqRes.item.boundary, tRes.item.relation)
+        ) {
+          return {
+            ok: false,
+            violation: "non-native-relation",
+            reason: `Relation "${tRes.item.relation}" is not native to congruence boundary "${eqRes.item.boundary}".`,
+          };
+        }
+        const fromHandle = node.direction === "left-to-right" ? eqRes.item.left : eqRes.item.right;
+        const toHandle = node.direction === "left-to-right" ? eqRes.item.right : eqRes.item.left;
+        const rewritten: Item = {
+          kind: "atom",
+          relation: tRes.item.relation,
+          roles: tRes.item.roles.map((r) =>
+            r.handle === fromHandle ? { role: r.role, handle: toHandle } : r,
+          ),
+        };
         return {
-          ok: false,
-          violation: "invalid-boundary",
-          reason: `Reflexivity boundary "${node.boundary}" must be defined and non-empty.`,
+          ok: true,
+          boundary: meetB,
+          polarity: tRes.polarity,
+          item: rewritten,
+          requiredBaseIds: mergeSorted(eqRes.requiredBaseIds, tRes.requiredBaseIds),
         };
       }
-      if (!isAdmissibleTerm(boundaries, node.term, node.boundary, eigenScope)) {
-        return {
-          ok: false,
-          violation: "inadmissible-term",
-          reason: `Term "${node.term}" is not admissible in "${node.boundary}".`,
-        };
-      }
-      return {
-        ok: true,
-        boundary: node.boundary,
-        polarity: "+",
-        item: equiv(node.boundary, node.term, node.term),
-        requiredBaseIds: [],
-      };
-    }
 
-    case "equiv-subst": {
-      const eqRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.equivProof,
-        assumptions,
-        eigenScope,
-      );
-      if (!eqRes.ok) {
-        return eqRes;
-      }
-      const tRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.targetProof,
-        assumptions,
-        eigenScope,
-      );
-      if (!tRes.ok) {
-        return tRes;
-      }
-      if (eqRes.polarity !== "+" || eqRes.item.kind !== "equiv" || tRes.item.kind !== "atom") {
+      case "refl-intro": {
+        if (!isDefinedNonEmptyBoundary(boundaries, node.boundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Reflection boundary "${node.boundary}" must be defined and non-empty.`,
+          };
+        }
+        if (node.reflItem.kind !== "refl" || node.reflItem.targetStage === undefined) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "refl-intro requires a stage-indexed reflection item Refl_k@Σ_t(J).",
+          };
+        }
+        const {
+          reflectedLevel,
+          targetBoundary,
+          targetPolarity,
+          targetItem,
+          targetStage,
+          targetStatus,
+        } = node.reflItem;
+        if (!Number.isInteger(targetStage) || targetStage < 0 || targetStage >= engine.stage) {
+          return {
+            ok: false,
+            violation: "stratification-violation",
+            reason: `Cross-stage reflection target stage ${targetStage} must satisfy 0 <= t < current stage ${engine.stage}.`,
+          };
+        }
+        const requiredLevel = computeItemLevel(targetItem);
+        if (!Number.isInteger(reflectedLevel) || reflectedLevel < requiredLevel) {
+          return {
+            ok: false,
+            violation: "stratification-violation",
+            reason: `Reflection level ${reflectedLevel} cannot reflect item requiring level ${requiredLevel}.`,
+          };
+        }
+        if (!isDefinedNonEmptyBoundary(boundaries, targetBoundary)) {
+          return {
+            ok: false,
+            violation: "invalid-boundary",
+            reason: `Reflected target boundary "${targetBoundary}" must be defined and non-empty.`,
+          };
+        }
+        const priorSnap = engine.evaluateAtStage(targetStage, [targetItem]);
+        const holds =
+          targetStatus !== undefined
+            ? priorSnap.statusOf(targetBoundary, targetItem) === targetStatus
+            : priorSnap.isLive(targetBoundary, targetPolarity, targetItem);
         return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "equiv-subst requires positive (t1 ≈_B t2) and an atomic relational item.",
+          ok: true,
+          boundary: node.boundary,
+          polarity: holds ? "+" : "-",
+          item: node.reflItem,
+          requiredBaseIds: [],
         };
       }
-      const meetB = boundaries.meet(eqRes.boundary, tRes.boundary);
-      if (meetB === BOT_BOUNDARY) {
-        return {
-          ok: false,
-          violation: "disjoint-meet",
-          reason: `Disjoint boundaries "${eqRes.boundary}" and "${tRes.boundary}" cannot substitute equivalence.`,
-        };
-      }
-      if (
-        !boundaries.refines(eqRes.boundary, eqRes.item.boundary) ||
-        !boundaries.hasNativeRelation(eqRes.item.boundary, tRes.item.relation)
-      ) {
-        return {
-          ok: false,
-          violation: "non-native-relation",
-          reason: `Relation "${tRes.item.relation}" is not native to congruence boundary "${eqRes.item.boundary}".`,
-        };
-      }
-      const fromHandle = node.direction === "left-to-right" ? eqRes.item.left : eqRes.item.right;
-      const toHandle = node.direction === "left-to-right" ? eqRes.item.right : eqRes.item.left;
-      const rewritten: Item = {
-        kind: "atom",
-        relation: tRes.item.relation,
-        roles: tRes.item.roles.map((r) =>
-          r.handle === fromHandle ? { role: r.role, handle: toHandle } : r,
-        ),
-      };
-      return {
-        ok: true,
-        boundary: meetB,
-        polarity: tRes.polarity,
-        item: rewritten,
-        requiredBaseIds: mergeSorted(eqRes.requiredBaseIds, tRes.requiredBaseIds),
-      };
-    }
 
-    case "ex-falso-bottom": {
-      if (mode !== "UL-Intuitionistic") {
+      case "ex-falso-bottom": {
+        if (mode !== "UL-Intuitionistic") {
+          return {
+            ok: false,
+            violation: "ex-falso-disallowed",
+            reason: `Rule ex-falso-bottom (⊥ → C) is disallowed in mode "${mode}" (requires "UL-Intuitionistic").`,
+          };
+        }
+        const bRes = verifyNode(node.bottomProof, assumptions, eigenScope);
+        if (!bRes.ok) {
+          return bRes;
+        }
+        if (bRes.polarity !== "+" || bRes.item.kind !== "bottom") {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "ex-falso-bottom requires a positive derivation of ⊥.",
+          };
+        }
         return {
-          ok: false,
-          violation: "ex-falso-disallowed",
-          reason: `Rule ex-falso-bottom (⊥ → C) is disallowed in mode "${mode}" (requires "UL-Intuitionistic").`,
+          ok: true,
+          boundary: bRes.boundary,
+          polarity: "+",
+          item: node.target,
+          requiredBaseIds: bRes.requiredBaseIds,
         };
       }
-      const bRes = verifyNode(
-        boundaries,
-        snapshot,
-        stateHandles,
-        mode,
-        node.bottomProof,
-        assumptions,
-        eigenScope,
-      );
-      if (!bRes.ok) {
-        return bRes;
-      }
-      if (bRes.polarity !== "+" || bRes.item.kind !== "bottom") {
-        return {
-          ok: false,
-          violation: "type-mismatch",
-          reason: "ex-falso-bottom requires a positive derivation of ⊥.",
-        };
-      }
-      return {
-        ok: true,
-        boundary: bRes.boundary,
-        polarity: "+",
-        item: node.target,
-        requiredBaseIds: bRes.requiredBaseIds,
-      };
     }
   }
+
+  return verifyNode(rootNode, new Map<string, ActiveAssumption>(), new Map<string, string>());
 }
 
 /**
@@ -1133,15 +1019,7 @@ export function verifyDerivation(
     }
   }
   const stateHandles = engine.mentionedHandles();
-  return verifyNode(
-    engine.boundaries,
-    snapshot,
-    stateHandles,
-    mode,
-    proof,
-    new Map<string, ActiveAssumption>(),
-    new Map<string, string>(),
-  );
+  return verifyRoot(engine, snapshot, stateHandles, mode, proof);
 }
 
 /**

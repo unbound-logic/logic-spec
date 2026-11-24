@@ -12,6 +12,7 @@ import {
   bottom,
   collectHandles,
   collectRelations,
+  computeItemLevel,
   flip,
   itemKey,
   or,
@@ -24,7 +25,7 @@ export type DerivedStatus = "Open" | "Grounded" | "Excluded" | "Collision";
 
 export type Provenance =
   | { readonly kind: "base"; readonly baseId: string }
-  | { readonly kind: "structural"; readonly rule: "bottom-excl" | "struct-imposs" }
+  | { readonly kind: "structural"; readonly rule: "bottom-excl" | "struct-imposs" | "refl-eval" }
   | {
       readonly kind: "derived";
       readonly rule: string;
@@ -239,6 +240,15 @@ type RecordedTheorem = {
   readonly requiredBaseIds: readonly string[];
 };
 
+type StageRecord = {
+  readonly stage: number;
+  readonly baseObservations: ReadonlyMap<string, BaseObservation>;
+  readonly theorems: ReadonlyMap<string, RecordedTheorem>;
+  readonly incompatibilities: readonly IncompatibilityConstraint[];
+  readonly structuralCollapses: readonly { readonly boundary: string; readonly item: Item }[];
+  readonly trackedItems: ReadonlyMap<string, Item>;
+};
+
 /**
  * Stateful vertical inquiry engine managing Σ = (G+, G-, C_B, O_rev) and
  * computing horizontal dual-polarity derivations under Quarantine & Scoped Cut.
@@ -251,6 +261,7 @@ export class InquiryEngine {
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: { readonly boundary: string; readonly item: Item }[] = [];
   readonly #trackedItems = new Map<string, Item>();
+  readonly #stageArchive = new Map<number, StageRecord>();
   readonly #history: string[] = [];
   #stage = 0;
 
@@ -258,6 +269,7 @@ export class InquiryEngine {
     this.boundaries = boundaries;
     this.monotoneOnly = options.monotoneOnly ?? false;
     this.#trackItem(bottom());
+    this.#captureStage();
   }
 
   get stage(): number {
@@ -335,6 +347,7 @@ export class InquiryEngine {
     });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Theorem${polarity}(${boundary}, ${itemKey(item)}, ${theoremId})`);
+    this.#captureStage();
   }
 
   /** Collect every handle identifier mentioned anywhere in Σ or registered boundaries. */
@@ -383,6 +396,7 @@ export class InquiryEngine {
     if (deleted) {
       this.#stage += 1;
       this.#history.push(`Σ${this.#stage}:Retract(${baseId})`);
+      this.#captureStage();
     }
     return deleted;
   }
@@ -398,6 +412,7 @@ export class InquiryEngine {
     this.#incompatibilities.push({ boundary, left, right });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Constrain(${itemKey(left)} ⊥_${boundary} ${itemKey(right)})`);
+    this.#captureStage();
   }
 
   /** Register structural boundary collapse B ⊓ [A] = ⊥_B, inducing +(A → ⊥) and -A. */
@@ -410,6 +425,7 @@ export class InquiryEngine {
     this.#structuralCollapses.push({ boundary, item });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Collapse(${boundary} ⊓ [${itemKey(item)}] = ⊥_B)`);
+    this.#captureStage();
   }
 
   /**
@@ -462,6 +478,7 @@ export class InquiryEngine {
 
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:RefineBoundary(${req.fromBoundary} → ${req.toBoundary})`);
+    this.#captureStage();
     return {
       ok: true,
       fromBoundary: req.fromBoundary,
@@ -473,6 +490,29 @@ export class InquiryEngine {
 
   /** Compute full evaluation fixpoint over current Σ and optional extra query items. */
   evaluate(extraItems: readonly Item[] = []): EvaluationSnapshot {
+    const currentRecord = this.#stageArchive.get(this.#stage);
+    if (currentRecord === undefined) {
+      throw new Error(`Missing archived inquiry stage ${this.#stage}.`);
+    }
+    return this.#evaluateRecord(currentRecord, extraItems);
+  }
+
+  /** Evaluate the frozen historical inquiry state at `stage` (0 <= stage <= current stage). */
+  evaluateAtStage(stage: number, extraItems: readonly Item[] = []): EvaluationSnapshot {
+    if (!Number.isInteger(stage) || stage < 0 || stage > this.#stage) {
+      throw new Error(`Invalid stage ${stage}; expected integer in [0, ${this.#stage}].`);
+    }
+    const record = this.#stageArchive.get(stage);
+    if (record === undefined) {
+      throw new Error(`Missing archived inquiry stage ${stage}.`);
+    }
+    return this.#evaluateRecord(record, extraItems);
+  }
+
+  #evaluateRecord(
+    record: StageRecord,
+    extraItems: readonly Item[] = [],
+  ): EvaluationSnapshot {
     const universe = new Map<string, Item>();
     const enqueueItem = (it: Item): void => {
       const k = itemKey(it);
@@ -489,8 +529,34 @@ export class InquiryEngine {
         }
       }
     };
-    for (const it of [...this.#trackedItems.values(), ...extraItems]) {
+    for (const it of [...record.trackedItems.values(), ...extraItems]) {
       enqueueItem(it);
+    }
+
+    const reflectionEvaluations: { readonly item: Item; readonly polarity: Polarity }[] = [];
+    for (const it of universe.values()) {
+      if (it.kind !== "refl" || it.targetStage === undefined) {
+        continue;
+      }
+      if (!Number.isInteger(it.targetStage) || it.targetStage < 0 || it.targetStage >= record.stage) {
+        continue;
+      }
+      if (!Number.isInteger(it.reflectedLevel) || it.reflectedLevel < computeItemLevel(it.targetItem)) {
+        continue;
+      }
+      if (!this.#isDefinedNonEmptyBoundary(it.targetBoundary)) {
+        continue;
+      }
+      const priorRecord = this.#stageArchive.get(it.targetStage);
+      if (priorRecord === undefined) {
+        continue;
+      }
+      const priorSnap = this.#evaluateRecord(priorRecord, [it.targetItem]);
+      const holds =
+        it.targetStatus !== undefined
+          ? priorSnap.statusOf(it.targetBoundary, it.targetItem) === it.targetStatus
+          : priorSnap.isLive(it.targetBoundary, it.targetPolarity, it.targetItem);
+      reflectionEvaluations.push({ item: it, polarity: holds ? "+" : "-" });
     }
 
     const provenanceBaseLeaves = (prov: Provenance): readonly string[] => {
@@ -571,9 +637,9 @@ export class InquiryEngine {
           : { kind: "derived", rule, depEntryIds, baseLeaves };
       };
 
-      // 1. Seed base observations, structural exclusions, and verified theorems.
+      // 1. Seed base observations, structural exclusions, verified theorems, and cross-stage reflections.
       const baseEntryIdByBaseId = new Map<string, string>();
-      for (const obs of this.#baseObservations.values()) {
+      for (const obs of record.baseObservations.values()) {
         const created = addEntry(obs.boundary, obs.polarity, obs.item, {
           kind: "base",
           baseId: obs.baseId,
@@ -582,7 +648,7 @@ export class InquiryEngine {
           baseEntryIdByBaseId.set(obs.baseId, created.entryId);
         }
       }
-      for (const thm of this.#theorems.values()) {
+      for (const thm of record.theorems.values()) {
         const depEntryIds: string[] = [];
         let allPresent = true;
         for (const reqId of thm.requiredBaseIds) {
@@ -605,7 +671,15 @@ export class InquiryEngine {
       for (const b of nonEmptyB) {
         addEntry(b, "-", bot, { kind: "structural", rule: "bottom-excl" });
       }
-      for (const sc of this.#structuralCollapses) {
+      for (const reflRes of reflectionEvaluations) {
+        for (const b of nonEmptyB) {
+          addEntry(b, reflRes.polarity, reflRes.item, {
+            kind: "structural",
+            rule: "refl-eval",
+          });
+        }
+      }
+      for (const sc of record.structuralCollapses) {
         addEntry(
           sc.boundary,
           "+",
@@ -901,7 +975,7 @@ export class InquiryEngine {
         }
 
         // F) Material Incompatibility (A ⊥_B C) triggered only by Live grounds
-        for (const inc of this.#incompatibilities) {
+        for (const inc of record.incompatibilities) {
           const lk = itemKey(inc.left);
           const rk = itemKey(inc.right);
           for (const b of this.boundaries.nonEmptySubBoundaries(inc.boundary)) {
@@ -1075,6 +1149,29 @@ export class InquiryEngine {
     this.#baseObservations.set(baseId, { baseId, boundary, polarity, item, key });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Observe${polarity}(${boundary}, ${key}, ${baseId})`);
+    this.#captureStage();
+  }
+
+  #isDefinedNonEmptyBoundary(boundary: string): boolean {
+    if (boundary === BOT_BOUNDARY) {
+      return false;
+    }
+    try {
+      return this.boundaries.refines(boundary, boundary);
+    } catch {
+      return false;
+    }
+  }
+
+  #captureStage(): void {
+    this.#stageArchive.set(this.#stage, {
+      stage: this.#stage,
+      baseObservations: new Map(this.#baseObservations),
+      theorems: new Map(this.#theorems),
+      incompatibilities: [...this.#incompatibilities],
+      structuralCollapses: [...this.#structuralCollapses],
+      trackedItems: new Map(this.#trackedItems),
+    });
   }
 
   #trackItem(item: Item): void {
