@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY } from "../src/boundary.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { atom, equiv, flip, forall } from "../src/syntax.ts";
+import { and, atom, equiv, flip, forall } from "../src/syntax.ts";
 
 function test_boundary_meet_semilattice_and_non_witnessing_bottom(): void {
   const b = new BoundarySystem();
@@ -195,6 +195,7 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     nativeRelations: ["White", "Habitat"],
     handles: [
       { id: "swan_402", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan(cygnus)", kind: "contingent" },
       { id: "Australia", criterion: "I_Region(AU)", kind: "structural" },
     ],
   });
@@ -211,6 +212,15 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     atom("White", [{ role: "subject", handle: "swan_402" }]),
     "obs_tue",
     { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+  eBio.observeNegative(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_101" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_eu_habitat",
+    { handle: "swan_101", criterion: "I_Swan(cygnus)" },
   );
   assert.equal(eBio.evaluate().statusOf("Swan", genSwan), "Collision");
 
@@ -240,7 +250,7 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     assert.equal(att2.violation, "M1-contingent-excision");
   }
 
-  // Attempt 3: δ₃(x) := ~Habitat(x, Australia) -> admitted; M2 preserves (Swan, Gen_Swan) Excluded after retracting overbroad w_gen_swan
+  // Attempt 3: δ₃(x) := ~Habitat(x, Australia) -> admitted via independent witness swan_101; M2 preserves (Swan, Gen_Swan) Excluded
   eBio.retract("w_gen_swan");
   const att3 = eBio.refineBoundary({
     fromBoundary: "Swan",
@@ -258,7 +268,159 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   assert.equal(eBio.evaluate().statusOf("Swan", genSwan), "Excluded");
 }
 
+function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities(): void {
+  const bProxy = new BoundarySystem();
+  bProxy.defineBoundary("Swan", {
+    nativeRelations: ["White", "Habitat", "FoundInLake7", "TaggedOnTuesday"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "Australia", criterion: "I_Region(AU)", kind: "structural" },
+    ],
+  });
+  bProxy.defineBoundary("Swan_NonAU", {
+    parents: ["Swan"],
+    handleFilter: (h) => h.id !== "swan_402",
+  });
+  bProxy.defineBoundary("Swan_Empty", {
+    parents: ["Swan"],
+    handleFilter: () => false,
+  });
+
+  const eProxy = new InquiryEngine(bProxy);
+  const whiteX = atom("White", [{ role: "subject", handle: "x" }]);
+  const genSwan = forall("x", "Swan", whiteX);
+  eProxy.observeNegative(
+    "Swan",
+    atom("White", [{ role: "subject", handle: "swan_402" }]),
+    "obs_tue",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+  eProxy.observePositive(
+    "Swan",
+    atom("FoundInLake7", [{ role: "subject", handle: "swan_402" }]),
+    "obs_lake7",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+  eProxy.observePositive(
+    "Swan",
+    atom("TaggedOnTuesday", [{ role: "subject", handle: "swan_402" }]),
+    "obs_tag_tue",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+
+  // Attempt 2b: disguised contingent proxy ~(FoundInLake7(x) ∧ TaggedOnTuesday(x)) -> refused M1(iii)
+  const proxyCrit = flip(
+    and(
+      atom("FoundInLake7", [{ role: "subject", handle: "x" }]),
+      atom("TaggedOnTuesday", [{ role: "subject", handle: "x" }]),
+    ),
+  );
+  const resProxy = eProxy.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_NonAU",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: proxyCrit,
+  });
+  assert.equal(resProxy.ok, false);
+  if (!resProxy.ok) {
+    assert.equal(resProxy.violation, "M1-unwitnessed-proxy");
+  }
+
+  // Independent negative observation on swan_101 for Habitat(swan_101, Australia)
+  const habX = flip(
+    atom("Habitat", [
+      { role: "subject", handle: "x" },
+      { role: "region", handle: "Australia" },
+    ]),
+  );
+  eProxy.observeNegative(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_101" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_eu_habitat",
+    { handle: "swan_101", criterion: "I_Swan(cygnus)" },
+  );
+
+  // Vacuous excision removing all surviving handles -> refused M1(iii)
+  const resEmpty = eProxy.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_Empty",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: habX,
+  });
+  assert.equal(resEmpty.ok, false);
+  if (!resEmpty.ok) {
+    assert.equal(resEmpty.violation, "M1-unwitnessed-proxy");
+  }
+
+  // Collided/Quarantined witness on swan_101 cannot satisfy M1(iii)
+  eProxy.observePositive(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_101" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_au_conflict",
+    { handle: "swan_101", criterion: "I_Swan(cygnus)" },
+  );
+  const resCollided = eProxy.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_NonAU",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: habX,
+  });
+  assert.equal(resCollided.ok, false);
+  if (!resCollided.ok) {
+    assert.equal(resCollided.violation, "M1-unwitnessed-proxy");
+  }
+
+  // Retracting conflicting observation restores Live witness on swan_101 -> M1(iii) admits + M2 preserves Excluded
+  assert.equal(eProxy.retract("obs_au_conflict"), true);
+  const resAdmitted = eProxy.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_NonAU",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: habX,
+  });
+  assert.equal(resAdmitted.ok, true);
+  assert.equal(eProxy.evaluate([genSwan]).statusOf("Swan", genSwan), "Excluded");
+
+  // Structural singularity exemption: ℝ \ {0} removes only structural handle "0", needing no extra empirical witness
+  const bMath = new BoundarySystem();
+  bMath.defineBoundary("R", {
+    nativeRelations: ["Invertible", "AddId"],
+    handles: [
+      { id: "0", criterion: "I_R(add_id)", kind: "structural" },
+      { id: "2", criterion: "I_R(2)", kind: "structural" },
+    ],
+  });
+  bMath.defineBoundary("R_star", {
+    parents: ["R"],
+    handleFilter: (h) => h.id !== "0",
+  });
+  const eMath = new InquiryEngine(bMath);
+  const invX = atom("Invertible", [{ role: "el", handle: "x" }]);
+  const genR = forall("x", "R", invX);
+  eMath.observeNegative("R", atom("Invertible", [{ role: "el", handle: "0" }]), "zero_no_inv");
+  const resMath = eMath.refineBoundary({
+    fromBoundary: "R",
+    toBoundary: "R_star",
+    originalUniversal: genR,
+    targetRelation: "Invertible",
+    criterionItem: flip(atom("AddId", [{ role: "el", handle: "x" }])),
+  });
+  assert.equal(resMath.ok, true);
+}
+
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
 test("inquiry updates retract non-commutativity and M1/M2", test_inquiry_updates_retract_non_commutativity_and_m1_m2);
+test("M1(iii) excess content blocks disguised proxies and preserves structural singularities", test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities);
