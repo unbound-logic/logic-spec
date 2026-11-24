@@ -146,20 +146,24 @@ All normative items below carry an explicit claim status label (`Consensus` or `
     - **Conjunction (`A ∧ C`)**:
       - `B ⊩⁺ (A ∧ C)` ⟺ `B ⊩⁺ A` and `B ⊩⁺ C` (both `Live`, joining DAGs).
       - `B ⊩⁻ (A ∧ C)` ⟺ `B ⊩⁻ A` or `B ⊩⁻ C`.
-    - **Cover-Witnessed Disjunction (`A ∨ C`)**:
+    - **Cover-Witnessed Disjunction (`A ∨ C`) & Standalone Cover-Gluing**:
       - `B ⊩⁺ (A ∨ C)` ⟺ there exists a witnessed finite exhaustive cover `{B₁, ..., B_k} ▷ B` (item 5) such that for each non-empty cell `B_i`, `B_i ⊩⁺ A` (`Live`) or `B_i ⊩⁺ C` (`Live`).
       - `B ⊩⁻ (A ∨ C)` ⟺ `B ⊩⁻ A` and `B ⊩⁻ C`.
       - **Cover Gluing (`∨E`)**: If `B ⊩⁺ (A ∨ C)` via `{B_i} ▷ B`, `B ⊩⁺ (A → E)` (`Live`), and `B ⊩⁺ (C → E)` (`Live`), then `B ⊩⁺ E` (grounded by gluing the per-cell derivations across `{B_i}`).
+      - **Standalone Cover-Gluing (`Sheaf Gluing`)**: If `{B_i} ▷ B` (item 5) and every non-empty cell satisfies `B_i ⊩± E` (`Live`) uniformly for a polarity `±`, then `B ⊩± E` is grounded by gluing across `{B_i}`.
     - **Scoped Conditional (`A → C`)**:
-      - `B ⊩⁺ (A → C)`: witnessed by a verified construction/transmission rule mapping any `Live` `B' ⊩⁺ A [π]` on any non-empty `B' ⊑ B` to `B' ⊩⁺ C [f(π)]` (so mere absence of `+A`, or defeasible `-A`, does **not** fabricate `+(A → C)` in `UL-Core`).
+      - `B ⊩⁺ (A → C)`: witnessed either by a verified transmission rule mapping any `Live` `B' ⊩⁺ A [π]` on any non-empty `B' ⊑ B` to `B' ⊩⁺ C [f(π)]`, or by a verified **`→I` hypothetical sub-proof box** deriving `(B ⊩⁺ C)` from a discharged local assumption `A` without importing un-`Live` grounds or exploding from `-A` (preserving base-leaf provenance of any imported `Live` witnesses). Mere absence of `+A`, or defeasible `-A`, does **not** fabricate `+(A → C)` in `UL-Core`.
       - `B ⊩⁻ (A → C)` ⟺ `B ⊩⁺ A` and `B ⊩⁻ C` (preserving symmetric downward heredity without leaking counterexamples across disjoint sibling boundaries; any counterexample on `B' ⊑ B` yields `B' ⊩⁻ (A → C)`, colliding with inherited `B' ⊩⁺ (A → C)` and triggering upstream obstruction of `(B, +(A → C))` per item 10).
     - **Boundary-Scoped Quantifiers (`∀(x : D) A(x)`, `∃(x : D) A(x)` evaluated at `B`)**:
-      - `B ⊩⁺ ∀(x : D) A(x)` ⟺ generic structural grounding showing `B ⊩⁺ A(x)` for arbitrary admissible `x ∈ Dom(D)` (or per-cell grounding across a witnessed finite cover of `D`).
+      - `B ⊩⁺ ∀(x : D) A(x)` ⟺ generic structural grounding showing `B ⊩⁺ A(α)` either over arbitrary admissible `x ∈ Dom(D)` / a witnessed finite cover of `D`, or via syntactic **schematic `∀I`** deriving `(B ⊩⁺ A(α))` for an **eigenvariable `α`** strictly fresh with respect to `Σ`, active outer assumptions, registered domain handles, and the quantifier template (`∀E` instantiates with any admissible term or active scoped eigenvariable).
       - `B ⊩⁻ ∀(x : D) A(x)` ⟺ there exists concrete `w ∈ Dom(D)` with `B ⊩⁻ A(w)`.
-      - `B ⊩⁺ ∃(x : D) A(x)` ⟺ there exists concrete `w ∈ Dom(D)` with `B ⊩⁺ A(w)`.
+      - `B ⊩⁺ ∃(x : D) A(x)` ⟺ there exists admissible term/witness `w` in `D` with `B ⊩⁺ A(w)` (`∃E` eliminates `∃(x : D) A(x)` using a fresh witness variable `γ` provided `γ` does not escape into the conclusion `E`).
       - `B ⊩⁻ ∃(x : D) A(x)` ⟺ generic structural exclusion showing `B ⊩⁻ A(x)` for all admissible `x ∈ Dom(D)`.
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_connective_and_quantifier_polarity_rules_with_cover_gluing" min="1" reason="All connective, quantifier, incompatibility, cover disjunction, and ∨E rules are verified" -->
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_bottom_non_witnessing_guard_and_imposs_contraposition" min="1" reason="Base bottom guard, Live non-witnessing of bottom, and imposs-excl without DNE are verified" -->
+    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_standalone_cover_gluing_and_quarantine_propagation" min="1" reason="Standalone Cover-Gluing and Quarantine obstruction over glued theorems are verified" -->
+    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_natural_deduction_implies_intro_and_anti_vacuity_quarantine" min="1" reason="Natural deduction implies-intro discharge, anti-vacuity, and Quarantine provenance bridge are verified" -->
+    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_schematic_forall_intro_eigenvariable_soundness_on_open_domains" min="1" reason="Schematic open-domain forall-intro and exists-elim eigenvariable soundness are verified" -->
 
 ---
 
@@ -184,3 +188,4 @@ All normative items below carry an explicit claim status label (`Consensus` or `
          - **Vacuous Explosion**: Under `No-Gluts`, the set of states satisfying both `+A` and `-A` is empty, so classical Explosion (`A, ~A ⊢ C`) holds vacuously as a specialization theorem without belonging to `UL-Core`.
     <!-- @assert-count target="test/specializations.test.ts" symbol="function test_four_tier_deductive_spectrum_and_classical_recovery" min="1" reason="Four-tier specialization spectrum and classical boundary recovery are verified" -->
     <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_atomic_cover_2k_boolean_algebra_reporting" min="1" reason="Multi-cell 2^k atomic cover reporting distinguishing +, -, and split is verified" -->
+    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation" min="1" reason="Syntactic UL-Minimal vs UL-Intuitionistic proof-theoretic separation via bottom elimination is verified" -->
