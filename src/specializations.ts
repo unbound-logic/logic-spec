@@ -21,9 +21,12 @@ export type IntuitionisticCheckResult =
     }
   | { readonly ok: false; readonly reason: string };
 
+export type GlobalCoverStatus = "+" | "-" | "split";
+
 export type ClassicalValuation = {
   readonly bivalent: boolean;
-  readonly polarity: Polarity;
+  readonly polarity: GlobalCoverStatus;
+  readonly cellPolarities: ReadonlyMap<string, Polarity>;
   readonly negCollapseEquivalent: boolean;
 };
 
@@ -186,23 +189,20 @@ export function evaluateClassicalSpecialization(
     }
   };
 
-  // On a cover {B*_i} ▷ B, global + holds when + holds across all atomic cells
-  // (using D2 cover semantics for compound disjunctions on non-atomic B).
-  const evalGlobal = (item: Item): Polarity => {
-    if (atomicCover.length === 1 && atomicCover[0] !== undefined) {
-      return evalOnAtomicCell(atomicCover[0], item);
-    }
-    // Check per-cell validity across the finite atomic cover:
-    const cellResults = atomicCover.map((c) => evalOnAtomicCell(c, item));
-    if (cellResults.every((p) => p === "+")) {
-      return "+";
-    }
-    return "-";
-  };
-
+  // On a k-cell cover {B*_i} ▷ B, UL-Classical recovers the product Boolean algebra 2^k:
+  // distinguish uniformly "+" (globally grounded), uniformly "-" (globally excluded), and "split".
   const results = new Map<string, ClassicalValuation>();
   for (const q of queryItems) {
-    const pol = evalGlobal(q);
+    const cellPolarities = new Map<string, Polarity>();
+    for (const cell of atomicCover) {
+      cellPolarities.set(cell, evalOnAtomicCell(cell, q));
+    }
+    const values = [...cellPolarities.values()];
+    const pol: GlobalCoverStatus = values.every((p) => p === "+")
+      ? "+"
+      : values.every((p) => p === "-")
+        ? "-"
+        : "split";
     // Verify negation collapse: ~q and (q → ⊥) have identical polarity on every atomic cell.
     const negCollapseEquivalent = atomicCover.every((cell) => {
       const pFlip = evalOnAtomicCell(cell, flip(q));
@@ -212,6 +212,7 @@ export function evaluateClassicalSpecialization(
     results.set(itemKey(q), {
       bivalent: true,
       polarity: pol,
+      cellPolarities,
       negCollapseEquivalent,
     });
   }

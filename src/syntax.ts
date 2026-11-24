@@ -357,104 +357,173 @@ export function computeItemLevel(
   }
 }
 
+type DependencyEdge = {
+  readonly from: string;
+  readonly to: string;
+  readonly violation?: PositivityViolation;
+};
+
 /**
- * Validate a recursive definition against the Curry Paradox firewall:
- * 1) Level Stratification: every Refl_k(J) requires level(J) <= k and k < def.level.
- * 2) Strict Positivity: self-reference never occurs left of `→`, inside `~`,
- *    or inside a contravariant boundary promotion `[X]` / quantifier domain.
+ * Validate a finite mutually recursive definition system against the Curry Paradox firewall:
+ * 1) Level Stratification: every Refl_k(J) requires level(J) <= k < def.level,
+ *    and def.level >= computeItemLevel(def.body, allLevels).
+ * 2) Mutual Strict Positivity: no cycle in the definition dependency graph traverses
+ *    a contravariant edge (left of `→`, inside `~`, or inside `[X]` / quantifier domain).
+ */
+export function checkRecursiveDefinitionSystem(
+  defs: readonly RecursiveDef[],
+  externalLevels: ReadonlyMap<string, number> = new Map(),
+): WellFormedResult {
+  const allLevels = new Map<string, number>(externalLevels);
+  const definedNames = new Set<string>();
+
+  for (const def of defs) {
+    if (!Number.isInteger(def.level) || def.level < 0) {
+      return {
+        ok: false,
+        violation: "stratification-violation",
+        reason: `Definition "${def.name}" has invalid level ${def.level}; level must be a non-negative integer.`,
+      };
+    }
+    if (definedNames.has(def.name)) {
+      return {
+        ok: false,
+        violation: "stratification-violation",
+        reason: `Duplicate recursive definition name "${def.name}" in system.`,
+      };
+    }
+    definedNames.add(def.name);
+    allLevels.set(def.name, def.level);
+  }
+
+  const edges: DependencyEdge[] = [];
+
+  for (const def of defs) {
+    function walkNode(
+      node: Item,
+      inAntecedent: boolean,
+      inFlip: boolean,
+      inDomainConstraint: boolean,
+    ): WellFormedResult | undefined {
+      switch (node.kind) {
+        case "atom":
+        case "bottom":
+        case "equiv":
+          return undefined;
+        case "ref": {
+          if (!definedNames.has(node.name)) {
+            return undefined;
+          }
+          const violation: PositivityViolation | undefined = inDomainConstraint
+            ? "boundary-promotion"
+            : inFlip
+              ? "polarity-flip"
+              : inAntecedent
+                ? "left-of-implies"
+                : undefined;
+          edges.push(
+            violation !== undefined
+              ? { from: def.name, to: node.name, violation }
+              : { from: def.name, to: node.name },
+          );
+          return undefined;
+        }
+        case "flip":
+          return walkNode(node.inner, inAntecedent, true, inDomainConstraint);
+        case "and":
+        case "or":
+          return (
+            walkNode(node.left, inAntecedent, inFlip, inDomainConstraint) ??
+            walkNode(node.right, inAntecedent, inFlip, inDomainConstraint)
+          );
+        case "implies":
+          return (
+            walkNode(node.antecedent, true, inFlip, inDomainConstraint) ??
+            walkNode(node.consequent, inAntecedent, inFlip, inDomainConstraint)
+          );
+        case "forall":
+        case "exists": {
+          if (node.domainConstraint !== undefined) {
+            const domErr = walkNode(node.domainConstraint, inAntecedent, inFlip, true);
+            if (domErr !== undefined) {
+              return domErr;
+            }
+          }
+          return walkNode(node.body, inAntecedent, inFlip, inDomainConstraint);
+        }
+        case "refl": {
+          const targetLevel = computeItemLevel(node.targetItem, allLevels);
+          if (targetLevel > node.reflectedLevel || node.reflectedLevel >= def.level) {
+            return {
+              ok: false,
+              violation: "stratification-violation",
+              reason: `Definition "${def.name}" at level ${def.level} failed stratification-violation via Refl_${node.reflectedLevel} (target level ${targetLevel}).`,
+            };
+          }
+          return walkNode(node.targetItem, inAntecedent, inFlip, inDomainConstraint);
+        }
+      }
+    }
+
+    const walkErr = walkNode(def.body, false, false, false);
+    if (walkErr !== undefined) {
+      return walkErr;
+    }
+
+    const requiredLevel = computeItemLevel(def.body, allLevels);
+    if (def.level < requiredLevel) {
+      return {
+        ok: false,
+        violation: "stratification-violation",
+        reason: `Definition "${def.name}" declared level ${def.level} is below required body level ${requiredLevel}.`,
+      };
+    }
+  }
+
+  const canReach = (start: string, target: string): boolean => {
+    const visited = new Set<string>();
+    const stack = [start];
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      if (cur === undefined || visited.has(cur)) {
+        continue;
+      }
+      if (cur === target) {
+        return true;
+      }
+      visited.add(cur);
+      for (const e of edges) {
+        if (e.from === cur && !visited.has(e.to)) {
+          stack.push(e.to);
+        }
+      }
+    }
+    return false;
+  };
+
+  for (const edge of edges) {
+    if (edge.violation !== undefined && canReach(edge.to, edge.from)) {
+      return {
+        ok: false,
+        violation: edge.violation,
+        reason: `Definition "${edge.from}" participates in a non-strictly-positive cycle via "${edge.to}" (${edge.violation}).`,
+      };
+    }
+  }
+
+  const minLevel = Math.max(0, ...defs.map((d) => computeItemLevel(d.body, externalLevels)));
+  return { ok: true, minLevel };
+}
+
+/**
+ * Validate a single recursive definition against the Curry Paradox firewall.
+ * Delegates to checkRecursiveDefinitionSystem([def], knownLevels).
  */
 export function checkRecursiveDefinition(
   def: RecursiveDef,
   knownLevels: ReadonlyMap<string, number> = new Map(),
 ): WellFormedResult {
-  if (!Number.isInteger(def.level) || def.level < 0) {
-    return {
-      ok: false,
-      violation: "stratification-violation",
-      reason: `Definition "${def.name}" has invalid level ${def.level}; level must be a non-negative integer.`,
-    };
-  }
-
-  const levelsWithSelf = new Map(knownLevels);
-  levelsWithSelf.set(def.name, def.level);
-
-  function checkNode(
-    node: Item,
-    inAntecedent: boolean,
-    inFlip: boolean,
-    inDomainConstraint: boolean,
-  ): PositivityViolation | undefined {
-    switch (node.kind) {
-      case "atom":
-      case "bottom":
-      case "equiv":
-        return undefined;
-      case "ref":
-        if (node.name !== def.name) {
-          return undefined;
-        }
-        if (inDomainConstraint) {
-          return "boundary-promotion";
-        }
-        if (inFlip) {
-          return "polarity-flip";
-        }
-        if (inAntecedent) {
-          return "left-of-implies";
-        }
-        return undefined;
-      case "flip":
-        return checkNode(node.inner, inAntecedent, true, inDomainConstraint);
-      case "and":
-      case "or":
-        return (
-          checkNode(node.left, inAntecedent, inFlip, inDomainConstraint) ??
-          checkNode(node.right, inAntecedent, inFlip, inDomainConstraint)
-        );
-      case "implies":
-        return (
-          checkNode(node.antecedent, true, inFlip, inDomainConstraint) ??
-          checkNode(node.consequent, inAntecedent, inFlip, inDomainConstraint)
-        );
-      case "forall":
-      case "exists": {
-        if (node.domainConstraint !== undefined) {
-          const domErr = checkNode(node.domainConstraint, inAntecedent, inFlip, true);
-          if (domErr !== undefined) {
-            return domErr;
-          }
-        }
-        return checkNode(node.body, inAntecedent, inFlip, inDomainConstraint);
-      }
-      case "refl": {
-        const targetLevel = computeItemLevel(node.targetItem, levelsWithSelf);
-        if (targetLevel > node.reflectedLevel || node.reflectedLevel >= def.level) {
-          return "stratification-violation";
-        }
-        return checkNode(node.targetItem, inAntecedent, inFlip, inDomainConstraint);
-      }
-    }
-  }
-
-  const violation = checkNode(def.body, false, false, false);
-  if (violation !== undefined) {
-    return {
-      ok: false,
-      violation,
-      reason: `Recursive definition "${def.name}" at level ${def.level} failed ${violation}.`,
-    };
-  }
-
-  const minLevel = computeItemLevel(def.body, knownLevels);
-  if (def.level < minLevel) {
-    return {
-      ok: false,
-      violation: "stratification-violation",
-      reason: `Definition "${def.name}" declared level ${def.level} is below required body level ${minLevel}.`,
-    };
-  }
-
-  return { ok: true, minLevel };
+  return checkRecursiveDefinitionSystem([def], knownLevels);
 }
 
 function walkItem(item: Item, visitor: (node: Item) => void): void {

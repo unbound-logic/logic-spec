@@ -271,6 +271,11 @@ export class InquiryEngine {
         `Non-Witnessing Law violation: impossible boundary "${BOT_BOUNDARY}" cannot supply a positive witness.`,
       );
     }
+    if (item.kind === "bottom") {
+      throw new Error(
+        `Unsatisfiable item "⊥" admits no positive witness on non-empty boundary "${boundary}".`,
+      );
+    }
     this.#addBaseObservation(boundary, "+", item, baseId, handleAuth);
   }
 
@@ -409,35 +414,6 @@ export class InquiryEngine {
       enqueueItem(it);
     }
 
-    const entries: GroundEntry[] = [];
-    const byEntryId = new Map<string, GroundEntry>();
-    const dedupKeys = new Set<string>();
-    let seq = 0;
-
-    const addEntry = (
-      boundary: string,
-      polarity: Polarity,
-      item: Item,
-      provenance: Provenance,
-    ): GroundEntry | undefined => {
-      if (boundary === BOT_BOUNDARY) {
-        return undefined;
-      }
-      const key = itemKey(item);
-      const leaves = provenanceBaseLeaves(provenance);
-      const dedup = `${boundary}\0${polarity}\0${key}\0${leaves.join(",")}`;
-      if (dedupKeys.has(dedup)) {
-        return undefined;
-      }
-      dedupKeys.add(dedup);
-      seq += 1;
-      const entryId = `e${seq}`;
-      const entry: GroundEntry = { entryId, boundary, polarity, item, key, provenance };
-      entries.push(entry);
-      byEntryId.set(entryId, entry);
-      return entry;
-    };
-
     const provenanceBaseLeaves = (prov: Provenance): readonly string[] => {
       if (prov.kind === "base") {
         return [prov.baseId];
@@ -448,424 +424,504 @@ export class InquiryEngine {
       return prov.baseLeaves;
     };
 
-    const mergeLeaves = (depIds: readonly string[], extraTag?: string): readonly string[] => {
-      const set = new Set<string>();
-      for (const id of depIds) {
-        const dep = byEntryId.get(id);
-        if (dep !== undefined) {
-          for (const l of provenanceBaseLeaves(dep.provenance)) {
-            set.add(l);
-          }
-        }
-      }
-      if (extraTag !== undefined) {
-        set.add(extraTag);
-      }
-      return [...set].sort();
-    };
-
-    const makeDerived = (
-      rule: string,
-      depEntryIds: readonly string[],
-      extraTag?: string,
-      coverCells?: readonly string[],
-    ): Provenance => {
-      const baseLeaves = mergeLeaves(depEntryIds, extraTag);
-      return coverCells !== undefined
-        ? { kind: "derived", rule, depEntryIds, baseLeaves, coverCells }
-        : { kind: "derived", rule, depEntryIds, baseLeaves };
-    };
-
-    // 1. Seed base observations and structural exclusions.
-    for (const obs of this.#baseObservations.values()) {
-      addEntry(obs.boundary, obs.polarity, obs.item, {
-        kind: "base",
-        baseId: obs.baseId,
-      });
-    }
-    const bot = bottom();
-    for (const b of this.boundaries.nonEmptyBoundaries()) {
-      addEntry(b, "-", bot, { kind: "structural", rule: "bottom-excl" });
-    }
-    for (const sc of this.#structuralCollapses) {
-      addEntry(
-        sc.boundary,
-        "+",
-        { kind: "implies", antecedent: sc.item, consequent: bot },
-        { kind: "structural", rule: "struct-imposs" },
-      );
-      addEntry(sc.boundary, "-", sc.item, {
-        kind: "structural",
-        rule: "struct-imposs",
-      });
-    }
-
-    const computeStatusState = (): {
-      collisions: Set<string>;
-      obstructed: Set<string>;
-      liveIds: Set<string>;
-    } => {
-      const posPairs = new Set<string>();
-      const negPairs = new Set<string>();
-      for (const e of entries) {
-        const pk = `${e.boundary}\0${e.key}`;
-        if (e.polarity === "+") {
-          posPairs.add(pk);
-        } else {
-          negPairs.add(pk);
-        }
-      }
-      const collisions = new Set<string>();
-      for (const pk of posPairs) {
-        if (negPairs.has(pk)) {
-          collisions.add(pk);
-        }
-      }
-      const obstructed = new Set<string>();
-      for (const c of collisions) {
-        const sep = c.indexOf("\0");
-        const colB = c.slice(0, sep);
-        const colKey = c.slice(sep + 1);
-        for (const e of entries) {
-          if (e.key === colKey && this.boundaries.refines(colB, e.boundary)) {
-            obstructed.add(`${e.boundary}\0${e.key}`);
-          }
-        }
-      }
-
-      // Least fixpoint from un-obstructed leaves guarantees well-foundedness + non-quarantine.
-      const liveIds = new Set<string>();
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const e of entries) {
-          if (liveIds.has(e.entryId)) {
-            continue;
-          }
-          if (obstructed.has(`${e.boundary}\0${e.key}`)) {
-            continue;
-          }
-          if (e.provenance.kind !== "derived") {
-            liveIds.add(e.entryId);
-            changed = true;
-            continue;
-          }
-          if (e.provenance.depEntryIds.every((id) => liveIds.has(id))) {
-            liveIds.add(e.entryId);
-            changed = true;
-          }
-        }
-      }
-      return { collisions, obstructed, liveIds };
-    };
-
-    // 2. Fixpoint closure over all UL-Core rules.
     const nonEmptyB = this.boundaries.nonEmptyBoundaries();
-    for (let iter = 0; iter < 64; iter++) {
-      const beforeCount = entries.length;
-      const { liveIds } = computeStatusState();
-      const snapshotList = [...entries];
+    const bot = bottom();
 
-      // A) Symmetric downward heredity (for both + and -)
-      for (const e of snapshotList) {
-        for (const sub of this.boundaries.nonEmptySubBoundaries(e.boundary)) {
-          if (sub !== e.boundary) {
-            addEntry(sub, e.polarity, e.item, makeDerived("down", [e.entryId]));
+    type ClosurePassResult = {
+      readonly entries: GroundEntry[];
+      readonly collisions: Set<string>;
+      readonly obstructed: Set<string>;
+      readonly liveIds: Set<string>;
+    };
+
+    const runClosure = (blockedSlots: ReadonlySet<string>): ClosurePassResult => {
+      const entries: GroundEntry[] = [];
+      const byEntryId = new Map<string, GroundEntry>();
+      const dedupKeys = new Set<string>();
+      let seq = 0;
+
+      const addEntry = (
+        boundary: string,
+        polarity: Polarity,
+        item: Item,
+        provenance: Provenance,
+      ): GroundEntry | undefined => {
+        if (boundary === BOT_BOUNDARY) {
+          return undefined;
+        }
+        const key = itemKey(item);
+        const leaves = provenanceBaseLeaves(provenance);
+        const dedup = `${boundary}\0${polarity}\0${key}\0${leaves.join(",")}`;
+        if (dedupKeys.has(dedup)) {
+          return undefined;
+        }
+        dedupKeys.add(dedup);
+        seq += 1;
+        const entryId = `e${seq}`;
+        const entry: GroundEntry = { entryId, boundary, polarity, item, key, provenance };
+        entries.push(entry);
+        byEntryId.set(entryId, entry);
+        return entry;
+      };
+
+      const mergeLeaves = (depIds: readonly string[], extraTag?: string): readonly string[] => {
+        const set = new Set<string>();
+        for (const id of depIds) {
+          const dep = byEntryId.get(id);
+          if (dep !== undefined) {
+            for (const l of provenanceBaseLeaves(dep.provenance)) {
+              set.add(l);
+            }
           }
         }
+        if (extraTag !== undefined) {
+          set.add(extraTag);
+        }
+        return [...set].sort();
+      };
+
+      const makeDerived = (
+        rule: string,
+        depEntryIds: readonly string[],
+        extraTag?: string,
+        coverCells?: readonly string[],
+      ): Provenance => {
+        const baseLeaves = mergeLeaves(depEntryIds, extraTag);
+        return coverCells !== undefined
+          ? { kind: "derived", rule, depEntryIds, baseLeaves, coverCells }
+          : { kind: "derived", rule, depEntryIds, baseLeaves };
+      };
+
+      // 1. Seed base observations and structural exclusions.
+      for (const obs of this.#baseObservations.values()) {
+        addEntry(obs.boundary, obs.polarity, obs.item, {
+          kind: "base",
+          baseId: obs.baseId,
+        });
+      }
+      for (const b of nonEmptyB) {
+        addEntry(b, "-", bot, { kind: "structural", rule: "bottom-excl" });
+      }
+      for (const sc of this.#structuralCollapses) {
+        addEntry(
+          sc.boundary,
+          "+",
+          { kind: "implies", antecedent: sc.item, consequent: bot },
+          { kind: "structural", rule: "struct-imposs" },
+        );
+        addEntry(sc.boundary, "-", sc.item, {
+          kind: "structural",
+          rule: "struct-imposs",
+        });
       }
 
-      // B) Strong polarity flip ~A (valid on polarities; Live depends on source)
-      for (const e of snapshotList) {
-        const oppPol: Polarity = e.polarity === "+" ? "-" : "+";
-        const flipped = flip(e.item);
-        if (universe.has(itemKey(flipped))) {
-          addEntry(e.boundary, oppPol, flipped, makeDerived("flip", [e.entryId]));
-        }
-        if (e.item.kind === "flip") {
-          addEntry(e.boundary, oppPol, e.item.inner, makeDerived("flip-elim", [e.entryId]));
-        }
-      }
-
-      // Index helpers on current entries for rule joins
-      const entriesByBPolKey = new Map<string, GroundEntry[]>();
-      const liveByBPolKey = new Map<string, GroundEntry[]>();
-      for (const e of entries) {
-        const k = slotKey(e.boundary, e.polarity, e.key);
-        const allList = entriesByBPolKey.get(k) ?? [];
-        allList.push(e);
-        entriesByBPolKey.set(k, allList);
-        if (liveIds.has(e.entryId)) {
-          const lList = liveByBPolKey.get(k) ?? [];
-          lList.push(e);
-          liveByBPolKey.set(k, lList);
-        }
-      }
-
-      // C) Local exclusion rules (no false transmission needed) & Live-gated transmission rules
-      for (const it of universe.values()) {
-        const k = itemKey(it);
-        for (const b of nonEmptyB) {
-          if (it.kind === "implies") {
-            const antK = itemKey(it.antecedent);
-            const conK = itemKey(it.consequent);
-            const posAnt = entriesByBPolKey.get(slotKey(b, "+", antK)) ?? [];
-            const negCon = entriesByBPolKey.get(slotKey(b, "-", conK)) ?? [];
-            for (const pa of posAnt) {
-              for (const nc of negCon) {
-                addEntry(
-                  b,
-                  "-",
-                  it,
-                  makeDerived("counter-implies", [pa.entryId, nc.entryId]),
-                );
-              }
-            }
-          } else if (it.kind === "and") {
-            const lk = itemKey(it.left);
-            const rk = itemKey(it.right);
-            for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
-              addEntry(b, "-", it, makeDerived("and-excl-l", [nl.entryId]));
-            }
-            for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
-              addEntry(b, "-", it, makeDerived("and-excl-r", [nr.entryId]));
-            }
-            const liveL = liveByBPolKey.get(slotKey(b, "+", lk)) ?? [];
-            const liveR = liveByBPolKey.get(slotKey(b, "+", rk)) ?? [];
-            for (const ll of liveL) {
-              for (const lr of liveR) {
-                addEntry(b, "+", it, makeDerived("and-intro", [ll.entryId, lr.entryId]));
-              }
-            }
-            for (const lp of liveByBPolKey.get(slotKey(b, "+", k)) ?? []) {
-              addEntry(b, "+", it.left, makeDerived("and-elim-l", [lp.entryId]));
-              addEntry(b, "+", it.right, makeDerived("and-elim-r", [lp.entryId]));
-            }
-          } else if (it.kind === "or") {
-            const lk = itemKey(it.left);
-            const rk = itemKey(it.right);
-            for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
-              for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
-                addEntry(b, "-", it, makeDerived("or-excl", [nl.entryId, nr.entryId]));
-              }
-            }
-            // D2: Cover-Witnessed Disjunction across finitary witnessed covers of b
-            for (const cover of this.boundaries.witnessedCoversOf(b)) {
-              const cellDeps: string[] = [];
-              let covered = true;
-              for (const cell of cover) {
-                const cellPos =
-                  liveByBPolKey.get(slotKey(cell, "+", lk))?.[0] ??
-                  liveByBPolKey.get(slotKey(cell, "+", rk))?.[0];
-                if (cellPos === undefined) {
-                  covered = false;
-                  break;
-                }
-                cellDeps.push(cellPos.entryId);
-              }
-              if (covered && cellDeps.length > 0) {
-                addEntry(b, "+", it, makeDerived("or-cover", cellDeps, undefined, cover));
-              }
-            }
-          } else if (it.kind === "forall") {
-            const handles = this.boundaries.handlesOf(it.domain);
-            for (const h of handles) {
-              const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-              for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
-                addEntry(b, "-", it, makeDerived("forall-counter", [negInst.entryId]));
-              }
-            }
-            if (handles.length > 0) {
-              const allDeps: string[] = [];
-              let allOk = true;
-              for (const h of handles) {
-                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
-                if (liveInst === undefined) {
-                  allOk = false;
-                  break;
-                }
-                allDeps.push(liveInst.entryId);
-              }
-              if (allOk) {
-                addEntry(b, "+", it, makeDerived("forall-generic", allDeps));
-              }
-            }
-          } else if (it.kind === "exists") {
-            const handles = this.boundaries.handlesOf(it.domain);
-            for (const h of handles) {
-              const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-              for (const posInst of entriesByBPolKey.get(slotKey(b, "+", instK)) ?? []) {
-                addEntry(b, "+", it, makeDerived("exists-intro", [posInst.entryId]));
-              }
-            }
-            if (handles.length > 0) {
-              const allNegDeps: string[] = [];
-              let allNeg = true;
-              for (const h of handles) {
-                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                const negInst = liveByBPolKey.get(slotKey(b, "-", instK))?.[0];
-                if (negInst === undefined) {
-                  allNeg = false;
-                  break;
-                }
-                allNegDeps.push(negInst.entryId);
-              }
-              if (allNeg) {
-                addEntry(b, "-", it, makeDerived("exists-excl", allNegDeps));
-              }
-            }
-          }
-        }
-      }
-
-      // D) Scoped Cut / Modus Ponens across Live antecedents and Live conditionals on overlapping meets
-      const liveImplies = entries.filter(
-        (e) => e.polarity === "+" && e.item.kind === "implies" && liveIds.has(e.entryId),
-      );
-      const liveAll = entries.filter((e) => liveIds.has(e.entryId));
-      for (const imp of liveImplies) {
-        if (imp.item.kind !== "implies") {
-          continue;
-        }
-        const antK = itemKey(imp.item.antecedent);
-        for (const ant of liveAll) {
-          if (ant.polarity !== "+" || ant.key !== antK) {
-            continue;
-          }
-          const meetB = this.boundaries.meet(ant.boundary, imp.boundary);
-          if (meetB !== BOT_BOUNDARY) {
-            addEntry(
-              meetB,
-              "+",
-              imp.item.consequent,
-              makeDerived("mp", [ant.entryId, imp.entryId]),
-            );
-          }
-        }
-      }
-
-      // E) Cover Gluing (∨E): Live +(A ∨ C), Live +(A → E), Live +(C → E) => +E
-      for (const orEntry of liveAll) {
-        if (orEntry.polarity !== "+" || orEntry.item.kind !== "or") {
-          continue;
-        }
-        const leftK = itemKey(orEntry.item.left);
-        const rightK = itemKey(orEntry.item.right);
-        for (const impA of liveImplies) {
-          if (impA.boundary !== orEntry.boundary || impA.item.kind !== "implies") {
-            continue;
-          }
-          if (itemKey(impA.item.antecedent) !== leftK) {
-            continue;
-          }
-          const targetE = impA.item.consequent;
-          const targetEK = itemKey(targetE);
-          for (const impC of liveImplies) {
-            if (impC.boundary !== orEntry.boundary || impC.item.kind !== "implies") {
+      const computeAuthorized = (disallowedSlots: ReadonlySet<string>): Set<string> => {
+        const auth = new Set<string>();
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const e of entries) {
+            if (auth.has(e.entryId)) {
               continue;
             }
-            if (
-              itemKey(impC.item.antecedent) === rightK &&
-              itemKey(impC.item.consequent) === targetEK
-            ) {
+            if (disallowedSlots.has(`${e.boundary}\0${e.key}`)) {
+              continue;
+            }
+            if (e.provenance.kind !== "derived") {
+              auth.add(e.entryId);
+              changed = true;
+              continue;
+            }
+            if (e.provenance.depEntryIds.every((id) => auth.has(id))) {
+              auth.add(e.entryId);
+              changed = true;
+            }
+          }
+        }
+        return auth;
+      };
+
+      const computeStatusState = (): {
+        collisions: Set<string>;
+        obstructed: Set<string>;
+        liveIds: Set<string>;
+      } => {
+        const posPairs = new Set<string>();
+        const negPairs = new Set<string>();
+        for (const e of entries) {
+          const pk = `${e.boundary}\0${e.key}`;
+          if (e.polarity === "+") {
+            posPairs.add(pk);
+          } else {
+            negPairs.add(pk);
+          }
+        }
+        const collisions = new Set<string>();
+        for (const pk of posPairs) {
+          if (negPairs.has(pk)) {
+            collisions.add(pk);
+          }
+        }
+        const obstructed = new Set<string>();
+        for (const c of collisions) {
+          const sep = c.indexOf("\0");
+          const colB = c.slice(0, sep);
+          const colKey = c.slice(sep + 1);
+          for (const e of entries) {
+            if (e.key === colKey && this.boundaries.refines(colB, e.boundary)) {
+              obstructed.add(`${e.boundary}\0${e.key}`);
+            }
+          }
+        }
+        const liveIds = computeAuthorized(obstructed);
+        return { collisions, obstructed, liveIds };
+      };
+
+      // 2. Fixpoint closure over all UL-Core rules gated against definitively obstructed slots.
+      for (let iter = 0; iter < 64; iter++) {
+        const beforeCount = entries.length;
+        const authorizedIds = computeAuthorized(blockedSlots);
+        const snapshotList = [...entries];
+
+        // A) Symmetric downward heredity (for both + and -)
+        for (const e of snapshotList) {
+          for (const sub of this.boundaries.nonEmptySubBoundaries(e.boundary)) {
+            if (sub !== e.boundary) {
+              addEntry(sub, e.polarity, e.item, makeDerived("down", [e.entryId]));
+            }
+          }
+        }
+
+        // B) Strong polarity flip ~A (valid on polarities; Live depends on source)
+        for (const e of snapshotList) {
+          const oppPol: Polarity = e.polarity === "+" ? "-" : "+";
+          const flipped = flip(e.item);
+          if (universe.has(itemKey(flipped))) {
+            addEntry(e.boundary, oppPol, flipped, makeDerived("flip", [e.entryId]));
+          }
+          if (e.item.kind === "flip") {
+            addEntry(e.boundary, oppPol, e.item.inner, makeDerived("flip-elim", [e.entryId]));
+          }
+        }
+
+        // Index helpers on current entries for rule joins
+        const entriesByBPolKey = new Map<string, GroundEntry[]>();
+        const liveByBPolKey = new Map<string, GroundEntry[]>();
+        for (const e of entries) {
+          const k = slotKey(e.boundary, e.polarity, e.key);
+          const allList = entriesByBPolKey.get(k) ?? [];
+          allList.push(e);
+          entriesByBPolKey.set(k, allList);
+          if (authorizedIds.has(e.entryId)) {
+            const lList = liveByBPolKey.get(k) ?? [];
+            lList.push(e);
+            liveByBPolKey.set(k, lList);
+          }
+        }
+
+        // C) Local exclusion rules (no false transmission needed) & Live-gated transmission rules
+        for (const it of universe.values()) {
+          const k = itemKey(it);
+          for (const b of nonEmptyB) {
+            if (it.kind === "implies") {
+              const antK = itemKey(it.antecedent);
+              const conK = itemKey(it.consequent);
+              const posAnt = entriesByBPolKey.get(slotKey(b, "+", antK)) ?? [];
+              const negCon = entriesByBPolKey.get(slotKey(b, "-", conK)) ?? [];
+              for (const pa of posAnt) {
+                for (const nc of negCon) {
+                  addEntry(
+                    b,
+                    "-",
+                    it,
+                    makeDerived("counter-implies", [pa.entryId, nc.entryId]),
+                  );
+                }
+              }
+            } else if (it.kind === "and") {
+              const lk = itemKey(it.left);
+              const rk = itemKey(it.right);
+              for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
+                addEntry(b, "-", it, makeDerived("and-excl-l", [nl.entryId]));
+              }
+              for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
+                addEntry(b, "-", it, makeDerived("and-excl-r", [nr.entryId]));
+              }
+              const liveL = liveByBPolKey.get(slotKey(b, "+", lk)) ?? [];
+              const liveR = liveByBPolKey.get(slotKey(b, "+", rk)) ?? [];
+              for (const ll of liveL) {
+                for (const lr of liveR) {
+                  addEntry(b, "+", it, makeDerived("and-intro", [ll.entryId, lr.entryId]));
+                }
+              }
+              for (const lp of liveByBPolKey.get(slotKey(b, "+", k)) ?? []) {
+                addEntry(b, "+", it.left, makeDerived("and-elim-l", [lp.entryId]));
+                addEntry(b, "+", it.right, makeDerived("and-elim-r", [lp.entryId]));
+              }
+            } else if (it.kind === "or") {
+              const lk = itemKey(it.left);
+              const rk = itemKey(it.right);
+              for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
+                for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
+                  addEntry(b, "-", it, makeDerived("or-excl", [nl.entryId, nr.entryId]));
+                }
+              }
+              // D2: Cover-Witnessed Disjunction across finitary witnessed covers of b
+              for (const cover of this.boundaries.witnessedCoversOf(b)) {
+                const cellDeps: string[] = [];
+                let covered = true;
+                for (const cell of cover) {
+                  const cellPos =
+                    liveByBPolKey.get(slotKey(cell, "+", lk))?.[0] ??
+                    liveByBPolKey.get(slotKey(cell, "+", rk))?.[0];
+                  if (cellPos === undefined) {
+                    covered = false;
+                    break;
+                  }
+                  cellDeps.push(cellPos.entryId);
+                }
+                if (covered && cellDeps.length > 0) {
+                  addEntry(b, "+", it, makeDerived("or-cover", cellDeps, undefined, cover));
+                }
+              }
+            } else if (it.kind === "forall") {
+              const handles = this.boundaries.handlesOf(it.domain);
+              for (const h of handles) {
+                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
+                for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
+                  addEntry(b, "-", it, makeDerived("forall-counter", [negInst.entryId]));
+                }
+              }
+              if (handles.length > 0) {
+                const allDeps: string[] = [];
+                let allOk = true;
+                for (const h of handles) {
+                  const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
+                  const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
+                  if (liveInst === undefined) {
+                    allOk = false;
+                    break;
+                  }
+                  allDeps.push(liveInst.entryId);
+                }
+                if (allOk) {
+                  addEntry(b, "+", it, makeDerived("forall-generic", allDeps));
+                }
+              }
+            } else if (it.kind === "exists") {
+              const handles = this.boundaries.handlesOf(it.domain);
+              for (const h of handles) {
+                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
+                for (const posInst of entriesByBPolKey.get(slotKey(b, "+", instK)) ?? []) {
+                  addEntry(b, "+", it, makeDerived("exists-intro", [posInst.entryId]));
+                }
+              }
+              if (handles.length > 0) {
+                const allNegDeps: string[] = [];
+                let allNeg = true;
+                for (const h of handles) {
+                  const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
+                  const negInst = liveByBPolKey.get(slotKey(b, "-", instK))?.[0];
+                  if (negInst === undefined) {
+                    allNeg = false;
+                    break;
+                  }
+                  allNegDeps.push(negInst.entryId);
+                }
+                if (allNeg) {
+                  addEntry(b, "-", it, makeDerived("exists-excl", allNegDeps));
+                }
+              }
+            }
+          }
+        }
+
+        // D) Scoped Cut / Modus Ponens across Live antecedents and Live conditionals on overlapping meets
+        const liveImplies = entries.filter(
+          (e) => e.polarity === "+" && e.item.kind === "implies" && authorizedIds.has(e.entryId),
+        );
+        const liveAll = entries.filter((e) => authorizedIds.has(e.entryId));
+        for (const imp of liveImplies) {
+          if (imp.item.kind !== "implies") {
+            continue;
+          }
+          const antK = itemKey(imp.item.antecedent);
+          for (const ant of liveAll) {
+            if (ant.polarity !== "+" || ant.key !== antK) {
+              continue;
+            }
+            const meetB = this.boundaries.meet(ant.boundary, imp.boundary);
+            if (meetB !== BOT_BOUNDARY) {
               addEntry(
-                orEntry.boundary,
+                meetB,
                 "+",
-                targetE,
-                makeDerived("or-elim", [orEntry.entryId, impA.entryId, impC.entryId]),
+                imp.item.consequent,
+                makeDerived("mp", [ant.entryId, imp.entryId]),
               );
             }
           }
         }
-      }
 
-      // F) Material Incompatibility (A ⊥_B C) triggered only by Live grounds
-      for (const inc of this.#incompatibilities) {
-        const lk = itemKey(inc.left);
-        const rk = itemKey(inc.right);
-        for (const b of this.boundaries.nonEmptySubBoundaries(inc.boundary)) {
-          for (const la of liveByBPolKey.get(slotKey(b, "+", lk)) ?? []) {
-            addEntry(
-              b,
-              "-",
-              inc.right,
-              makeDerived("incompat", [la.entryId], `incompat:${lk}⊥${rk}`),
-            );
-          }
-          for (const ra of liveByBPolKey.get(slotKey(b, "+", rk)) ?? []) {
-            addEntry(
-              b,
-              "-",
-              inc.left,
-              makeDerived("incompat", [ra.entryId], `incompat:${lk}⊥${rk}`),
-            );
-          }
-        }
-      }
-
-      // G) Boundary-Scoped Congruence ≈_B (native relations only!)
-      for (const eq of liveAll) {
-        if (eq.polarity !== "+" || eq.item.kind !== "equiv") {
-          continue;
-        }
-        const eqB = eq.item.boundary;
-        if (!this.boundaries.refines(eq.boundary, eqB) && eq.boundary !== eqB) {
-          continue;
-        }
-        for (const target of liveAll) {
-          if (target.boundary !== eq.boundary || target.item.kind !== "atom") {
+        // E) Cover Gluing (∨E): Live +(A ∨ C), Live +(A → E), Live +(C → E) => +E
+        for (const orEntry of liveAll) {
+          if (orEntry.polarity !== "+" || orEntry.item.kind !== "or") {
             continue;
           }
-          if (!this.boundaries.hasNativeRelation(eqB, target.item.relation)) {
+          const leftK = itemKey(orEntry.item.left);
+          const rightK = itemKey(orEntry.item.right);
+          for (const impA of liveImplies) {
+            if (impA.boundary !== orEntry.boundary || impA.item.kind !== "implies") {
+              continue;
+            }
+            if (itemKey(impA.item.antecedent) !== leftK) {
+              continue;
+            }
+            const targetE = impA.item.consequent;
+            const targetEK = itemKey(targetE);
+            for (const impC of liveImplies) {
+              if (impC.boundary !== orEntry.boundary || impC.item.kind !== "implies") {
+                continue;
+              }
+              if (
+                itemKey(impC.item.antecedent) === rightK &&
+                itemKey(impC.item.consequent) === targetEK
+              ) {
+                addEntry(
+                  orEntry.boundary,
+                  "+",
+                  targetE,
+                  makeDerived("or-elim", [orEntry.entryId, impA.entryId, impC.entryId]),
+                );
+              }
+            }
+          }
+        }
+
+        // F) Material Incompatibility (A ⊥_B C) triggered only by Live grounds
+        for (const inc of this.#incompatibilities) {
+          const lk = itemKey(inc.left);
+          const rk = itemKey(inc.right);
+          for (const b of this.boundaries.nonEmptySubBoundaries(inc.boundary)) {
+            for (const la of liveByBPolKey.get(slotKey(b, "+", lk)) ?? []) {
+              addEntry(
+                b,
+                "-",
+                inc.right,
+                makeDerived("incompat", [la.entryId], `incompat:${lk}⊥${rk}`),
+              );
+            }
+            for (const ra of liveByBPolKey.get(slotKey(b, "+", rk)) ?? []) {
+              addEntry(
+                b,
+                "-",
+                inc.left,
+                makeDerived("incompat", [ra.entryId], `incompat:${lk}⊥${rk}`),
+              );
+            }
+          }
+        }
+
+        // G) Boundary-Scoped Congruence ≈_B (native relations only!)
+        for (const eq of liveAll) {
+          if (eq.polarity !== "+" || eq.item.kind !== "equiv") {
             continue;
           }
-          const leftVal = eq.item.left;
-          const rightVal = eq.item.right;
-          if (target.item.roles.some((r) => r.handle === leftVal)) {
-            const rewritten: Item = {
-              kind: "atom",
-              relation: target.item.relation,
-              roles: target.item.roles.map((r) =>
-                r.handle === leftVal ? { role: r.role, handle: rightVal } : r,
-              ),
-            };
-            addEntry(
-              target.boundary,
-              target.polarity,
-              rewritten,
-              makeDerived("congruence", [eq.entryId, target.entryId]),
-            );
+          const eqB = eq.item.boundary;
+          if (!this.boundaries.refines(eq.boundary, eqB) && eq.boundary !== eqB) {
+            continue;
           }
-          if (target.item.roles.some((r) => r.handle === rightVal)) {
-            const rewrittenRev: Item = {
-              kind: "atom",
-              relation: target.item.relation,
-              roles: target.item.roles.map((r) =>
-                r.handle === rightVal ? { role: r.role, handle: leftVal } : r,
-              ),
-            };
+          for (const target of liveAll) {
+            if (target.boundary !== eq.boundary || target.item.kind !== "atom") {
+              continue;
+            }
+            if (!this.boundaries.hasNativeRelation(eqB, target.item.relation)) {
+              continue;
+            }
+            const leftVal = eq.item.left;
+            const rightVal = eq.item.right;
+            if (target.item.roles.some((r) => r.handle === leftVal)) {
+              const rewritten: Item = {
+                kind: "atom",
+                relation: target.item.relation,
+                roles: target.item.roles.map((r) =>
+                  r.handle === leftVal ? { role: r.role, handle: rightVal } : r,
+                ),
+              };
+              addEntry(
+                target.boundary,
+                target.polarity,
+                rewritten,
+                makeDerived("congruence", [eq.entryId, target.entryId]),
+              );
+            }
+            if (target.item.roles.some((r) => r.handle === rightVal)) {
+              const rewrittenRev: Item = {
+                kind: "atom",
+                relation: target.item.relation,
+                roles: target.item.roles.map((r) =>
+                  r.handle === rightVal ? { role: r.role, handle: leftVal } : r,
+                ),
+              };
+              addEntry(
+                target.boundary,
+                target.polarity,
+                rewrittenRev,
+                makeDerived("congruence", [eq.entryId, target.entryId]),
+              );
+            }
+          }
+        }
+
+        // H) Structural Impossibility Exclusion: Live +(A → ⊥) induces -A without enabling DNE
+        for (const imp of liveImplies) {
+          if (imp.item.kind === "implies" && imp.item.consequent.kind === "bottom") {
             addEntry(
-              target.boundary,
-              target.polarity,
-              rewrittenRev,
-              makeDerived("congruence", [eq.entryId, target.entryId]),
+              imp.boundary,
+              "-",
+              imp.item.antecedent,
+              makeDerived("imposs-excl", [imp.entryId]),
             );
           }
         }
+
+        if (entries.length === beforeCount) {
+          break;
+        }
       }
 
-      if (entries.length === beforeCount) {
+      const state = computeStatusState();
+      return {
+        entries,
+        collisions: state.collisions,
+        obstructed: state.obstructed,
+        liveIds: state.liveIds,
+      };
+    };
+
+    // Van Gelder alternating fixpoint over obstruction sets prevents ghost collisions from defeated derivations.
+    let defObstructed = new Set<string>();
+    let finalPass: ClosurePassResult | undefined;
+    for (let round = 0; round < 32; round++) {
+      const mayPass = runClosure(defObstructed);
+      const defPass = runClosure(mayPass.obstructed);
+      finalPass = mayPass;
+      if (
+        defPass.obstructed.size === defObstructed.size &&
+        [...defPass.obstructed].every((s) => defObstructed.has(s))
+      ) {
         break;
       }
+      defObstructed = defPass.obstructed;
+    }
+    if (finalPass === undefined) {
+      finalPass = runClosure(defObstructed);
     }
 
-    const finalState = computeStatusState();
     return new EvaluationSnapshot(
-      entries,
-      finalState.collisions,
-      finalState.obstructed,
-      finalState.liveIds,
+      finalPass.entries,
+      finalPass.collisions,
+      finalPass.obstructed,
+      finalPass.liveIds,
     );
   }
 
