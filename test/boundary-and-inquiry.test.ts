@@ -135,6 +135,29 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   assert.match(e0.transitionLog[0] ?? "", /Observe-/);
   assert.match(e0.transitionLog[1] ?? "", /Retract/);
 
+  // MT-6 vertical non-commutativity: Observe+ ; Retract !== Retract ; Observe+
+  const eSeq1 = new InquiryEngine(b0);
+  eSeq1.observePositive("B", planet, "w_p");
+  assert.equal(eSeq1.retract("w_p"), true);
+  assert.equal(eSeq1.evaluate().statusOf("B", planet), "Open");
+
+  const eSeq2 = new InquiryEngine(b0);
+  assert.equal(eSeq2.retract("w_p"), false);
+  eSeq2.observePositive("B", planet, "w_p");
+  assert.equal(eSeq2.evaluate().statusOf("B", planet), "Grounded");
+
+  // MT-6 Quarantine Reinstatement: retracting one colliding side restores Live to survivor
+  const eRein = new InquiryEngine(b0);
+  eRein.observePositive("B", planet, "w_pos");
+  eRein.observeNegative("B", planet, "w_neg");
+  const snapColl = eRein.evaluate();
+  assert.equal(snapColl.statusOf("B", planet), "Collision");
+  assert.equal(snapColl.isLive("B", "+", planet), false);
+  assert.equal(eRein.retract("w_neg"), true);
+  const snapRein = eRein.evaluate();
+  assert.equal(snapRein.statusOf("B", planet), "Grounded");
+  assert.equal(snapRein.isLive("B", "+", planet), true);
+
   // Part B: worked-examples §2 Case 2A — ℝ \ {0} passes M1 + M2
   const bMath = new BoundarySystem();
   bMath.defineBoundary("R", {
