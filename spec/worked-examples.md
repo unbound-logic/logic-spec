@@ -52,6 +52,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      ```
      - **M1 Check**: `δ(p) := Pressure(p, 1atm)` is non-circular (does not mention `Boils`) and structurally definable (physical regime parameter). Admissible.
      - **M2 Check**: `(B_all, Gen_all)` stays recorded as **`Excluded (-)`** (never erased), while `∀(p : B_1atm) (Heat100(p) → Boils(p))` is **`Grounded (+)`** with explicit narrowing provenance, discharging `O_rev`.
+   <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Boiling-point multi-regime collision, selective quarantine, and M2 non-erasure are verified" -->
 
 ---
 
@@ -73,6 +74,8 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      - Attempt 3 (Admissible): `δ₃(x) := ~Habitat(x, Australia)` → **Admitted by M1** (non-circular, independently testable on fresh handles `u ≉_Swan swan_402`), while **M2** preserves `(Swan, Gen_Swan)` as `Excluded (-)`.
    - **Case 2C — Anti-Equivocation Guard (§2 item 6)**:
      - An observation `Observe⁻(Swan, White(bird_99), obs_wed)` where `bird_99` fails `I_Swan` (e.g., a painted goose) cannot witness `bird_99 ∈ Dom(Swan)` and therefore **cannot** collide with `Gen_Swan`.
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_inquiry_updates_retract_non_commutativity_and_m1_m2" min="1" reason="R \\ {0} and swan #402 M1/M2 scenarios are verified" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_coreference_multi_granularity_and_anti_equivocation" min="1" reason="Anti-equivocation guard for bird_99 is verified" -->
 
 ---
 
@@ -89,6 +92,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      - `K` appears inside an unguarded `~` feeding the antecedent of `→`. **Rejected at formation time by §1 item 3.**
    - **Vector 4 — Boundary-Promotion Disguise (`K := ∀(y : B ⊓ [K]) Z`)**:
      - Promoting `K` into the contravariant boundary constraint `[K]` / universal domain `D` acts equivalently to a conditional antecedent `K → Z`. **Rejected at formation time by §1 item 3 (Strict Positivity covers contravariant boundary/domain positions).**
+   <!-- @assert-count target="test/syntax-and-curry.test.ts" symbol="function test_curry_firewall_blocks_all_four_vectors_and_allows_cross_stage" min="1" reason="All four adversarial Curry attack vectors and valid cross-stage reflection are verified" -->
 
 ---
 
@@ -110,3 +114,4 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      1. Given `B* ⊩⁺ (A → C)` and `B* ⊩⁺ (~C)` (hence `B* ⊩⁻ C` by §3 item 12).
      2. If `B* ⊩⁺ A` held, Scoped Cut (§3 item 11) would derive `B* ⊩⁺ C`, colliding with `B* ⊩⁻ C` and violating `No-Gluts`.
      3. Hence `B* ⊩⁺ A` fails; by `No-Gaps`, `B* ⊩⁻ A` must hold, yielding `B* ⊩⁺ (~A)` by §3 item 12.
+   <!-- @assert-count target="test/specializations.test.ts" symbol="function test_four_tier_deductive_spectrum_and_classical_recovery" min="1" reason="Derivations 4A, 4B, and 4C for UL-Classical recovery are verified" -->
