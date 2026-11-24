@@ -60,6 +60,7 @@ export type M1RefinementRequest = {
   readonly originalUniversal: Item;
   readonly targetRelation: string;
   readonly criterionItem: Item;
+  readonly criterionVariable?: string;
 };
 
 export type M1Result =
@@ -72,7 +73,11 @@ export type M1Result =
     }
   | {
       readonly ok: false;
-      readonly violation: "M1-circular" | "M1-contingent-excision" | "M2-not-refuted";
+      readonly violation:
+        | "M1-circular"
+        | "M1-contingent-excision"
+        | "M1-unwitnessed-proxy"
+        | "M2-not-refuted";
       readonly reason: string;
     };
 
@@ -472,6 +477,63 @@ export class InquiryEngine {
           ok: false,
           violation: "M1-contingent-excision",
           reason: `M1(ii) violation: splitting criterion excises contingent handle "${h}".`,
+        };
+      }
+    }
+
+    // M1(iii) Independent Excess-Content Witness (Anti-Proxy Guard):
+    // When contingent handles are excised, reject vacuous sub-boundaries and require at least one
+    // non-refuted surviving handle u in toBoundary where δ(u) carries a Live (+ or -) witness.
+    const fromHandles = this.boundaries.handlesOf(req.fromBoundary);
+    const toHandleIds = new Set(this.boundaries.handlesOf(req.toBoundary).map((h) => h.id));
+    const removedContingent = fromHandles.filter(
+      (h) => h.kind === "contingent" && !toHandleIds.has(h.id),
+    );
+    if (removedContingent.length > 0) {
+      if (toHandleIds.size === 0) {
+        return {
+          ok: false,
+          violation: "M1-unwitnessed-proxy",
+          reason: `M1(iii) violation: target boundary "${req.toBoundary}" has no surviving handles (vacuous excision).`,
+        };
+      }
+      const critVar =
+        req.criterionVariable ??
+        (req.originalUniversal.kind === "forall" ? req.originalUniversal.variable : "x");
+      const survivingHandles = fromHandles.filter((h) => toHandleIds.has(h.id));
+      const probeItems: Item[] = [];
+      for (const h of survivingHandles) {
+        probeItems.push(substituteHandle(req.criterionItem, critVar, h.id));
+        if (req.originalUniversal.kind === "forall") {
+          probeItems.push(
+            substituteHandle(req.originalUniversal.body, req.originalUniversal.variable, h.id),
+          );
+        }
+      }
+      const critSnap = this.evaluate([req.originalUniversal, ...probeItems]);
+      const hasIndependentLiveWitness = survivingHandles.some((h) => {
+        if (req.originalUniversal.kind === "forall") {
+          const targetInstance = substituteHandle(
+            req.originalUniversal.body,
+            req.originalUniversal.variable,
+            h.id,
+          );
+          const targetStatus = critSnap.statusOf(req.fromBoundary, targetInstance);
+          if (targetStatus === "Excluded" || targetStatus === "Collision") {
+            return false;
+          }
+        }
+        const critInstance = substituteHandle(req.criterionItem, critVar, h.id);
+        return (
+          critSnap.isLive(req.fromBoundary, "+", critInstance) ||
+          critSnap.isLive(req.fromBoundary, "-", critInstance)
+        );
+      });
+      if (!hasIndependentLiveWitness) {
+        return {
+          ok: false,
+          violation: "M1-unwitnessed-proxy",
+          reason: `M1(iii) violation: splitting criterion lacks an independent Live witness on a non-refuted surviving handle of "${req.toBoundary}".`,
         };
       }
     }
