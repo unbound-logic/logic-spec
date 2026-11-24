@@ -5,6 +5,7 @@ import {
   atom,
   bottom,
   checkRecursiveDefinition,
+  checkRecursiveDefinitionSystem,
   equiv,
   exists,
   flip,
@@ -142,6 +143,80 @@ function test_curry_firewall_blocks_all_four_vectors_and_allows_cross_stage(): v
   assert.equal(positive.ok, true);
 }
 
+function test_mutual_recursion_curry_firewall_and_positive_systems(): void {
+  const z = atom("MoonIsCheese");
+
+  // Mutual left-of-implies cycle: X := Y → Z, Y := X
+  const mutImplies = checkRecursiveDefinitionSystem([
+    { name: "X", level: 0, body: implies(ref("Y"), z) },
+    { name: "Y", level: 0, body: ref("X") },
+  ]);
+  assert.equal(mutImplies.ok, false);
+  if (!mutImplies.ok) {
+    assert.equal(mutImplies.violation, "left-of-implies");
+  }
+
+  // Mutual polarity flip cycle: X := ~Y, Y := X
+  const mutFlip = checkRecursiveDefinitionSystem([
+    { name: "X", level: 0, body: flip(ref("Y")) },
+    { name: "Y", level: 0, body: ref("X") },
+  ]);
+  assert.equal(mutFlip.ok, false);
+  if (!mutFlip.ok) {
+    assert.equal(mutFlip.violation, "polarity-flip");
+  }
+
+  // Mutual boundary promotion cycle: X := ∀(y : B ⊓ [Y]) Z, Y := X
+  const mutBound = checkRecursiveDefinitionSystem([
+    { name: "X", level: 0, body: forall("y", "B", z, ref("Y")) },
+    { name: "Y", level: 0, body: ref("X") },
+  ]);
+  assert.equal(mutBound.ok, false);
+  if (!mutBound.ok) {
+    assert.equal(mutBound.violation, "boundary-promotion");
+  }
+
+  // 3-node cycle traversing a contravariant edge: X := A ∧ Y, Y := W → Z, W := X
+  const cycle3 = checkRecursiveDefinitionSystem([
+    { name: "X", level: 0, body: and(atom("A"), ref("Y")) },
+    { name: "Y", level: 0, body: implies(ref("W"), z) },
+    { name: "W", level: 0, body: ref("X") },
+  ]);
+  assert.equal(cycle3.ok, false);
+  if (!cycle3.ok) {
+    assert.equal(cycle3.violation, "left-of-implies");
+  }
+
+  // Mutual reflection stratification violation: A (lvl 1) := Refl_0(B), B (lvl 1) := Refl_0(A)
+  const mutRefl = checkRecursiveDefinitionSystem([
+    { name: "A", level: 1, body: refl(0, "Bnd", "+", ref("B")) },
+    { name: "B", level: 1, body: refl(0, "Bnd", "+", ref("A")) },
+  ]);
+  assert.equal(mutRefl.ok, false);
+  if (!mutRefl.ok) {
+    assert.equal(mutRefl.violation, "stratification-violation");
+  }
+
+  // Permitted mutual strictly positive recursion: EvenList / OddList
+  const posSystem = checkRecursiveDefinitionSystem([
+    { name: "EvenList", level: 0, body: or(atom("Empty"), and(atom("Elem"), ref("OddList"))) },
+    { name: "OddList", level: 0, body: and(atom("Elem"), ref("EvenList")) },
+  ]);
+  assert.equal(posSystem.ok, true);
+
+  // Permitted non-cyclic negative dependencies: NotP := ~P, Rule := P → Q
+  const acyclicNeg = checkRecursiveDefinitionSystem([
+    { name: "P", level: 0, body: atom("BaseP") },
+    { name: "NotP", level: 0, body: flip(ref("P")) },
+    { name: "Rule", level: 0, body: implies(ref("P"), atom("Q")) },
+  ]);
+  assert.equal(acyclicNeg.ok, true);
+}
+
 test("role-indexed atomic items and reserved forms", test_role_indexed_atomic_items_and_reserved_forms);
 test("compound items and structural impossibility shorthand", test_compound_items_and_structural_impossibility_shorthand);
 test("Curry firewall blocks all four vectors and allows cross-stage reflection", test_curry_firewall_blocks_all_four_vectors_and_allows_cross_stage);
+test(
+  "mutual recursion Curry firewall and positive definition systems",
+  test_mutual_recursion_curry_firewall_and_positive_systems,
+);

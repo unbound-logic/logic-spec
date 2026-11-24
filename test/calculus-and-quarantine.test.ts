@@ -10,6 +10,7 @@ import {
   flip,
   forall,
   implies,
+  itemKey,
   or,
   structImposs,
 } from "../src/syntax.ts";
@@ -196,12 +197,22 @@ function test_structural_rules_scoped_cut_and_horizontal_contraction(): void {
   assert.equal(snapOk.isLive("B12", "+", e), true);
   assert.equal(snapOk.statusOf("B12", arbitraryNoise), "Open");
 
-  // Collide intermediate node A -> Scoped Cut blocks E; No Explosion (arbitraryNoise stays Open)
+  // Counterexample -A on B12 refutes (X → A), obstructing B2 and preventing ghost +A on B12;
+  // Scoped Cut still blocks E and No Explosion holds (arbitraryNoise stays Open).
   engine.observeNegative("B12", a, "refute_a");
   const snapBlocked = engine.evaluate([e, arbitraryNoise]);
-  assert.equal(snapBlocked.statusOf("B12", a), "Collision");
+  assert.equal(snapBlocked.statusOf("B12", implies(x, a)), "Collision");
+  assert.equal(snapBlocked.isObstructed("B2", implies(x, a)), true);
+  assert.equal(snapBlocked.statusOf("B12", a), "Excluded");
   assert.equal(snapBlocked.isLive("B12", "+", e), false);
   assert.equal(snapBlocked.statusOf("B12", arbitraryNoise), "Open");
+
+  // Direct base +A on B12 collides node A itself while still blocking E via Scoped Cut
+  engine.observePositive("B12", a, "w_a_direct");
+  const snapDirect = engine.evaluate([e, arbitraryNoise]);
+  assert.equal(snapDirect.statusOf("B12", a), "Collision");
+  assert.equal(snapDirect.isLive("B12", "+", e), false);
+  assert.equal(snapDirect.statusOf("B12", arbitraryNoise), "Open");
 }
 
 function test_connective_and_quantifier_polarity_rules_with_cover_gluing(): void {
@@ -304,8 +315,168 @@ function test_connective_and_quantifier_polarity_rules_with_cover_gluing(): void
   assert.equal(snap.statusOf("Z", univP), "Excluded");
 }
 
+function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_symmetric_conflict(): void {
+  const a = atom("A");
+  const c = atom("C");
+
+  // Part A1: Single-boundary flip-elim collision (+A, +~A, +(A → C), -C) blocks ghost +C
+  const bFlip = new BoundarySystem();
+  bFlip.defineBoundary("B");
+  const eFlip = new InquiryEngine(bFlip);
+  eFlip.observePositive("B", a, "w_a");
+  eFlip.observePositive("B", flip(a), "w_flip_a");
+  eFlip.observePositive("B", implies(a, c), "w_ac");
+  eFlip.observeNegative("B", c, "w_nc");
+
+  const snapFlip = eFlip.evaluate([a, c]);
+  assert.equal(snapFlip.statusOf("B", a), "Collision");
+  assert.equal(snapFlip.isLive("B", "+", a), false);
+  assert.equal(snapFlip.statusOf("B", c), "Excluded");
+  assert.equal(snapFlip.isLive("B", "-", c), true);
+  assert.equal(snapFlip.allGrounds("B", "+", c).length, 0);
+
+  // Part A2: Super-boundary obstruction delay (B_sub ⊑ B_all) blocks ghost +C on B_all
+  const bSup = new BoundarySystem();
+  bSup.defineBoundary("B_all");
+  bSup.defineBoundary("B_sub", { parents: ["B_all"] });
+  const eSup = new InquiryEngine(bSup);
+  eSup.observePositive("B_all", a, "w_a");
+  eSup.observePositive("B_all", implies(a, c), "w_ac");
+  eSup.observeNegative("B_sub", a, "w_na");
+  eSup.observeNegative("B_all", c, "w_nc");
+
+  const snapSup = eSup.evaluate([a, c]);
+  assert.equal(snapSup.statusOf("B_sub", a), "Collision");
+  assert.equal(snapSup.isObstructed("B_all", a), true);
+  assert.equal(snapSup.statusOf("B_all", c), "Excluded");
+  assert.equal(snapSup.isLive("B_all", "-", c), true);
+  assert.equal(snapSup.allGrounds("B_all", "+", c).length, 0);
+  assert.equal(
+    snapSup.revisionObligations().some((r) => r.boundary === "B_sub" && r.itemKey === itemKey(a)),
+    true,
+  );
+  assert.equal(
+    snapSup.revisionObligations().every((r) => r.itemKey !== itemKey(c)),
+    true,
+  );
+
+  // Part B: Sub-boundary ghost collision (B_all +(Heat -> Boils), B_2atm refutes it, B_1atm has +Heat and -Boils)
+  const bSub = new BoundarySystem();
+  bSub.defineBoundary("B_all");
+  bSub.defineBoundary("B_1atm", { parents: ["B_all"] });
+  bSub.defineBoundary("B_2atm", { parents: ["B_all"] });
+  bSub.declareDisjoint("B_1atm", "B_2atm");
+
+  const eSub = new InquiryEngine(bSub);
+  const heat = atom("Heat");
+  const boils = atom("Boils");
+  const rule = implies(heat, boils);
+  eSub.observePositive("B_all", rule, "w_rule");
+  eSub.observePositive("B_2atm", heat, "w_h2");
+  eSub.observeNegative("B_2atm", boils, "w_nb2");
+  eSub.observePositive("B_1atm", heat, "w_h1");
+  eSub.observeNegative("B_1atm", boils, "w_nb1");
+
+  const snapSub = eSub.evaluate([rule, boils]);
+  assert.equal(snapSub.statusOf("B_2atm", rule), "Collision");
+  assert.equal(snapSub.isObstructed("B_all", rule), true);
+  assert.equal(snapSub.statusOf("B_1atm", boils), "Excluded");
+  assert.equal(snapSub.isLive("B_1atm", "-", boils), true);
+  assert.equal(snapSub.allGrounds("B_1atm", "+", boils).length, 0);
+
+  // Part C: Multi-step reinstatement via directional rule defeat
+  const bRein = new BoundarySystem();
+  bRein.defineBoundary("B_all");
+  bRein.defineBoundary("B_1", { parents: ["B_all"] });
+  bRein.defineBoundary("B_2", { parents: ["B_all"] });
+  bRein.declareDisjoint("B_1", "B_2");
+
+  const eRein = new InquiryEngine(bRein);
+  const ice = atom("Ice");
+  const cold = atom("Cold");
+  const heatToBoils = implies(heat, boils);
+  eRein.observePositive("B_all", heatToBoils, "w_rule1");
+  eRein.observePositive("B_2", heat, "w_h2");
+  eRein.observeNegative("B_2", boils, "w_nb2");
+  eRein.observePositive("B_1", heat, "w_h1");
+  eRein.observePositive("B_1", ice, "w_ice");
+  eRein.addIncompatibility("B_1", boils, ice);
+  eRein.observePositive("B_1", implies(ice, cold), "w_rule2");
+
+  const snapRein = eRein.evaluate([heatToBoils, boils, ice, cold]);
+  assert.equal(snapRein.statusOf("B_2", heatToBoils), "Collision");
+  assert.equal(snapRein.isObstructed("B_all", heatToBoils), true);
+  assert.equal(snapRein.statusOf("B_1", ice), "Grounded");
+  assert.equal(snapRein.isLive("B_1", "+", ice), true);
+  assert.equal(snapRein.statusOf("B_1", boils), "Excluded");
+  assert.equal(snapRein.isLive("B_1", "-", boils), true);
+  assert.equal(snapRein.allGrounds("B_1", "+", boils).length, 0);
+  assert.equal(snapRein.statusOf("B_1", cold), "Grounded");
+  assert.equal(snapRein.isLive("B_1", "+", cold), true);
+
+  // Part D: Symmetric mutual conflict (+A, +C, A ⊥ C) preserves Collision on both
+  const bSym = new BoundarySystem();
+  bSym.defineBoundary("B");
+  const eSym = new InquiryEngine(bSym);
+  eSym.addIncompatibility("B", a, c);
+  eSym.observePositive("B", a, "wa");
+  eSym.observePositive("B", c, "wc");
+
+  const snapSym = eSym.evaluate([a, c]);
+  assert.equal(snapSym.statusOf("B", a), "Collision");
+  assert.equal(snapSym.statusOf("B", c), "Collision");
+  assert.equal(snapSym.isLive("B", "+", a), false);
+  assert.equal(snapSym.isLive("B", "+", c), false);
+}
+
+function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  const engine = new InquiryEngine(b);
+
+  // Guard: direct positive witness of bottom on non-empty boundary is rejected
+  assert.throws(
+    () => engine.observePositive("B", bottom(), "bad_bot"),
+    /admits no positive witness/,
+  );
+
+  // Uncontested +(A → ⊥) derives -A without enabling DNE from ((A2 → ⊥) → ⊥)
+  const a1 = atom("UncontestedImposs");
+  const a2 = atom("DoubleImposs");
+  engine.observePositive("B", structImposs(a1), "w_imp1");
+  engine.observePositive("B", structImposs(structImposs(a2)), "w_imp2");
+
+  const snap1 = engine.evaluate([a1, a2, structImposs(a2)]);
+  assert.equal(snap1.statusOf("B", a1), "Excluded");
+  assert.equal(snap1.isLive("B", "-", a1), true);
+  assert.equal(snap1.statusOf("B", structImposs(a2)), "Excluded");
+  assert.equal(snap1.statusOf("B", a2), "Open");
+  assert.equal(snap1.allGrounds("B", "+", a2).length, 0);
+
+  // Conflicting +(A3 → ⊥) and +A3 puts (B, A3 → ⊥) into Collision and emits zero +⊥ entries
+  const bConf = new BoundarySystem();
+  bConf.defineBoundary("B");
+  const eConf = new InquiryEngine(bConf);
+  const a3 = atom("ConflictingItem");
+  eConf.observePositive("B", structImposs(a3), "w_imp3");
+  eConf.observePositive("B", a3, "w_a3");
+
+  const snapConf = eConf.evaluate([a3, structImposs(a3), bottom()]);
+  assert.equal(snapConf.statusOf("B", structImposs(a3)), "Collision");
+  assert.equal(snapConf.allGrounds("B", "+", bottom()).length, 0);
+  assert.equal(snapConf.statusOf("B", bottom()), "Excluded");
+}
+
 test("dual-polarity statuses and well-founded DAG rejects cycles", test_dual_polarity_statuses_and_well_founded_dag_rejects_cycles);
 test("symmetric downward heredity and disjoint zero leakage", test_symmetric_downward_heredity_and_disjoint_zero_leakage);
 test("quarantine upstream obstruction and selective survival", test_quarantine_upstream_obstruction_and_selective_survival);
 test("structural rules Scoped Cut and horizontal Contraction", test_structural_rules_scoped_cut_and_horizontal_contraction);
 test("connective and quantifier polarity rules with cover gluing", test_connective_and_quantifier_polarity_rules_with_cover_gluing);
+test(
+  "stratified quarantine eliminates ghost collisions and preserves symmetric conflict",
+  test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_symmetric_conflict,
+);
+test(
+  "bottom non-witnessing guard and structural impossibility contraposition",
+  test_bottom_non_witnessing_guard_and_imposs_contraposition,
+);

@@ -7,7 +7,7 @@ import {
   verifyIntuitionisticSpecialization,
   verifyMinimalSpecialization,
 } from "../src/specializations.ts";
-import { atom, flip, implies, itemKey, or } from "../src/syntax.ts";
+import { and, atom, flip, implies, itemKey, or } from "../src/syntax.ts";
 
 function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   // Tier 2 & 3: UL-Minimal & UL-Intuitionistic (monotoneOnly + No-Gluts)
@@ -104,4 +104,50 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   assert.equal(clConflict.ok, false);
 }
 
+function test_classical_atomic_cover_2k_boolean_algebra_reporting(): void {
+  const bCov = new BoundarySystem();
+  bCov.defineBoundary("B");
+  bCov.defineBoundary("B1_star", { parents: ["B"] });
+  bCov.defineBoundary("B2_star", { parents: ["B"] });
+  bCov.declareDisjoint("B1_star", "B2_star");
+  bCov.registerCover("B", ["B1_star", "B2_star"]);
+
+  const engine = new InquiryEngine(bCov);
+  const aClaim = atom("A");
+  engine.observePositive("B1_star", aClaim, "w_b1_a");
+  engine.observeNegative("B2_star", aClaim, "w_b2_na");
+
+  const lemItem = or(aClaim, flip(aClaim));
+  const contraItem = and(aClaim, flip(aClaim));
+  const res = evaluateClassicalSpecialization(
+    engine,
+    "B",
+    [aClaim],
+    [aClaim, lemItem, contraItem],
+  );
+  assert.equal(res.ok, true);
+  if (res.ok) {
+    const aVal = res.results.get(itemKey(aClaim));
+    assert.equal(aVal?.polarity, "split");
+    assert.equal(aVal?.cellPolarities.get("B1_star"), "+");
+    assert.equal(aVal?.cellPolarities.get("B2_star"), "-");
+    assert.equal(aVal?.bivalent, true);
+    assert.equal(aVal?.negCollapseEquivalent, true);
+
+    const lemVal = res.results.get(itemKey(lemItem));
+    assert.equal(lemVal?.polarity, "+");
+    assert.equal(lemVal?.cellPolarities.get("B1_star"), "+");
+    assert.equal(lemVal?.cellPolarities.get("B2_star"), "+");
+
+    const contraVal = res.results.get(itemKey(contraItem));
+    assert.equal(contraVal?.polarity, "-");
+    assert.equal(contraVal?.cellPolarities.get("B1_star"), "-");
+    assert.equal(contraVal?.cellPolarities.get("B2_star"), "-");
+  }
+}
+
 test("four-tier deductive spectrum and classical recovery", test_four_tier_deductive_spectrum_and_classical_recovery);
+test(
+  "classical atomic cover 2^k Boolean algebra reporting",
+  test_classical_atomic_cover_2k_boolean_algebra_reporting,
+);
