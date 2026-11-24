@@ -1,0 +1,15 @@
+{
+  "patterns": ["AGENTS.md", "docs/**/*.md"],
+  "strict": true,
+  "registers": {
+    "files": ["docs/design-review.md"],
+    "resolution": "Resolution",
+    "statuses": {
+      "open": {},
+      "proposed": { "needs": ["resolution"] },
+      "decided": { "needs": ["resolution"] },
+      "done": { "closes": true, "needs": ["citation", "commit"] },
+      "superseded": { "closes": true, "needs": ["citation"] }
+    }
+  }
+}

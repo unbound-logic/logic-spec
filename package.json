@@ -1,0 +1,15 @@
+{
+  "name": "unbound-logic-spec-tools",
+  "private": true,
+  "description": "Specification graph verification for unbound-logic/logic-spec.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "spec-graph": "spec-graph check"
+  },
+  "devDependencies": {
+    "@spec-family/spec-graph": "0.26.0"
+  }
+}
