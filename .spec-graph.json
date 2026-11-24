@@ -1,6 +1,13 @@
 {
-  "patterns": ["AGENTS.md", "docs/**/*.md"],
+  "patterns": ["AGENTS.md", "docs/**/*.md", "spec/**/*.md"],
   "strict": true,
+  "claims": {
+    "files": ["spec/**/*.md"],
+    "labels": {
+      "Consensus": "done",
+      "Exploratory": "open"
+    }
+  },
   "registers": {
     "files": ["docs/design-review.md"],
     "resolution": "Resolution",
