@@ -93,6 +93,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
    - **Vector 4 — Boundary-Promotion Disguise (`K := ∀(y : B ⊓ [K]) Z`)**:
      - Promoting `K` into the contravariant boundary constraint `[K]` / universal domain `D` acts equivalently to a conditional antecedent `K → Z`. **Rejected at formation time by §1 item 3 (Strict Positivity covers contravariant boundary/domain positions).**
    <!-- @assert-count target="test/syntax-and-curry.test.ts" symbol="function test_curry_firewall_blocks_all_four_vectors_and_allows_cross_stage" min="1" reason="All four adversarial Curry attack vectors and valid cross-stage reflection are verified" -->
+   <!-- @assert-count target="test/reflection.test.ts" symbol="function test_cross_stage_reflection_curry_immunity_and_deduction_stratification" min="1" reason="Operational Vector 2 cross-stage reflection Curry immunity is verified" -->
 
 ---
 
