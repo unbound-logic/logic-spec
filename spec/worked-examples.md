@@ -71,10 +71,12 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      - Boundary `Swan`, claim `Gen_Swan := ∀(x : Swan) White(x)`, refuted by `Observe⁻(Swan, White(swan_402), obs_tue)` with `I_Swan(swan_402)` verified.
      - Attempt 1: `δ₁(x) := White(x)` → **Refused by M1(i)** (circular reference to `White`).
      - Attempt 2: `δ₂(x) := ~(x ≈_Swan swan_402)` → **Refused by M1(ii)** (bare excision of contingent empirical handle `swan_402`).
-     - Attempt 3 (Admissible): `δ₃(x) := ~Habitat(x, Australia)` → **Admitted by M1** (non-circular, independently testable on fresh handles `u ≉_Swan swan_402`), while **M2** preserves `(Swan, Gen_Swan)` as `Excluded (-)`.
+     - Attempt 2b (Disguised Contingent Proxy): `δ_proxy(x) := ~(FoundInLake7(x) ∧ TaggedOnTuesday(x))` → **Refused by M1(iii)** (no independent `Live` witness on a non-refuted surviving handle such as `swan_101`, blocking disguised proxy or vacuous sub-boundary excision).
+     - Attempt 3 (Admissible): `δ₃(x) := ~Habitat(x, Australia)` backed by independent `Live` witness `obs_eu_habitat` on `swan_101` → **Admitted by M1** (non-circular, independently testable across fresh handles `u ≉_Swan swan_402`), while **M2** preserves `(Swan, Gen_Swan)` as `Excluded (-)`.
    - **Case 2C — Anti-Equivocation Guard (§2 item 6)**:
      - An observation `Observe⁻(Swan, White(bird_99), obs_wed)` where `bird_99` fails `I_Swan` (e.g., a painted goose) cannot witness `bird_99 ∈ Dom(Swan)` and therefore **cannot** collide with `Gen_Swan`.
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_inquiry_updates_retract_non_commutativity_and_m1_m2" min="1" reason="R \\ {0} and swan #402 M1/M2 scenarios are verified" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities" min="1" reason="M1(iii) disguised proxy refusal, vacuous/collided witness rejection, and structural singularity preservation are verified" -->
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_coreference_multi_granularity_and_anti_equivocation" min="1" reason="Anti-equivocation guard for bird_99 is verified" -->
 
 ---
