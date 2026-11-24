@@ -40,5 +40,7 @@ This repository is the living specification (`logic-spec`) under the `unbound-lo
   - `meta:` — charter, guardrails, workflow, `AGENTS.md`
   - `docs:` — assumption audits, glossary, ADRs, `README.md`
   - `spec:` — ratified formal specification changes
+  - `feat:` — reference kernel or executable implementation additions
+  - `test:` — executable test suite and adversarial verification additions
   - `chore:` — repository maintenance or tooling
 - Keep commits small, atomic, and strictly scoped to confirmed changes. Never run `git commit` or `git push` without explicit maintainer approval.
