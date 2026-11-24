@@ -231,6 +231,14 @@ type BaseObservation = {
   readonly key: string;
 };
 
+type RecordedTheorem = {
+  readonly theoremId: string;
+  readonly boundary: string;
+  readonly polarity: Polarity;
+  readonly item: Item;
+  readonly requiredBaseIds: readonly string[];
+};
+
 /**
  * Stateful vertical inquiry engine managing Σ = (G+, G-, C_B, O_rev) and
  * computing horizontal dual-polarity derivations under Quarantine & Scoped Cut.
@@ -239,6 +247,7 @@ export class InquiryEngine {
   readonly boundaries: BoundarySystem;
   readonly monotoneOnly: boolean;
   readonly #baseObservations = new Map<string, BaseObservation>();
+  readonly #theorems = new Map<string, RecordedTheorem>();
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: { readonly boundary: string; readonly item: Item }[] = [];
   readonly #trackedItems = new Map<string, Item>();
@@ -290,6 +299,76 @@ export class InquiryEngine {
       throw new Error(`Cannot record base observation on "${BOT_BOUNDARY}".`);
     }
     this.#addBaseObservation(boundary, "-", item, baseId, handleAuth);
+  }
+
+  /**
+   * Record an externally verified natural-deduction theorem back into Σ
+   * anchored to any underlying base leaf IDs so Quarantine and Retract propagate cleanly.
+   */
+  recordTheorem(
+    boundary: string,
+    polarity: Polarity,
+    item: Item,
+    theoremId: string,
+    requiredBaseIds: readonly string[] = [],
+  ): void {
+    if (boundary === BOT_BOUNDARY) {
+      throw new Error(
+        polarity === "+"
+          ? `Non-Witnessing Law violation: impossible boundary "${BOT_BOUNDARY}" cannot supply a positive theorem.`
+          : `Cannot record theorem on "${BOT_BOUNDARY}".`,
+      );
+    }
+    if (polarity === "+" && item.kind === "bottom") {
+      throw new Error(
+        `Unsatisfiable item "⊥" admits no positive witness on non-empty boundary "${boundary}".`,
+      );
+    }
+    this.boundaries.nonEmptySubBoundaries(boundary);
+    this.#trackItem(item);
+    this.#theorems.set(theoremId, {
+      theoremId,
+      boundary,
+      polarity,
+      item,
+      requiredBaseIds: [...requiredBaseIds],
+    });
+    this.#stage += 1;
+    this.#history.push(`Σ${this.#stage}:Theorem${polarity}(${boundary}, ${itemKey(item)}, ${theoremId})`);
+  }
+
+  /** Collect every handle identifier mentioned anywhere in Σ or registered boundaries. */
+  mentionedHandles(): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const obs of this.#baseObservations.values()) {
+      for (const h of collectHandles(obs.item)) {
+        out.add(h);
+      }
+    }
+    for (const thm of this.#theorems.values()) {
+      for (const h of collectHandles(thm.item)) {
+        out.add(h);
+      }
+    }
+    for (const inc of this.#incompatibilities) {
+      for (const h of collectHandles(inc.left)) {
+        out.add(h);
+      }
+      for (const h of collectHandles(inc.right)) {
+        out.add(h);
+      }
+    }
+    for (const sc of this.#structuralCollapses) {
+      for (const h of collectHandles(sc.item)) {
+        out.add(h);
+      }
+    }
+    for (const b of this.boundaries.nonEmptyBoundaries()) {
+      for (const h of this.boundaries.handlesOf(b)) {
+        out.add(h.id);
+      }
+    }
+    return out;
   }
 
   /**
@@ -492,12 +571,36 @@ export class InquiryEngine {
           : { kind: "derived", rule, depEntryIds, baseLeaves };
       };
 
-      // 1. Seed base observations and structural exclusions.
+      // 1. Seed base observations, structural exclusions, and verified theorems.
+      const baseEntryIdByBaseId = new Map<string, string>();
       for (const obs of this.#baseObservations.values()) {
-        addEntry(obs.boundary, obs.polarity, obs.item, {
+        const created = addEntry(obs.boundary, obs.polarity, obs.item, {
           kind: "base",
           baseId: obs.baseId,
         });
+        if (created !== undefined) {
+          baseEntryIdByBaseId.set(obs.baseId, created.entryId);
+        }
+      }
+      for (const thm of this.#theorems.values()) {
+        const depEntryIds: string[] = [];
+        let allPresent = true;
+        for (const reqId of thm.requiredBaseIds) {
+          const entryId = baseEntryIdByBaseId.get(reqId);
+          if (entryId === undefined) {
+            allPresent = false;
+            break;
+          }
+          depEntryIds.push(entryId);
+        }
+        if (allPresent) {
+          addEntry(
+            thm.boundary,
+            thm.polarity,
+            thm.item,
+            makeDerived("theorem", depEntryIds, `@thm:${thm.theoremId}`),
+          );
+        }
       }
       for (const b of nonEmptyB) {
         addEntry(b, "-", bot, { kind: "structural", rule: "bottom-excl" });
@@ -881,6 +984,33 @@ export class InquiryEngine {
               imp.item.antecedent,
               makeDerived("imposs-excl", [imp.entryId]),
             );
+          }
+        }
+
+        // I) Standalone Cover-Gluing (Sheaf Gluing): ∀cell ∈ cover. cell ⊩± E [Live] => B ⊩± E
+        for (const it of universe.values()) {
+          const ik = itemKey(it);
+          for (const b of nonEmptyB) {
+            for (const cover of this.boundaries.witnessedCoversOf(b)) {
+              if (cover.length === 1 && cover[0] === b) {
+                continue;
+              }
+              for (const pol of ["+", "-"] as const) {
+                const cellDeps: string[] = [];
+                let allCovered = true;
+                for (const cell of cover) {
+                  const cellEntry = liveByBPolKey.get(slotKey(cell, pol, ik))?.[0];
+                  if (cellEntry === undefined) {
+                    allCovered = false;
+                    break;
+                  }
+                  cellDeps.push(cellEntry.entryId);
+                }
+                if (allCovered && cellDeps.length > 0) {
+                  addEntry(b, pol, it, makeDerived("cover-glue", cellDeps, undefined, cover));
+                }
+              }
+            }
           }
         }
 
