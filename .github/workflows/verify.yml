@@ -3,6 +3,8 @@ name: verify
 on:
   push:
   pull_request:
+  # Lets a run be started by hand when a push event never triggered one.
+  workflow_dispatch:
 
 permissions:
   contents: read
