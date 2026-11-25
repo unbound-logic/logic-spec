@@ -1,21 +1,27 @@
 /**
- * Dual-polarity semantics, well-founded DAG provenance, Inference Quarantine,
- * Scoped Cut, vertical inquiry transitions (Observe/Retract/RefineBoundary),
+ * Dual-polarity semantics, Inference Quarantine, Scoped Cut, vertical inquiry
+ * transitions (Observe/Retract/RefineBoundary/Constrain/WitnessCover/CloseDomain),
  * and M1/M2 anti-immunization laws for UL-Core.
  *
- * Implements spec/core.md §2 item 7 and §3 items 8-12.
+ * Implements spec/core.md §2 item 7 and §3 items 8-12 as a projection of the
+ * evaluation program Π(Σ) of §5 item 14: ground records, collisions, obstruction
+ * and transmission authority are read from the well-founded model of Π(Σ)
+ * (Van Gelder, Ross and Schlipf, 1991), computed by the alternating fixpoint.
+ * Provenance entries are finite derivations that witness the true atoms of that
+ * model; they explain records and never decide them.
  */
 
 import { BOT_BOUNDARY, BoundarySystem } from "./boundary.ts";
 import {
   and,
+  atom,
   bottom,
   collectBoundaryRefs,
   collectHandles,
   collectRelations,
   computeItemLevel,
   equiv,
-  flip,
+  implies,
   itemKey,
   or,
   substituteHandle,
@@ -25,12 +31,14 @@ import {
 
 export type DerivedStatus = "Open" | "Grounded" | "Excluded" | "Collision";
 
+/** Authority of a present record (spec/core.md §5 item 14, Reporting). */
+export type Authority = "Live" | "Undetermined" | "Quarantined";
+
+type StructuralRule = "bottom-excl" | "struct-imposs" | "refl-eval" | "equiv-refl";
+
 export type Provenance =
   | { readonly kind: "base"; readonly baseId: string }
-  | {
-      readonly kind: "structural";
-      readonly rule: "bottom-excl" | "struct-imposs" | "refl-eval" | "equiv-refl";
-    }
+  | { readonly kind: "structural"; readonly rule: StructuralRule }
   | {
       readonly kind: "derived";
       readonly rule: string;
@@ -138,100 +146,181 @@ export function isWellFoundedGraph(
   return dfs(startNode);
 }
 
-/** Snapshot of all derived grounds, collisions, obstructions, and Live statuses at current Σ. */
-export class EvaluationSnapshot {
-  readonly #entriesById = new Map<string, GroundEntry>();
-  readonly #bySlot = new Map<string, GroundEntry[]>();
-  readonly #collisions = new Set<string>();
-  readonly #obstructed = new Set<string>();
-  readonly #liveIds = new Set<string>();
+/** Truth codes stored per slot: 0 = false, 1 = undefined, 2 = true. */
+const FALSE = 0;
+const UNDEFINED = 1;
+const TRUE = 2;
 
-  constructor(
-    entries: readonly GroundEntry[],
-    collisions: ReadonlySet<string>,
-    obstructed: ReadonlySet<string>,
-    liveIds: ReadonlySet<string>,
-  ) {
-    for (const e of entries) {
+/** Polarity index used in flat slot arrays. */
+function polIndex(p: Polarity): 0 | 1 {
+  return p === "+" ? 0 : 1;
+}
+
+/** The well-founded model of Π(Σ) over 𝔅(Σ) × U(Σ, Q), with its witnessing entries. */
+type PiReport = {
+  readonly boundaries: readonly string[];
+  readonly universe: readonly Item[];
+  /** rec(B, p, A) per polarity index, one code per slot (b * |U| + a). */
+  readonly rec: readonly [Uint8Array, Uint8Array];
+  /** live(B, p, A) per polarity index. */
+  readonly live: readonly [Uint8Array, Uint8Array];
+  readonly coll: Uint8Array;
+  readonly obs: Uint8Array;
+  readonly entries: readonly GroundEntry[];
+  readonly liveEntryIds: ReadonlySet<string>;
+};
+
+/**
+ * Snapshot of the well-founded model of Π(Σ) (spec/core.md §5 item 14) at the current Σ
+ * and query set Q. Slots outside 𝔅(Σ) × U(Σ, Q) have no atoms: they read as `Open`, with
+ * no records and no authority.
+ */
+export class EvaluationSnapshot {
+  readonly #boundaries: readonly string[];
+  readonly #boundaryIndex: ReadonlyMap<string, number>;
+  readonly #universe: readonly Item[];
+  readonly #itemIndex: ReadonlyMap<string, number>;
+  readonly #rec: readonly [Uint8Array, Uint8Array];
+  readonly #live: readonly [Uint8Array, Uint8Array];
+  readonly #coll: Uint8Array;
+  readonly #obs: Uint8Array;
+  readonly #entriesById = new Map<string, GroundEntry>();
+  readonly #bySlot = new Map<number, GroundEntry[]>();
+  readonly #liveIds: ReadonlySet<string>;
+
+  constructor(report: PiReport) {
+    this.#boundaries = report.boundaries;
+    this.#boundaryIndex = new Map(report.boundaries.map((b, i) => [b, i] as const));
+    this.#universe = report.universe;
+    this.#itemIndex = new Map(report.universe.map((it, i) => [itemKey(it), i] as const));
+    this.#rec = report.rec;
+    this.#live = report.live;
+    this.#coll = report.coll;
+    this.#obs = report.obs;
+    this.#liveIds = report.liveEntryIds;
+    for (const e of report.entries) {
       this.#entriesById.set(e.entryId, e);
-      const slot = slotKey(e.boundary, e.polarity, e.key);
-      const list = this.#bySlot.get(slot) ?? [];
+      const s = this.#slot(e.boundary, e.item);
+      if (s === undefined) {
+        continue;
+      }
+      const k = s * 2 + polIndex(e.polarity);
+      const list = this.#bySlot.get(k) ?? [];
       list.push(e);
-      this.#bySlot.set(slot, list);
-    }
-    for (const c of collisions) {
-      this.#collisions.add(c);
-    }
-    for (const o of obstructed) {
-      this.#obstructed.add(o);
-    }
-    for (const id of liveIds) {
-      this.#liveIds.add(id);
+      this.#bySlot.set(k, list);
     }
   }
 
-  /** Derived status of (boundary, item) in Σ. */
+  #slot(boundary: string, item: Item): number | undefined {
+    const b = this.#boundaryIndex.get(boundary);
+    if (b === undefined) {
+      return undefined;
+    }
+    const a = this.#itemIndex.get(itemKey(item));
+    if (a === undefined) {
+      return undefined;
+    }
+    return b * this.#universe.length + a;
+  }
+
+  /** U(Σ, Q): the items that carry atoms in this snapshot. */
+  universe(): readonly Item[] {
+    return this.#universe;
+  }
+
+  /**
+   * Local status of (boundary, item) under item 14: `Collision` when coll(B, A) is true or
+   * undefined; otherwise `Grounded`, `Excluded` or `Open` by its present (true) records.
+   */
   statusOf(boundary: string, item: Item): DerivedStatus {
-    const key = itemKey(item);
-    const hasPos = (this.#bySlot.get(slotKey(boundary, "+", key))?.length ?? 0) > 0;
-    const hasNeg = (this.#bySlot.get(slotKey(boundary, "-", key))?.length ?? 0) > 0;
-    if (hasPos && hasNeg) {
+    const s = this.#slot(boundary, item);
+    if (s === undefined) {
+      return "Open";
+    }
+    if (this.#coll[s] !== FALSE) {
       return "Collision";
     }
-    if (hasPos) {
+    if (this.#rec[0][s] === TRUE) {
       return "Grounded";
     }
-    if (hasNeg) {
+    if (this.#rec[1][s] === TRUE) {
       return "Excluded";
     }
     return "Open";
   }
 
-  /** Return all entries (Live or quarantined) for (boundary, polarity, item). */
-  allGrounds(boundary: string, polarity: Polarity, item: Item): readonly GroundEntry[] {
-    return this.#bySlot.get(slotKey(boundary, polarity, itemKey(item))) ?? [];
+  /**
+   * Authority of the record (boundary, polarity, item): `Live` when live(B, p, A) is true,
+   * `Undetermined` when it is undefined, `Quarantined` when it is false; null when the record
+   * is absent (its rec atom is not true).
+   */
+  authorityOf(boundary: string, polarity: Polarity, item: Item): Authority | null {
+    const s = this.#slot(boundary, item);
+    const pi = polIndex(polarity);
+    if (s === undefined || this.#rec[pi][s] !== TRUE) {
+      return null;
+    }
+    const live = this.#live[pi][s];
+    return live === TRUE ? "Live" : live === UNDEFINED ? "Undetermined" : "Quarantined";
   }
 
-  /** Return only Live (unobstructed, well-founded, unquarantined) grounds. */
+  /** Witnessing entries of a present record (Live or not) for (boundary, polarity, item). */
+  allGrounds(boundary: string, polarity: Polarity, item: Item): readonly GroundEntry[] {
+    const s = this.#slot(boundary, item);
+    if (s === undefined) {
+      return [];
+    }
+    return this.#bySlot.get(s * 2 + polIndex(polarity)) ?? [];
+  }
+
+  /** Witnessing entries whose premises are all Live on an unobstructed slot. */
   liveGrounds(boundary: string, polarity: Polarity, item: Item): readonly GroundEntry[] {
     return this.allGrounds(boundary, polarity, item).filter((e) => this.#liveIds.has(e.entryId));
   }
 
-  /** Return true iff (boundary, polarity, item) has at least one Live ground. */
+  /** True iff the authority of (boundary, polarity, item) is `Live`. */
   isLive(boundary: string, polarity: Polarity, item: Item): boolean {
-    return this.liveGrounds(boundary, polarity, item).length > 0;
+    const s = this.#slot(boundary, item);
+    return s !== undefined && this.#live[polIndex(polarity)][s] === TRUE;
   }
 
-  /** Return true iff a specific entryId is Live. */
+  /** Return true iff a specific entryId is a Live derivation. */
   isEntryLive(entryId: string): boolean {
     return this.#liveIds.has(entryId);
   }
 
-  /** Return true iff (boundary, item) is in local Collision. */
+  /** True iff (boundary, item) is in Collision (coll true or undefined). */
   isCollided(boundary: string, item: Item): boolean {
-    return this.#collisions.has(`${boundary}\0${itemKey(item)}`);
+    const s = this.#slot(boundary, item);
+    return s !== undefined && this.#coll[s] !== FALSE;
   }
 
-  /** Return true iff (boundary, item) is obstructed by a collision on itself or a sub-boundary. */
+  /**
+   * True iff (boundary, item) is obstructed: obs(B, A) is true or undefined, that is, some
+   * sub-boundary B' ⊑ B (B itself included) is in Collision.
+   */
   isObstructed(boundary: string, item: Item): boolean {
-    return this.#obstructed.has(`${boundary}\0${itemKey(item)}`);
+    const s = this.#slot(boundary, item);
+    return s !== undefined && this.#obs[s] !== FALSE;
   }
 
-  /** Open revision obligations corresponding to all local collisions. */
+  /** Rev(B, A) for every (B, A) in Collision. */
   revisionObligations(): readonly RevisionObligation[] {
     const out: RevisionObligation[] = [];
-    for (const c of this.#collisions) {
-      const sep = c.indexOf("\0");
-      if (sep >= 0) {
-        out.push({ boundary: c.slice(0, sep), itemKey: c.slice(sep + 1) });
-      }
-    }
+    const nu = this.#universe.length;
+    this.#boundaries.forEach((boundary, b) => {
+      this.#universe.forEach((item, a) => {
+        if (this.#coll[b * nu + a] !== FALSE) {
+          out.push({ boundary, itemKey: itemKey(item) });
+        }
+      });
+    });
     return out;
   }
 
-  /** True iff No-Gluts holds globally across the evaluated state. */
+  /** True iff No-Gluts holds: no (B, A) is in Collision. */
   isCollisionFree(): boolean {
-    return this.#collisions.size === 0;
+    return this.#coll.every((c) => c === FALSE);
   }
 
   /** Retrieve an entry by ID. */
@@ -257,19 +346,21 @@ type RecordedTheorem = {
   readonly requiredGrounds: readonly GroundDependency[];
 };
 
+type StructuralCollapse = { readonly boundary: string; readonly item: Item };
+
 type StageRecord = {
   readonly stage: number;
   readonly baseObservations: ReadonlyMap<string, BaseObservation>;
   readonly theorems: ReadonlyMap<string, RecordedTheorem>;
   readonly incompatibilities: readonly IncompatibilityConstraint[];
-  readonly structuralCollapses: readonly { readonly boundary: string; readonly item: Item }[];
-  readonly trackedItems: ReadonlyMap<string, Item>;
+  readonly structuralCollapses: readonly StructuralCollapse[];
+  readonly closedDomains: ReadonlySet<string>;
   readonly boundarySnapshot: BoundarySystem;
 };
 
 /**
  * Stateful vertical inquiry engine managing Σ = (G+, G-, C_B, O_rev) and
- * computing horizontal dual-polarity derivations under Quarantine & Scoped Cut.
+ * evaluating Π(Σ) for the current or an archived stage.
  */
 export class InquiryEngine {
   readonly boundaries: BoundarySystem;
@@ -277,8 +368,8 @@ export class InquiryEngine {
   readonly #baseObservations = new Map<string, BaseObservation>();
   readonly #theorems = new Map<string, RecordedTheorem>();
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
-  readonly #structuralCollapses: { readonly boundary: string; readonly item: Item }[] = [];
-  readonly #trackedItems = new Map<string, Item>();
+  readonly #structuralCollapses: StructuralCollapse[] = [];
+  readonly #closedDomains = new Set<string>();
   readonly #stageArchive = new Map<number, StageRecord>();
   readonly #history: string[] = [];
   #stage = 0;
@@ -286,7 +377,6 @@ export class InquiryEngine {
   constructor(boundaries: BoundarySystem, options: EngineOptions = {}) {
     this.boundaries = boundaries;
     this.monotoneOnly = options.monotoneOnly ?? false;
-    this.#trackItem(bottom());
     this.#captureStage();
   }
 
@@ -356,10 +446,6 @@ export class InquiryEngine {
       );
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
-    this.#trackItem(item);
-    for (const dep of requiredGrounds) {
-      this.#trackItem(dep.item);
-    }
     this.#theorems.set(theoremId, {
       theoremId,
       boundary,
@@ -430,8 +516,6 @@ export class InquiryEngine {
       throw new Error(`Cannot add material incompatibility on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
-    this.#trackItem(left);
-    this.#trackItem(right);
     this.#incompatibilities.push({ boundary, left, right });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Constrain(${itemKey(left)} ⊥_${boundary} ${itemKey(right)})`);
@@ -444,7 +528,6 @@ export class InquiryEngine {
       throw new Error(`Cannot add structural collapse on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
-    this.#trackItem(item);
     this.#structuralCollapses.push({ boundary, item });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Collapse(${boundary} ⊓ [${itemKey(item)}] = ⊥_B)`);
@@ -456,6 +539,20 @@ export class InquiryEngine {
     this.boundaries.registerCover(target, cells);
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:WitnessCover({${cells.join(", ")}} ▷ ${target})`);
+    this.#captureStage();
+  }
+
+  /**
+   * Register CloseDomain(D) in C_B: the handles of Dom(D) at registration exhaust the
+   * quantifier domain D (`audit-universal-existential-import`). Only a closed domain
+   * D ≠ ⊥_B licenses the enumerative rules `∀` generic and `∃` exclusion of item 14; the
+   * closure applies to D itself, never to its sub-boundaries.
+   */
+  closeDomain(domain: string): void {
+    this.boundaries.handlesOf(domain);
+    this.#closedDomains.add(domain);
+    this.#stage += 1;
+    this.#history.push(`Σ${this.#stage}:CloseDomain(${domain})`);
     this.#captureStage();
   }
 
@@ -610,7 +707,7 @@ export class InquiryEngine {
     };
   }
 
-  /** Compute full evaluation fixpoint over current Σ and optional extra query items. */
+  /** Evaluate Π(Σ) for the current Σ with the query set Q = extraItems. */
   evaluate(extraItems: readonly Item[] = []): EvaluationSnapshot {
     const currentRecord = this.#stageArchive.get(this.#stage);
     if (currentRecord === undefined) {
@@ -631,36 +728,18 @@ export class InquiryEngine {
     return this.#evaluateRecord(record, extraItems);
   }
 
-  #evaluateRecord(
-    record: StageRecord,
-    extraItems: readonly Item[] = [],
-  ): EvaluationSnapshot {
+  #evaluateRecord(record: StageRecord, extraItems: readonly Item[] = []): EvaluationSnapshot {
     const bounds = record.boundarySnapshot;
-    const universe = new Map<string, Item>();
-    const enqueueItem = (it: Item): void => {
-      const k = itemKey(it);
-      if (universe.has(k)) {
-        return;
-      }
-      universe.set(k, it);
-      for (const sub of directSubItems(it)) {
-        enqueueItem(sub);
-      }
-      if (it.kind === "forall" || it.kind === "exists") {
-        for (const h of bounds.handlesOf(it.domain)) {
-          enqueueItem(substituteHandle(it.body, it.variable, h.id));
-          if (it.domainConstraint !== undefined) {
-            enqueueItem(substituteHandle(it.domainConstraint, it.variable, h.id));
-          }
-        }
-      }
-    };
-    for (const it of [...record.trackedItems.values(), ...extraItems]) {
-      enqueueItem(it);
-    }
+    const boundaries = bounds.nonEmptyBoundaries();
+    const universe = buildUniverse(bounds, boundaries, [
+      ...trackedItemsOf(record),
+      ...extraItems,
+    ]);
 
-    const reflectionEvaluations: { readonly item: Item; readonly polarity: Polarity }[] = [];
-    for (const it of universe.values()) {
+    // Structural reflection values (item 3): a stage-indexed reflection on a frozen earlier
+    // stage receives the value its target judgment has there; other reflections receive none.
+    const reflectionValues: { readonly item: Item; readonly polarity: Polarity }[] = [];
+    for (const it of universe) {
       if (it.kind !== "refl" || it.targetStage === undefined) {
         continue;
       }
@@ -682,903 +761,22 @@ export class InquiryEngine {
         it.targetStatus !== undefined
           ? priorSnap.statusOf(it.targetBoundary, it.targetItem) === it.targetStatus
           : priorSnap.isLive(it.targetBoundary, it.targetPolarity, it.targetItem);
-      reflectionEvaluations.push({ item: it, polarity: holds ? "+" : "-" });
-    }
-
-    const provenanceBaseLeaves = (prov: Provenance): readonly string[] => {
-      if (prov.kind === "base") {
-        return [prov.baseId];
-      }
-      if (prov.kind === "structural") {
-        return [`@${prov.rule}`];
-      }
-      return prov.baseLeaves;
-    };
-
-    const nonEmptyB = bounds.nonEmptyBoundaries();
-    const bot = bottom();
-
-    type ClosurePassResult = {
-      readonly entries: GroundEntry[];
-      readonly collisions: Set<string>;
-      readonly obstructed: Set<string>;
-      readonly liveIds: Set<string>;
-    };
-
-    type LockedConflictEntry = {
-      readonly boundary: string;
-      readonly polarity: Polarity;
-      readonly item: Item;
-      readonly rule: string;
-      readonly baseLeaves: readonly string[];
-      readonly coverCells?: readonly string[];
-    };
-
-    const runClosure = (
-      blockedSlots: ReadonlySet<string>,
-      lockedConflictEntries: readonly LockedConflictEntry[] = [],
-    ): ClosurePassResult => {
-      const entries: GroundEntry[] = [];
-      const byEntryId = new Map<string, GroundEntry>();
-      const lockedEntryIds = new Set<string>();
-      const dedupKeys = new Set<string>();
-      let seq = 0;
-
-      const addEntry = (
-        boundary: string,
-        polarity: Polarity,
-        item: Item,
-        provenance: Provenance,
-      ): GroundEntry | undefined => {
-        if (boundary === BOT_BOUNDARY) {
-          return undefined;
-        }
-        const key = itemKey(item);
-        const leaves = provenanceBaseLeaves(provenance);
-        const dedup = `${boundary}\0${polarity}\0${key}\0${leaves.join(",")}`;
-        if (dedupKeys.has(dedup)) {
-          return undefined;
-        }
-        dedupKeys.add(dedup);
-        seq += 1;
-        const entryId = `e${seq}`;
-        const entry: GroundEntry = { entryId, boundary, polarity, item, key, provenance };
-        entries.push(entry);
-        byEntryId.set(entryId, entry);
-        return entry;
-      };
-
-      const mergeLeaves = (depIds: readonly string[], extraTag?: string): readonly string[] => {
-        const set = new Set<string>();
-        for (const id of depIds) {
-          const dep = byEntryId.get(id);
-          if (dep !== undefined) {
-            for (const l of provenanceBaseLeaves(dep.provenance)) {
-              set.add(l);
-            }
-          }
-        }
-        if (extraTag !== undefined) {
-          set.add(extraTag);
-        }
-        return [...set].sort();
-      };
-
-      const makeDerived = (
-        rule: string,
-        depEntryIds: readonly string[],
-        extraTag?: string,
-        coverCells?: readonly string[],
-      ): Provenance => {
-        const baseLeaves = mergeLeaves(depEntryIds, extraTag);
-        return coverCells !== undefined
-          ? { kind: "derived", rule, depEntryIds, baseLeaves, coverCells }
-          : { kind: "derived", rule, depEntryIds, baseLeaves };
-      };
-
-      // 1. Seed base observations, locked symmetric-conflict witnesses, structural exclusions, and cross-stage reflections.
-      const baseEntryIdByBaseId = new Map<string, string>();
-      for (const obs of record.baseObservations.values()) {
-        const created = addEntry(obs.boundary, obs.polarity, obs.item, {
-          kind: "base",
-          baseId: obs.baseId,
-        });
-        if (created !== undefined) {
-          baseEntryIdByBaseId.set(obs.baseId, created.entryId);
-        }
-      }
-      for (const lc of lockedConflictEntries) {
-        const prov: Provenance =
-          lc.coverCells !== undefined
-            ? {
-                kind: "derived",
-                rule: lc.rule,
-                depEntryIds: [],
-                baseLeaves: lc.baseLeaves,
-                coverCells: lc.coverCells,
-              }
-            : { kind: "derived", rule: lc.rule, depEntryIds: [], baseLeaves: lc.baseLeaves };
-        const created = addEntry(lc.boundary, lc.polarity, lc.item, prov);
-        if (created !== undefined) {
-          lockedEntryIds.add(created.entryId);
-        }
-      }
-      for (const b of nonEmptyB) {
-        addEntry(b, "-", bot, { kind: "structural", rule: "bottom-excl" });
-      }
-      for (const reflRes of reflectionEvaluations) {
-        for (const b of nonEmptyB) {
-          addEntry(b, reflRes.polarity, reflRes.item, {
-            kind: "structural",
-            rule: "refl-eval",
-          });
-        }
-      }
-      for (const sc of record.structuralCollapses) {
-        addEntry(
-          sc.boundary,
-          "+",
-          { kind: "implies", antecedent: sc.item, consequent: bot },
-          { kind: "structural", rule: "struct-imposs" },
-        );
-        addEntry(sc.boundary, "-", sc.item, {
-          kind: "structural",
-          rule: "struct-imposs",
-        });
-      }
-
-      const computeAuthorized = (disallowedSlots: ReadonlySet<string>): Set<string> => {
-        const auth = new Set<string>();
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const e of entries) {
-            if (auth.has(e.entryId)) {
-              continue;
-            }
-            if (lockedEntryIds.has(e.entryId)) {
-              continue;
-            }
-            if (disallowedSlots.has(`${e.boundary}\0${e.key}`)) {
-              continue;
-            }
-            if (e.provenance.kind !== "derived") {
-              auth.add(e.entryId);
-              changed = true;
-              continue;
-            }
-            if (e.provenance.depEntryIds.every((id) => auth.has(id))) {
-              auth.add(e.entryId);
-              changed = true;
-            }
-          }
-        }
-        return auth;
-      };
-
-      const computeStatusState = (): {
-        collisions: Set<string>;
-        obstructed: Set<string>;
-        liveIds: Set<string>;
-      } => {
-        const posPairs = new Set<string>();
-        const negPairs = new Set<string>();
-        for (const e of entries) {
-          const pk = `${e.boundary}\0${e.key}`;
-          if (e.polarity === "+") {
-            posPairs.add(pk);
-          } else {
-            negPairs.add(pk);
-          }
-        }
-        const collisions = new Set<string>();
-        for (const pk of posPairs) {
-          if (negPairs.has(pk)) {
-            collisions.add(pk);
-          }
-        }
-        const obstructed = new Set<string>();
-        for (const c of collisions) {
-          const sep = c.indexOf("\0");
-          const colB = c.slice(0, sep);
-          const colKey = c.slice(sep + 1);
-          for (const b of nonEmptyB) {
-            if (bounds.refines(colB, b)) {
-              obstructed.add(`${b}\0${colKey}`);
-            }
-          }
-        }
-        const liveIds = computeAuthorized(obstructed);
-        return { collisions, obstructed, liveIds };
-      };
-
-      // Seed structural congruence reflexivity t ≈_B t for admissible handles referenced in universe
-      for (const it of universe.values()) {
-        if (
-          it.kind === "equiv" &&
-          it.left === it.right &&
-          this.#isDefinedNonEmptyBoundary(bounds, it.boundary) &&
-          bounds.isAdmissibleHandle(it.boundary, it.left)
-        ) {
-          addEntry(it.boundary, "+", it, { kind: "structural", rule: "equiv-refl" });
-        }
-      }
-
-      // 2. Fixpoint closure over all UL-Core rules gated against definitively obstructed slots.
-      for (let iter = 0; iter < 64; iter++) {
-        const beforeCount = entries.length;
-        const authorizedIds = computeAuthorized(blockedSlots);
-        const snapshotList = [...entries];
-
-        // A) Symmetric downward heredity (for both + and -)
-        for (const e of snapshotList) {
-          for (const sub of bounds.nonEmptySubBoundaries(e.boundary)) {
-            if (sub !== e.boundary) {
-              addEntry(sub, e.polarity, e.item, makeDerived("down", [e.entryId]));
-            }
-          }
-        }
-
-        // B) Strong polarity flip ~A (valid on polarities; Live depends on source)
-        for (const e of snapshotList) {
-          const oppPol: Polarity = e.polarity === "+" ? "-" : "+";
-          const flipped = flip(e.item);
-          if (universe.has(itemKey(flipped))) {
-            addEntry(e.boundary, oppPol, flipped, makeDerived("flip", [e.entryId]));
-          }
-          if (e.item.kind === "flip") {
-            addEntry(e.boundary, oppPol, e.item.inner, makeDerived("flip-elim", [e.entryId]));
-          }
-        }
-
-        // Index helpers on current entries for rule joins
-        const entriesByBPolKey = new Map<string, GroundEntry[]>();
-        const liveByBPolKey = new Map<string, GroundEntry[]>();
-        for (const e of entries) {
-          const k = slotKey(e.boundary, e.polarity, e.key);
-          const allList = entriesByBPolKey.get(k) ?? [];
-          allList.push(e);
-          entriesByBPolKey.set(k, allList);
-          if (authorizedIds.has(e.entryId)) {
-            const lList = liveByBPolKey.get(k) ?? [];
-            lList.push(e);
-            liveByBPolKey.set(k, lList);
-          }
-        }
-
-        // C) Local exclusion rules (no false transmission needed) & Live-gated transmission rules
-        for (const it of universe.values()) {
-          const k = itemKey(it);
-          for (const b of nonEmptyB) {
-            if (it.kind === "implies") {
-              const antK = itemKey(it.antecedent);
-              const conK = itemKey(it.consequent);
-              const posAnt = liveByBPolKey.get(slotKey(b, "+", antK)) ?? [];
-              const negCon = entriesByBPolKey.get(slotKey(b, "-", conK)) ?? [];
-              for (const pa of posAnt) {
-                for (const nc of negCon) {
-                  addEntry(
-                    b,
-                    "-",
-                    it,
-                    makeDerived("counter-implies", [pa.entryId, nc.entryId]),
-                  );
-                }
-              }
-            } else if (it.kind === "and") {
-              const lk = itemKey(it.left);
-              const rk = itemKey(it.right);
-              for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
-                addEntry(b, "-", it, makeDerived("and-excl-l", [nl.entryId]));
-              }
-              for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
-                addEntry(b, "-", it, makeDerived("and-excl-r", [nr.entryId]));
-              }
-              const liveL = liveByBPolKey.get(slotKey(b, "+", lk)) ?? [];
-              const liveR = liveByBPolKey.get(slotKey(b, "+", rk)) ?? [];
-              for (const ll of liveL) {
-                for (const lr of liveR) {
-                  addEntry(b, "+", it, makeDerived("and-intro", [ll.entryId, lr.entryId]));
-                }
-              }
-              for (const lp of liveByBPolKey.get(slotKey(b, "+", k)) ?? []) {
-                addEntry(b, "+", it.left, makeDerived("and-elim-l", [lp.entryId]));
-                addEntry(b, "+", it.right, makeDerived("and-elim-r", [lp.entryId]));
-              }
-            } else if (it.kind === "or") {
-              const lk = itemKey(it.left);
-              const rk = itemKey(it.right);
-              for (const nl of entriesByBPolKey.get(slotKey(b, "-", lk)) ?? []) {
-                for (const nr of entriesByBPolKey.get(slotKey(b, "-", rk)) ?? []) {
-                  addEntry(b, "-", it, makeDerived("or-excl", [nl.entryId, nr.entryId]));
-                }
-              }
-              // D2: Cover-Witnessed Disjunction across finitary witnessed covers of b
-              for (const cover of bounds.witnessedCoversOf(b)) {
-                const cellDeps: string[] = [];
-                let covered = true;
-                for (const cell of cover) {
-                  const cellPos =
-                    liveByBPolKey.get(slotKey(cell, "+", lk))?.[0] ??
-                    liveByBPolKey.get(slotKey(cell, "+", rk))?.[0];
-                  if (cellPos === undefined) {
-                    covered = false;
-                    break;
-                  }
-                  cellDeps.push(cellPos.entryId);
-                }
-                if (covered && cellDeps.length > 0) {
-                  addEntry(b, "+", it, makeDerived("or-cover", cellDeps, undefined, cover));
-                }
-              }
-            } else if (it.kind === "forall") {
-              const handles = bounds.handlesOf(it.domain);
-              const domCons = it.domainConstraint;
-              const liveAllList = liveByBPolKey.get(slotKey(b, "+", k)) ?? [];
-              for (const h of handles) {
-                const instItem = substituteHandle(it.body, it.variable, h.id);
-                const instK = itemKey(instItem);
-                const deltaK =
-                  domCons !== undefined
-                    ? itemKey(substituteHandle(domCons, it.variable, h.id))
-                    : undefined;
-                const liveDelta =
-                  deltaK !== undefined
-                    ? liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0]
-                    : undefined;
-                if (deltaK === undefined) {
-                  for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
-                    addEntry(b, "-", it, makeDerived("forall-counter", [negInst.entryId]));
-                  }
-                  for (const la of liveAllList) {
-                    addEntry(b, "+", instItem, makeDerived("forall-elim", [la.entryId]));
-                  }
-                } else if (liveDelta !== undefined) {
-                  for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
-                    addEntry(
-                      b,
-                      "-",
-                      it,
-                      makeDerived("forall-counter", [liveDelta.entryId, negInst.entryId]),
-                    );
-                  }
-                  for (const la of liveAllList) {
-                    addEntry(
-                      b,
-                      "+",
-                      instItem,
-                      makeDerived("forall-elim", [la.entryId, liveDelta.entryId]),
-                    );
-                  }
-                }
-              }
-              if (handles.length > 0) {
-                const allDeps: string[] = [];
-                let allOk = true;
-                let hasAdmissible = deltaKCheck(domCons);
-                for (const h of handles) {
-                  const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                  if (domCons !== undefined) {
-                    const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
-                    const negDelta = liveByBPolKey.get(slotKey(b, "-", deltaK))?.[0];
-                    if (negDelta !== undefined) {
-                      allDeps.push(negDelta.entryId);
-                      continue;
-                    }
-                    const posDelta = liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0];
-                    const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
-                    if (posDelta === undefined || liveInst === undefined) {
-                      allOk = false;
-                      break;
-                    }
-                    hasAdmissible = true;
-                    allDeps.push(posDelta.entryId, liveInst.entryId);
-                  } else {
-                    const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
-                    if (liveInst === undefined) {
-                      allOk = false;
-                      break;
-                    }
-                    allDeps.push(liveInst.entryId);
-                  }
-                }
-                if (allOk && hasAdmissible) {
-                  addEntry(b, "+", it, makeDerived("forall-generic", allDeps));
-                }
-              }
-            } else if (it.kind === "exists") {
-              const handles = bounds.handlesOf(it.domain);
-              const domCons = it.domainConstraint;
-              for (const h of handles) {
-                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                const livePosList = liveByBPolKey.get(slotKey(b, "+", instK)) ?? [];
-                if (domCons === undefined) {
-                  for (const posInst of livePosList) {
-                    addEntry(b, "+", it, makeDerived("exists-intro", [posInst.entryId]));
-                  }
-                } else {
-                  const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
-                  const liveDelta = liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0];
-                  if (liveDelta !== undefined) {
-                    for (const posInst of livePosList) {
-                      addEntry(
-                        b,
-                        "+",
-                        it,
-                        makeDerived("exists-intro", [liveDelta.entryId, posInst.entryId]),
-                      );
-                    }
-                  }
-                }
-              }
-              if (handles.length > 0) {
-                const allNegDeps: string[] = [];
-                let allNeg = true;
-                for (const h of handles) {
-                  const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                  const negInst = liveByBPolKey.get(slotKey(b, "-", instK))?.[0];
-                  if (domCons !== undefined) {
-                    const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
-                    const negDelta = liveByBPolKey.get(slotKey(b, "-", deltaK))?.[0];
-                    if (negDelta !== undefined) {
-                      allNegDeps.push(negDelta.entryId);
-                      continue;
-                    }
-                  }
-                  if (negInst === undefined) {
-                    allNeg = false;
-                    break;
-                  }
-                  allNegDeps.push(negInst.entryId);
-                }
-                if (allNeg) {
-                  addEntry(b, "-", it, makeDerived("exists-excl", allNegDeps));
-                }
-              }
-            }
-          }
-        }
-
-        // D) Scoped Cut / Modus Ponens across Live antecedents and Live conditionals on overlapping meets
-        const liveImplies = entries.filter(
-          (e) => e.polarity === "+" && e.item.kind === "implies" && authorizedIds.has(e.entryId),
-        );
-        const liveAll = entries.filter((e) => authorizedIds.has(e.entryId));
-        for (const imp of liveImplies) {
-          if (imp.item.kind !== "implies") {
-            continue;
-          }
-          const antK = itemKey(imp.item.antecedent);
-          for (const ant of liveAll) {
-            if (ant.polarity !== "+" || ant.key !== antK) {
-              continue;
-            }
-            const meetB = bounds.meet(ant.boundary, imp.boundary);
-            if (meetB !== BOT_BOUNDARY) {
-              addEntry(
-                meetB,
-                "+",
-                imp.item.consequent,
-                makeDerived("mp", [ant.entryId, imp.entryId]),
-              );
-            }
-          }
-        }
-
-        // E) Cover Gluing (∨E): Live +(A ∨ C), Live +(A → E), Live +(C → E) => +E
-        for (const orEntry of liveAll) {
-          if (orEntry.polarity !== "+" || orEntry.item.kind !== "or") {
-            continue;
-          }
-          const leftK = itemKey(orEntry.item.left);
-          const rightK = itemKey(orEntry.item.right);
-          for (const impA of liveImplies) {
-            if (impA.boundary !== orEntry.boundary || impA.item.kind !== "implies") {
-              continue;
-            }
-            if (itemKey(impA.item.antecedent) !== leftK) {
-              continue;
-            }
-            const targetE = impA.item.consequent;
-            const targetEK = itemKey(targetE);
-            for (const impC of liveImplies) {
-              if (impC.boundary !== orEntry.boundary || impC.item.kind !== "implies") {
-                continue;
-              }
-              if (
-                itemKey(impC.item.antecedent) === rightK &&
-                itemKey(impC.item.consequent) === targetEK
-              ) {
-                addEntry(
-                  orEntry.boundary,
-                  "+",
-                  targetE,
-                  makeDerived("or-elim", [orEntry.entryId, impA.entryId, impC.entryId]),
-                );
-              }
-            }
-          }
-        }
-
-        // F) Material Incompatibility (A ⊥_B C) triggered only by Live grounds
-        for (const inc of record.incompatibilities) {
-          const lk = itemKey(inc.left);
-          const rk = itemKey(inc.right);
-          for (const b of bounds.nonEmptySubBoundaries(inc.boundary)) {
-            for (const la of liveByBPolKey.get(slotKey(b, "+", lk)) ?? []) {
-              addEntry(
-                b,
-                "-",
-                inc.right,
-                makeDerived("incompat", [la.entryId], `@incompat:${lk}⊥${rk}`),
-              );
-            }
-            for (const ra of liveByBPolKey.get(slotKey(b, "+", rk)) ?? []) {
-              addEntry(
-                b,
-                "-",
-                inc.left,
-                makeDerived("incompat", [ra.entryId], `@incompat:${lk}⊥${rk}`),
-              );
-            }
-          }
-        }
-
-        // F2) Admit verified theorems once their required base leaves and Live ground dependencies exist
-        for (const thm of record.theorems.values()) {
-          const depIdSet = new Set<string>();
-          let allSatisfied = true;
-          for (const reqId of thm.requiredBaseIds) {
-            const entryId = baseEntryIdByBaseId.get(reqId);
-            if (entryId === undefined) {
-              allSatisfied = false;
-              break;
-            }
-            depIdSet.add(entryId);
-          }
-          if (!allSatisfied) {
-            continue;
-          }
-          for (const dep of thm.requiredGrounds) {
-            const liveDep = liveByBPolKey.get(
-              slotKey(dep.boundary, dep.polarity, itemKey(dep.item)),
-            )?.[0];
-            if (liveDep === undefined) {
-              allSatisfied = false;
-              break;
-            }
-            depIdSet.add(liveDep.entryId);
-          }
-          if (allSatisfied) {
-            addEntry(
-              thm.boundary,
-              thm.polarity,
-              thm.item,
-              makeDerived("theorem", [...depIdSet], `@thm:${thm.theoremId}`),
-            );
-          }
-        }
-
-        // G) Boundary-Scoped Congruence ≈_B (symmetry, transitivity, and native relation substitution)
-        for (const eq of liveAll) {
-          if (eq.polarity !== "+" || eq.item.kind !== "equiv") {
-            continue;
-          }
-          const eqB = eq.item.boundary;
-          if (!bounds.refines(eq.boundary, eqB) && eq.boundary !== eqB) {
-            continue;
-          }
-          if (eq.item.left !== eq.item.right) {
-            addEntry(
-              eq.boundary,
-              "+",
-              equiv(eqB, eq.item.right, eq.item.left),
-              makeDerived("equiv-sym", [eq.entryId]),
-            );
-          }
-          for (const eq2 of liveAll) {
-            if (
-              eq2.entryId !== eq.entryId &&
-              eq2.boundary === eq.boundary &&
-              eq2.polarity === "+" &&
-              eq2.item.kind === "equiv" &&
-              eq2.item.boundary === eqB &&
-              eq.item.right === eq2.item.left &&
-              eq.item.left !== eq2.item.right
-            ) {
-              addEntry(
-                eq.boundary,
-                "+",
-                equiv(eqB, eq.item.left, eq2.item.right),
-                makeDerived("equiv-trans", [eq.entryId, eq2.entryId]),
-              );
-            }
-          }
-          for (const target of liveAll) {
-            if (target.boundary !== eq.boundary || target.item.kind !== "atom") {
-              continue;
-            }
-            if (!bounds.hasNativeRelation(eqB, target.item.relation)) {
-              continue;
-            }
-            const leftVal = eq.item.left;
-            const rightVal = eq.item.right;
-            if (target.item.roles.some((r) => r.handle === leftVal)) {
-              const rewritten: Item = {
-                kind: "atom",
-                relation: target.item.relation,
-                roles: target.item.roles.map((r) =>
-                  r.handle === leftVal ? { role: r.role, handle: rightVal } : r,
-                ),
-              };
-              addEntry(
-                target.boundary,
-                target.polarity,
-                rewritten,
-                makeDerived("congruence", [eq.entryId, target.entryId]),
-              );
-            }
-            if (target.item.roles.some((r) => r.handle === rightVal)) {
-              const rewrittenRev: Item = {
-                kind: "atom",
-                relation: target.item.relation,
-                roles: target.item.roles.map((r) =>
-                  r.handle === rightVal ? { role: r.role, handle: leftVal } : r,
-                ),
-              };
-              addEntry(
-                target.boundary,
-                target.polarity,
-                rewrittenRev,
-                makeDerived("congruence", [eq.entryId, target.entryId]),
-              );
-            }
-          }
-        }
-
-        // H) Structural Impossibility Exclusion: Live +(A → ⊥) induces -A without enabling DNE
-        for (const imp of liveImplies) {
-          if (imp.item.kind === "implies" && imp.item.consequent.kind === "bottom") {
-            addEntry(
-              imp.boundary,
-              "-",
-              imp.item.antecedent,
-              makeDerived("imposs-excl", [imp.entryId]),
-            );
-          }
-        }
-
-        // I) Standalone Cover-Gluing (Sheaf Gluing): ∀cell ∈ cover. cell ⊩± E [Live] => B ⊩± E
-        for (const it of universe.values()) {
-          const ik = itemKey(it);
-          for (const b of nonEmptyB) {
-            for (const cover of bounds.witnessedCoversOf(b)) {
-              if (cover.length === 1 && cover[0] === b) {
-                continue;
-              }
-              for (const pol of ["+", "-"] as const) {
-                const cellDeps: string[] = [];
-                let allCovered = true;
-                for (const cell of cover) {
-                  const cellEntry = liveByBPolKey.get(slotKey(cell, pol, ik))?.[0];
-                  if (cellEntry === undefined) {
-                    allCovered = false;
-                    break;
-                  }
-                  cellDeps.push(cellEntry.entryId);
-                }
-                if (allCovered && cellDeps.length > 0) {
-                  addEntry(b, pol, it, makeDerived("cover-glue", cellDeps, undefined, cover));
-                }
-              }
-            }
-          }
-        }
-
-        if (entries.length === beforeCount) {
-          break;
-        }
-      }
-
-      const state = computeStatusState();
-      return {
-        entries,
-        collisions: state.collisions,
-        obstructed: state.obstructed,
-        liveIds: state.liveIds,
-      };
-    };
-
-    // Van Gelder alternating fixpoint + source-SCC locking of symmetric conflicts prevents
-    // ghost collisions from both defeated branches and mutual incompatibility cycles.
-    const extraBlocked = new Set<string>();
-    const lockedEntriesMap = new Map<string, LockedConflictEntry>();
-    let finalPass: ClosurePassResult | undefined;
-
-    for (let outer = 0; outer < 32; outer++) {
-      const lockedList = [...lockedEntriesMap.values()];
-      let defObstructed = new Set<string>(extraBlocked);
-      let mayPass = runClosure(defObstructed, lockedList);
-      for (let round = 0; round < 32; round++) {
-        mayPass = runClosure(defObstructed, lockedList);
-        const defInput = new Set<string>(mayPass.obstructed);
-        for (const s of extraBlocked) {
-          defInput.add(s);
-        }
-        const defPass = runClosure(defInput, lockedList);
-        const nextDef = new Set<string>(defPass.obstructed);
-        for (const s of extraBlocked) {
-          nextDef.add(s);
-        }
-        if (
-          nextDef.size === defObstructed.size &&
-          [...nextDef].every((s) => defObstructed.has(s))
-        ) {
-          break;
-        }
-        defObstructed = nextDef;
-      }
-      finalPass = mayPass;
-
-      const unresolved = new Set<string>();
-      for (const s of mayPass.obstructed) {
-        if (!defObstructed.has(s)) {
-          unresolved.add(s);
-        }
-      }
-      if (unresolved.size === 0) {
-        break;
-      }
-
-      const entryMap = new Map<string, GroundEntry>();
-      for (const e of mayPass.entries) {
-        entryMap.set(e.entryId, e);
-      }
-      const adj = new Map<string, Set<string>>();
-      for (const s of unresolved) {
-        adj.set(s, new Set<string>());
-      }
-
-      const collectAncestorSlotsInU = (startEntry: GroundEntry): Set<string> => {
-        const found = new Set<string>();
-        const seen = new Set<string>();
-        const stack: string[] = [];
-        if (startEntry.provenance.kind === "derived") {
-          for (const d of startEntry.provenance.depEntryIds) {
-            stack.push(d);
-          }
-        }
-        while (stack.length > 0) {
-          const curId = stack.pop();
-          if (curId === undefined || seen.has(curId)) {
-            continue;
-          }
-          seen.add(curId);
-          const anc = entryMap.get(curId);
-          if (anc === undefined) {
-            continue;
-          }
-          if (anc.provenance.kind === "structural" && anc.provenance.rule === "bottom-excl") {
-            continue;
-          }
-          const ancSlot = `${anc.boundary}\0${anc.key}`;
-          if (unresolved.has(ancSlot)) {
-            found.add(ancSlot);
-          }
-          if (anc.provenance.kind === "derived") {
-            for (const nextId of anc.provenance.depEntryIds) {
-              stack.push(nextId);
-            }
-          }
-        }
-        return found;
-      };
-
-      type SlotEntryAncestors = { readonly entry: GroundEntry; readonly anc: Set<string> };
-      const bySlotPolarity = new Map<string, SlotEntryAncestors[]>();
-      for (const e of mayPass.entries) {
-        const s = `${e.boundary}\0${e.key}`;
-        if (!unresolved.has(s)) {
-          continue;
-        }
-        const spk = `${s}\0${e.polarity}`;
-        const list = bySlotPolarity.get(spk) ?? [];
-        list.push({ entry: e, anc: collectAncestorSlotsInU(e) });
-        bySlotPolarity.set(spk, list);
-      }
-
-      const isStrictSubset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
-        if (a.size >= b.size) {
-          return false;
-        }
-        for (const item of a) {
-          if (!b.has(item)) {
-            return false;
-          }
-        }
-        return true;
-      };
-
-      for (const [spk, items] of bySlotPolarity) {
-        const s = spk.slice(0, spk.lastIndexOf("\0"));
-        const hasNonSelf = items.some((x) => !x.anc.has(s));
-        const afterSelf = hasNonSelf ? items.filter((x) => !x.anc.has(s)) : items;
-        const minimal = afterSelf.filter(
-          (x) => !afterSelf.some((y) => y !== x && isStrictSubset(y.anc, x.anc)),
-        );
-        for (const x of minimal) {
-          for (const u of x.anc) {
-            if (u !== s) {
-              adj.get(u)?.add(s);
-            }
-          }
-        }
-      }
-
-      for (const s of unresolved) {
-        if (mayPass.collisions.has(s)) {
-          continue;
-        }
-        const sep = s.indexOf("\0");
-        const b = s.slice(0, sep);
-        const k = s.slice(sep + 1);
-        for (const sSub of unresolved) {
-          const subSep = sSub.indexOf("\0");
-          const bSub = sSub.slice(0, subSep);
-          const kSub = sSub.slice(subSep + 1);
-          if (kSub === k && bSub !== b && bounds.refines(bSub, b)) {
-            adj.get(sSub)?.add(s);
-          }
-        }
-      }
-
-      const sccs = computeSourceSCCs(unresolved, adj);
-      let addedLock = false;
-      for (const sourceScc of sccs) {
-        const sccSet = new Set(sourceScc);
-        for (const s of sourceScc) {
-          if (!extraBlocked.has(s)) {
-            extraBlocked.add(s);
-            addedLock = true;
-          }
-          for (const e of mayPass.entries) {
-            if (`${e.boundary}\0${e.key}` !== s || e.provenance.kind !== "derived") {
-              continue;
-            }
-            const anc = collectAncestorSlotsInU(e);
-            if (![...anc].every((u) => sccSet.has(u))) {
-              continue;
-            }
-            const lk = `${e.boundary}\0${e.polarity}\0${e.key}\0${e.provenance.baseLeaves.join(",")}`;
-            if (!lockedEntriesMap.has(lk)) {
-              lockedEntriesMap.set(lk, {
-                boundary: e.boundary,
-                polarity: e.polarity,
-                item: e.item,
-                rule: e.provenance.rule,
-                baseLeaves: e.provenance.baseLeaves,
-                ...(e.provenance.coverCells !== undefined
-                  ? { coverCells: e.provenance.coverCells }
-                  : {}),
-              });
-            }
-          }
-        }
-      }
-      if (!addedLock) {
-        break;
-      }
-    }
-
-    if (finalPass === undefined) {
-      finalPass = runClosure(extraBlocked, [...lockedEntriesMap.values()]);
+      reflectionValues.push({ item: it, polarity: holds ? "+" : "-" });
     }
 
     return new EvaluationSnapshot(
-      finalPass.entries,
-      finalPass.collisions,
-      finalPass.obstructed,
-      finalPass.liveIds,
+      evaluatePi({
+        bounds,
+        boundaries,
+        universe,
+        observations: [...record.baseObservations.values()],
+        baseObservations: record.baseObservations,
+        theorems: [...record.theorems.values()],
+        incompatibilities: record.incompatibilities,
+        collapses: record.structuralCollapses,
+        closedDomains: record.closedDomains,
+        reflectionValues,
+      }),
     );
   }
 
@@ -1597,7 +795,6 @@ export class InquiryEngine {
         );
       }
     }
-    this.#trackItem(item);
     const key = itemKey(item);
     this.#baseObservations.set(baseId, { baseId, boundary, polarity, item, key });
     this.#stage += 1;
@@ -1623,137 +820,1104 @@ export class InquiryEngine {
       theorems: new Map(this.#theorems),
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
-      trackedItems: new Map(this.#trackedItems),
+      closedDomains: new Set(this.#closedDomains),
       boundarySnapshot: this.boundaries.clone(),
     });
   }
+}
 
-  #trackItem(item: Item): void {
-    const k = itemKey(item);
-    if (this.#trackedItems.has(k)) {
-      return;
-    }
-    this.#trackedItems.set(k, item);
-    for (const sub of directSubItems(item)) {
-      this.#trackItem(sub);
+/**
+ * The items tracked by Σ (item 14): the items of its base observations and recorded theorems
+ * (the conclusion and the grounds it cites), both sides of each incompatibility, and both
+ * A and A → ⊥ for each structural collapse B ⊓ [A] = ⊥_B.
+ */
+function trackedItemsOf(record: StageRecord): Item[] {
+  const out: Item[] = [];
+  for (const o of record.baseObservations.values()) {
+    out.push(o.item);
+  }
+  for (const t of record.theorems.values()) {
+    out.push(t.item);
+    for (const dep of t.requiredGrounds) {
+      out.push(dep.item);
     }
   }
+  for (const c of record.incompatibilities) {
+    out.push(c.left, c.right);
+  }
+  for (const c of record.structuralCollapses) {
+    out.push(c.item, implies(c.item, bottom()));
+  }
+  return out;
 }
 
-function slotKey(boundary: string, polarity: Polarity, key: string): string {
-  return `${boundary}\0${polarity}\0${key}`;
+/**
+ * U(Σ, Q) (item 14): the tracked and queried items, closed under direct sub-items, under
+ * quantifier instances A(w) and δ(w) for w ∈ Dom(D) (a quantifier contributes its instances,
+ * not its open body), and under congruence rewrites that replace the handle at one position
+ * of a relational atom or of an `≈` item by a handle of a boundary in 𝔅(Σ). A polarity flip
+ * belongs to U(Σ, Q) exactly when it arises in this way; no member is ever prefixed with `~`.
+ * Reflections and named references have no direct sub-items.
+ */
+function buildUniverse(
+  bounds: BoundarySystem,
+  boundaries: readonly string[],
+  roots: readonly Item[],
+): Item[] {
+  const handleSet = new Set<string>();
+  for (const b of boundaries) {
+    for (const h of bounds.handlesOf(b)) {
+      handleSet.add(h.id);
+    }
+  }
+  const handles = [...handleSet].sort();
+
+  const items: Item[] = [];
+  const seen = new Set<string>();
+  const work: Item[] = [];
+  const add = (item: Item): void => {
+    const key = itemKey(item);
+    if (!seen.has(key)) {
+      seen.add(key);
+      items.push(item);
+      work.push(item);
+    }
+  };
+  for (const root of roots) {
+    add(root);
+  }
+  for (let item = work.pop(); item !== undefined; item = work.pop()) {
+    switch (item.kind) {
+      case "flip":
+        add(item.inner);
+        break;
+      case "and":
+      case "or":
+        add(item.left);
+        add(item.right);
+        break;
+      case "implies":
+        add(item.antecedent);
+        add(item.consequent);
+        break;
+      case "forall":
+      case "exists":
+        for (const h of bounds.handlesOf(item.domain)) {
+          add(substituteHandle(item.body, item.variable, h.id));
+          if (item.domainConstraint !== undefined) {
+            add(substituteHandle(item.domainConstraint, item.variable, h.id));
+          }
+        }
+        break;
+      case "atom": {
+        const { relation, roles } = item;
+        for (let position = 0; position < roles.length; position++) {
+          for (const u of handles) {
+            add(
+              atom(
+                relation,
+                roles.map((r, j) => (j === position ? { role: r.role, handle: u } : r)),
+              ),
+            );
+          }
+        }
+        break;
+      }
+      case "equiv":
+        for (const u of handles) {
+          add(equiv(item.boundary, u, item.right));
+          add(equiv(item.boundary, item.left, u));
+        }
+        break;
+      case "bottom":
+      case "refl":
+      case "ref":
+        break;
+    }
+  }
+  return items;
 }
 
-function deltaKCheck(domCons: Item | undefined): boolean {
-  return domCons === undefined;
-}
+/** Inputs of Π(Σ) for one inquiry state and query set. */
+type PiInput = {
+  readonly bounds: BoundarySystem;
+  /** 𝔅(Σ): the non-empty boundaries declared in Σ, ⊤_B included. */
+  readonly boundaries: readonly string[];
+  /** U(Σ, Q). */
+  readonly universe: readonly Item[];
+  readonly observations: readonly BaseObservation[];
+  readonly baseObservations: ReadonlyMap<string, BaseObservation>;
+  readonly theorems: readonly RecordedTheorem[];
+  readonly incompatibilities: readonly IncompatibilityConstraint[];
+  readonly collapses: readonly StructuralCollapse[];
+  readonly closedDomains: ReadonlySet<string>;
+  readonly reflectionValues: readonly { readonly item: Item; readonly polarity: Polarity }[];
+};
 
-/** Tarjan strongly connected components restricted to those with zero external incoming edges. */
-function computeSourceSCCs(
-  nodes: ReadonlySet<string>,
-  adj: ReadonlyMap<string, ReadonlySet<string>>,
-): readonly (readonly string[])[] {
-  let index = 0;
-  const indices = new Map<string, number>();
-  const lowlink = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const sccs: string[][] = [];
+/**
+ * A premise of a rule instance. `live` marks a `Live` premise (live atom); otherwise it is a
+ * record premise (rec atom). `baseId` pins the witnessing entry of a Theorem's base premise.
+ */
+type Prem = {
+  readonly slot: number;
+  readonly p: Polarity;
+  readonly live: boolean;
+  readonly baseId: string | null;
+};
 
-  const strongConnect = (v: string): void => {
-    indices.set(v, index);
-    lowlink.set(v, index);
-    index += 1;
-    stack.push(v);
-    onStack.add(v);
+/** A ground rule instance of Π(Σ) with conclusion (slot, p). */
+type Instance = {
+  readonly slot: number;
+  readonly p: Polarity;
+  /** Premises that must all hold. */
+  readonly prems: readonly Prem[];
+  /** Requirements met by any one of their alternatives, each a conjunction of premises. */
+  readonly choices: readonly (readonly (readonly Prem[])[])[];
+  readonly rule: string;
+  readonly origin: "base" | "structural" | "derived";
+  readonly baseId: string | null;
+  readonly structural: StructuralRule | null;
+  /** Extra provenance leaf (incompatibility, theorem or domain closure). */
+  readonly tag: string | null;
+  readonly coverCells: readonly string[] | null;
+  /** Witness enumeration takes one derivation per instance instead of every combination. */
+  readonly firstOnly: boolean;
+};
 
-    for (const w of adj.get(v) ?? []) {
-      if (!nodes.has(w)) {
+/** Hard bound on witnessing entries; exceeding it is reported, never truncated (G6). */
+const MAX_PROVENANCE_ENTRIES = 250_000;
+
+/**
+ * Ground Π(Σ) over 𝔅(Σ) × U(Σ, Q), compute its well-founded model, and build the entries
+ * that witness its true atoms (spec/core.md §5 item 14).
+ */
+function evaluatePi(input: PiInput): PiReport {
+  const { bounds, boundaries, universe } = input;
+  const nb = boundaries.length;
+  const nu = universe.length;
+  const nS = nb * nu;
+  const bIndex = new Map(boundaries.map((b, i) => [b, i] as const));
+  const uIndex = new Map(universe.map((it, i) => [itemKey(it), i] as const));
+  const idx = (item: Item): number | undefined => uIndex.get(itemKey(item));
+  const slotOf = (b: number, a: number): number => b * nu + a;
+  const boundaryOf = (s: number): string => boundaries[Math.floor(s / nu)] ?? BOT_BOUNDARY;
+  const itemOf = (s: number): Item => {
+    const it = universe[s % nu];
+    if (it === undefined) {
+      throw new Error(`Π(Σ): internal error, slot ${s} out of range.`);
+    }
+    return it;
+  };
+
+  // ------------------------------------------------------------ boundary algebra over 𝔅(Σ)
+  const subsOf: number[][] = boundaries.map((sup) => {
+    const subs: number[] = [];
+    boundaries.forEach((sub, j) => {
+      if (bounds.refines(sub, sup)) {
+        subs.push(j);
+      }
+    });
+    return subs;
+  });
+  const subsOfName = (name: string): readonly number[] => {
+    const i = bIndex.get(name);
+    if (i !== undefined) {
+      return subsOf[i] ?? [];
+    }
+    return [];
+  };
+
+  const MEET_BOTTOM = -1;
+  const MEET_AMBIGUOUS = -2;
+  const meetTable = new Int32Array(nb * nb);
+  const meetErrors = new Map<number, string>();
+  for (let b1 = 0; b1 < nb; b1++) {
+    for (let b2 = 0; b2 < nb; b2++) {
+      const n1 = boundaries[b1] ?? BOT_BOUNDARY;
+      const n2 = boundaries[b2] ?? BOT_BOUNDARY;
+      let m: string;
+      try {
+        m = bounds.meet(n1, n2);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.startsWith("Ambiguous meet")) {
+          throw error;
+        }
+        meetTable[b1 * nb + b2] = MEET_AMBIGUOUS;
+        meetErrors.set(b1 * nb + b2, message);
         continue;
       }
-      if (!indices.has(w)) {
-        strongConnect(w);
-        lowlink.set(v, Math.min(lowlink.get(v) ?? 0, lowlink.get(w) ?? 0));
-      } else if (onStack.has(w)) {
-        lowlink.set(v, Math.min(lowlink.get(v) ?? 0, indices.get(w) ?? 0));
+      meetTable[b1 * nb + b2] = m === BOT_BOUNDARY ? MEET_BOTTOM : (bIndex.get(m) ?? MEET_BOTTOM);
+    }
+  }
+
+  // Registered covers closed under the item 5 axioms stand in for witnessed covers.
+  const coversOf: { readonly names: readonly string[]; readonly cells: readonly number[] }[][] =
+    boundaries.map((b) =>
+      bounds.witnessedCoversOf(b).map((names) => ({
+        names,
+        cells: names.map((c) => {
+          const i = bIndex.get(c);
+          if (i === undefined) {
+            throw new Error(`Π(Σ): cover cell "${c}" of "${b}" is not a non-empty boundary.`);
+          }
+          return i;
+        }),
+      })),
+    );
+
+  // ------------------------------------------------------------ ground rule instances
+  const instances: Instance[] = [];
+  const rec = (b: number, p: Polarity, a: number | undefined): Prem | undefined =>
+    a === undefined ? undefined : { slot: slotOf(b, a), p, live: false, baseId: null };
+  const lv = (b: number, p: Polarity, a: number | undefined): Prem | undefined =>
+    a === undefined ? undefined : { slot: slotOf(b, a), p, live: true, baseId: null };
+
+  type InstanceSpec = {
+    readonly rule: string;
+    readonly origin?: "base" | "structural";
+    readonly baseId?: string;
+    readonly structural?: StructuralRule;
+    readonly tag?: string;
+    readonly coverCells?: readonly string[];
+    readonly firstOnly?: boolean;
+    readonly choices?: readonly (readonly (readonly (Prem | undefined)[])[])[];
+  };
+
+  /**
+   * Add one instance with conclusion (b, p, a). A conclusion or a premise outside U(Σ, Q) has
+   * no atom: the instance does not exist, and an alternative naming such a premise is dropped.
+   */
+  const emit = (
+    b: number | undefined,
+    p: Polarity,
+    a: number | undefined,
+    prems: readonly (Prem | undefined)[],
+    spec: InstanceSpec,
+  ): void => {
+    if (b === undefined || a === undefined) {
+      return;
+    }
+    const concrete: Prem[] = [];
+    for (const pr of prems) {
+      if (pr === undefined) {
+        return;
+      }
+      concrete.push(pr);
+    }
+    const choices: (readonly Prem[])[][] = [];
+    for (const req of spec.choices ?? []) {
+      const alternatives: (readonly Prem[])[] = [];
+      for (const alt of req) {
+        if (alt.every((pr) => pr !== undefined)) {
+          alternatives.push(alt as readonly Prem[]);
+        }
+      }
+      if (alternatives.length === 0) {
+        return;
+      }
+      if (alternatives.length === 1) {
+        concrete.push(...(alternatives[0] ?? []));
+      } else {
+        choices.push(alternatives);
       }
     }
+    instances.push({
+      slot: slotOf(b, a),
+      p,
+      prems: concrete,
+      choices,
+      rule: spec.rule,
+      origin: spec.origin ?? "derived",
+      baseId: spec.baseId ?? null,
+      structural: spec.structural ?? null,
+      tag: spec.tag ?? null,
+      coverCells: spec.coverCells ?? null,
+      firstOnly: spec.firstOnly ?? false,
+    });
+  };
+  const allB = boundaries.map((_, i) => i);
+  const POLARITIES: readonly Polarity[] = ["+", "-"];
+  const opposite = (p: Polarity): Polarity => (p === "+" ? "-" : "+");
 
-    if (lowlink.get(v) === indices.get(v)) {
-      const comp: string[] = [];
-      while (stack.length > 0) {
-        const w = stack.pop();
-        if (w === undefined) {
-          break;
+  // Base: Observe±(B, A, w) in G±.
+  for (const o of input.observations) {
+    emit(bIndex.get(o.boundary), o.polarity, idx(o.item), [], {
+      rule: "base",
+      origin: "base",
+      baseId: o.baseId,
+    });
+  }
+
+  // Theorem: record premises are the base records it requires, Live premises the grounds.
+  for (const thm of input.theorems) {
+    const prems: (Prem | undefined)[] = [];
+    let complete = true;
+    for (const baseId of thm.requiredBaseIds) {
+      const base = input.baseObservations.get(baseId);
+      const bb = base !== undefined ? bIndex.get(base.boundary) : undefined;
+      const ba = base !== undefined ? idx(base.item) : undefined;
+      if (base === undefined || bb === undefined || ba === undefined) {
+        complete = false;
+        break;
+      }
+      prems.push({ slot: slotOf(bb, ba), p: base.polarity, live: false, baseId });
+    }
+    if (!complete) {
+      continue;
+    }
+    for (const dep of thm.requiredGrounds) {
+      const db = bIndex.get(dep.boundary);
+      prems.push(db === undefined ? undefined : lv(db, dep.polarity, idx(dep.item)));
+    }
+    emit(bIndex.get(thm.boundary), thm.polarity, idx(thm.item), prems, {
+      rule: "theorem",
+      tag: `@thm:${thm.theoremId}`,
+    });
+  }
+
+  // Structural: (B, -, ⊥) on every B; a collapse on its own B; t ≈_B t; reflection values.
+  const bottomIdx = idx(bottom());
+  for (const b of allB) {
+    emit(b, "-", bottomIdx, [], { rule: "bottom-excl", origin: "structural", structural: "bottom-excl" });
+  }
+  for (const c of input.collapses) {
+    const b = bIndex.get(c.boundary);
+    const spec: InstanceSpec = { rule: "struct-imposs", origin: "structural", structural: "struct-imposs" };
+    emit(b, "+", idx(implies(c.item, bottom())), [], spec);
+    emit(b, "-", idx(c.item), [], spec);
+  }
+  for (const rv of input.reflectionValues) {
+    for (const b of allB) {
+      emit(b, rv.polarity, idx(rv.item), [], { rule: "refl-eval", origin: "structural", structural: "refl-eval" });
+    }
+  }
+
+  // Downward heredity: (B', p, A) from the record (B, p, A), B' ⊑ B.
+  for (const b of allB) {
+    for (const sub of subsOf[b] ?? []) {
+      if (sub === b) {
+        continue;
+      }
+      for (let a = 0; a < nu; a++) {
+        for (const p of POLARITIES) {
+          emit(sub, p, a, [rec(b, p, a)], { rule: "down" });
         }
-        onStack.delete(w);
-        comp.push(w);
-        if (w === v) {
+      }
+    }
+  }
+
+  // Indexes for the item-shape rules.
+  type EquivItem = Extract<Item, { kind: "equiv" }>;
+  type AtomItem = Extract<Item, { kind: "atom" }>;
+  const equivs: { readonly item: EquivItem; readonly a: number }[] = [];
+  const atomsByHandle = new Map<string, { readonly item: AtomItem; readonly a: number }[]>();
+  const implicationsByAntecedent = new Map<string, Map<string, number>>();
+  universe.forEach((item, a) => {
+    if (item.kind === "equiv") {
+      equivs.push({ item, a });
+    } else if (item.kind === "atom") {
+      for (const h of new Set(item.roles.map((r) => r.handle))) {
+        const list = atomsByHandle.get(h) ?? [];
+        list.push({ item, a });
+        atomsByHandle.set(h, list);
+      }
+    } else if (item.kind === "implies") {
+      const key = itemKey(item.antecedent);
+      const byConsequent = implicationsByAntecedent.get(key) ?? new Map<string, number>();
+      byConsequent.set(itemKey(item.consequent), a);
+      implicationsByAntecedent.set(key, byConsequent);
+    }
+  });
+
+  /** Scoped Cut instances that need an ambiguous meet, checked against the program's reach. */
+  const ambiguousCuts: { readonly key: number; readonly antecedent: number; readonly conditional: number }[] = [];
+
+  universe.forEach((item, a) => {
+    switch (item.kind) {
+      case "flip": {
+        const inner = idx(item.inner);
+        for (const b of allB) {
+          for (const p of POLARITIES) {
+            emit(b, opposite(p), a, [rec(b, p, inner)], { rule: "flip" });
+            emit(b, opposite(p), inner, [rec(b, p, a)], { rule: "flip-elim" });
+          }
+        }
+        break;
+      }
+      case "and": {
+        const left = idx(item.left);
+        const right = idx(item.right);
+        for (const b of allB) {
+          emit(b, "+", a, [lv(b, "+", left), lv(b, "+", right)], { rule: "and-intro" });
+          emit(b, "+", left, [lv(b, "+", a)], { rule: "and-elim-l" });
+          emit(b, "+", right, [lv(b, "+", a)], { rule: "and-elim-r" });
+          emit(b, "-", a, [rec(b, "-", left)], { rule: "and-excl-l" });
+          emit(b, "-", a, [rec(b, "-", right)], { rule: "and-excl-r" });
+        }
+        break;
+      }
+      case "or": {
+        const left = idx(item.left);
+        const right = idx(item.right);
+        for (const b of allB) {
+          // ∨ by cover, the identity cover {B} included.
+          for (const cover of coversOf[b] ?? []) {
+            emit(b, "+", a, [], {
+              rule: "or-cover",
+              coverCells: cover.names,
+              firstOnly: true,
+              choices: cover.cells.map((c) =>
+                left === right ? [[lv(c, "+", left)]] : [[lv(c, "+", left)], [lv(c, "+", right)]],
+              ),
+            });
+          }
+          emit(b, "-", a, [rec(b, "-", left), rec(b, "-", right)], { rule: "or-excl" });
+        }
+        // ∨E for every E with A → E and C → E in U(Σ, Q).
+        const fromLeft = implicationsByAntecedent.get(itemKey(item.left));
+        const fromRight = implicationsByAntecedent.get(itemKey(item.right));
+        if (fromLeft !== undefined && fromRight !== undefined) {
+          for (const [eKey, leftImpl] of fromLeft) {
+            const rightImpl = fromRight.get(eKey);
+            if (rightImpl === undefined) {
+              continue;
+            }
+            const e = uIndex.get(eKey);
+            for (const b of allB) {
+              emit(b, "+", e, [lv(b, "+", a), lv(b, "+", leftImpl), lv(b, "+", rightImpl)], {
+                rule: "or-elim",
+              });
+            }
+          }
+        }
+        break;
+      }
+      case "implies": {
+        const antecedent = idx(item.antecedent);
+        const consequent = idx(item.consequent);
+        // Scoped Cut: (B₁ ⊓ B₂, +, C) from Live (B₁, +, A) and Live (B₂, +, A → C).
+        for (const b1 of allB) {
+          for (const b2 of allB) {
+            const m = meetTable[b1 * nb + b2] ?? MEET_BOTTOM;
+            if (m === MEET_BOTTOM) {
+              continue;
+            }
+            if (m === MEET_AMBIGUOUS) {
+              if (antecedent !== undefined) {
+                ambiguousCuts.push({
+                  key: b1 * nb + b2,
+                  antecedent: slotOf(b1, antecedent),
+                  conditional: slotOf(b2, a),
+                });
+              }
+              continue;
+            }
+            emit(m, "+", consequent, [lv(b1, "+", antecedent), lv(b2, "+", a)], { rule: "mp" });
+          }
+        }
+        for (const b of allB) {
+          // Counterexample: record (B, -, C) with Live (B, +, A).
+          emit(b, "-", a, [rec(b, "-", consequent), lv(b, "+", antecedent)], {
+            rule: "counter-implies",
+          });
+          // imposs-excl: Live (B, +, A → ⊥) gives (B, -, A).
+          if (item.consequent.kind === "bottom") {
+            emit(b, "-", antecedent, [lv(b, "+", a)], { rule: "imposs-excl" });
+          }
+        }
+        break;
+      }
+      case "forall":
+      case "exists": {
+        const constraint = item.domainConstraint;
+        const instancesOf = bounds.handlesOf(item.domain).map((h) => ({
+          body: idx(substituteHandle(item.body, item.variable, h.id)),
+          delta:
+            constraint !== undefined
+              ? idx(substituteHandle(constraint, item.variable, h.id))
+              : undefined,
+        }));
+        // Enumeration needs CloseDomain(D) in C_B and D ≠ ⊥_B; an empty closed Dom(D) is vacuous.
+        const closed = item.domain !== BOT_BOUNDARY && input.closedDomains.has(item.domain);
+        const closureTag = `@closure:${item.domain}`;
+        for (const b of allB) {
+          const plusDelta = (delta: number | undefined): (Prem | undefined)[] =>
+            constraint !== undefined ? [lv(b, "+", delta)] : [];
+          if (item.kind === "forall") {
+            for (const { body, delta } of instancesOf) {
+              emit(b, "+", body, [lv(b, "+", a), ...plusDelta(delta)], { rule: "forall-elim" });
+              emit(b, "-", a, [rec(b, "-", body), ...plusDelta(delta)], { rule: "forall-counter" });
+            }
+            if (closed) {
+              emit(b, "+", a, [], {
+                rule: "forall-generic",
+                tag: closureTag,
+                firstOnly: true,
+                choices: instancesOf.map(({ body, delta }) =>
+                  constraint !== undefined
+                    ? [[lv(b, "-", delta)], [lv(b, "+", body), lv(b, "+", delta)]]
+                    : [[lv(b, "+", body)]],
+                ),
+              });
+            }
+          } else {
+            for (const { body, delta } of instancesOf) {
+              emit(b, "+", a, [lv(b, "+", body), ...plusDelta(delta)], { rule: "exists-intro" });
+            }
+            if (closed) {
+              emit(b, "-", a, [], {
+                rule: "exists-excl",
+                tag: closureTag,
+                firstOnly: true,
+                choices: instancesOf.map(({ body, delta }) =>
+                  constraint !== undefined
+                    ? [[rec(b, "-", body)], [lv(b, "-", delta)]]
+                    : [[rec(b, "-", body)]],
+                ),
+              });
+            }
+          }
+        }
+        break;
+      }
+      case "atom":
+      case "bottom":
+      case "equiv":
+      case "refl":
+      case "ref":
+        break;
+    }
+  });
+
+  // Incompatibility A ⊥_B C on every B' ⊑ B, in both directions.
+  for (const c of input.incompatibilities) {
+    const left = idx(c.left);
+    const right = idx(c.right);
+    const tag = `@incompat:${itemKey(c.left)}⊥${itemKey(c.right)}`;
+    for (const sub of subsOfName(c.boundary)) {
+      emit(sub, "-", right, [lv(sub, "+", left)], { rule: "incompat", tag });
+      emit(sub, "-", left, [lv(sub, "+", right)], { rule: "incompat", tag });
+    }
+  }
+
+  // Congruence items: reflexivity, ≈ symmetry and transitivity, Congruence.
+  const equivsByLeft = new Map<string, { readonly item: EquivItem; readonly a: number }[]>();
+  for (const e of equivs) {
+    const key = `${e.item.boundary}\u0000${e.item.left}`;
+    const list = equivsByLeft.get(key) ?? [];
+    list.push(e);
+    equivsByLeft.set(key, list);
+  }
+  for (const { item, a } of equivs) {
+    const d = item.boundary;
+    const dIndex = bIndex.get(d);
+    // Structural: (B, +, t ≈_B t) for t ∈ Dom(B), on its own boundary.
+    if (item.left === item.right && dIndex !== undefined && bounds.isAdmissibleHandle(d, item.left)) {
+      emit(dIndex, "+", a, [], { rule: "equiv-refl", origin: "structural", structural: "equiv-refl" });
+    }
+    if (item.left !== item.right) {
+      const swapped = idx(equiv(d, item.right, item.left));
+      for (const b of allB) {
+        emit(b, "+", swapped, [lv(b, "+", a)], { rule: "equiv-sym" });
+      }
+    }
+    for (const next of equivsByLeft.get(`${d}\u0000${item.right}`) ?? []) {
+      const target = idx(equiv(d, item.left, next.item.right));
+      if (target === a || target === next.a) {
+        continue; // the conclusion is one of its own premises
+      }
+      for (const b of allB) {
+        emit(b, "+", target, [lv(b, "+", a), lv(b, "+", next.a)], { rule: "equiv-trans" });
+      }
+    }
+    // Congruence: one occurrence of t in a relational atom native to D, on every B ⊑ D.
+    if (item.left === item.right || dIndex === undefined) {
+      continue;
+    }
+    const subs = subsOf[dIndex] ?? [];
+    for (const r of atomsByHandle.get(item.left) ?? []) {
+      if (!bounds.hasNativeRelation(d, r.item.relation)) {
+        continue;
+      }
+      r.item.roles.forEach((role, position) => {
+        if (role.handle !== item.left) {
+          return;
+        }
+        const target = idx(
+          atom(
+            r.item.relation,
+            r.item.roles.map((other, j) =>
+              j === position ? { role: other.role, handle: item.right } : other,
+            ),
+          ),
+        );
+        for (const b of subs) {
+          for (const p of POLARITIES) {
+            emit(b, p, target, [lv(b, "+", a), lv(b, p, r.a)], { rule: "congruence" });
+          }
+        }
+      });
+    }
+  }
+
+  // Cover-Gluing: (B, p, A) from Live (Bᵢ, p, A) on every cell of {Bᵢ} ▷ B other than {B}.
+  for (const b of allB) {
+    for (const cover of coversOf[b] ?? []) {
+      if (cover.cells.length === 1 && cover.cells[0] === b) {
+        continue;
+      }
+      for (let a = 0; a < nu; a++) {
+        for (const p of POLARITIES) {
+          emit(
+            b,
+            p,
+            a,
+            cover.cells.map((c) => lv(c, p, a)),
+            { rule: "cover-glue", coverCells: cover.names, firstOnly: true },
+          );
+        }
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ the ground program
+  // Atoms: rec(+) [0, nS), rec(-) [nS, 2nS), live(+) [2nS, 3nS), live(-) [3nS, 4nS), then
+  // auxiliary atoms for requirements with several alternatives (positive clauses only, which
+  // leaves the well-founded model of the original atoms unchanged).
+  const recAtom = (p: Polarity, s: number): number => (p === "+" ? 0 : nS) + s;
+  const liveAtom = (p: Polarity, s: number): number => 2 * nS + (p === "+" ? 0 : nS) + s;
+  const premRecAtom = (pr: Prem): number => (pr.live ? liveAtom(pr.p, pr.slot) : recAtom(pr.p, pr.slot));
+  const premLiveAtom = (pr: Prem): number => liveAtom(pr.p, pr.slot);
+
+  let atomCount = 4 * nS;
+  const heads: number[] = [];
+  const guards: number[] = [];
+  const bodyStart: number[] = [0];
+  const bodyAtoms: number[] = [];
+  const addClause = (head: number, body: readonly number[], guard: number): void => {
+    heads.push(head);
+    guards.push(guard);
+    for (const x of body) {
+      bodyAtoms.push(x);
+    }
+    bodyStart.push(bodyAtoms.length);
+  };
+  for (const inst of instances) {
+    const recBody = inst.prems.map(premRecAtom);
+    const liveBody = inst.prems.map(premLiveAtom);
+    for (const alternatives of inst.choices) {
+      const auxRec = atomCount++;
+      const auxLive = atomCount++;
+      for (const alt of alternatives) {
+        addClause(auxRec, alt.map(premRecAtom), -1);
+        addClause(auxLive, alt.map(premLiveAtom), -1);
+      }
+      recBody.push(auxRec);
+      liveBody.push(auxLive);
+    }
+    // rec(B, p, A) ← rec(P) for P ∈ R, live(P) for P ∈ L
+    addClause(recAtom(inst.p, inst.slot), recBody, -1);
+    // live(B, p, A) ← live(P) for P ∈ R ∪ L, not obs(B, A)
+    addClause(liveAtom(inst.p, inst.slot), liveBody, inst.slot);
+  }
+
+  const nClauses = heads.length;
+  const headArr = Int32Array.from(heads);
+  const guardArr = Int32Array.from(guards);
+  const startArr = Int32Array.from(bodyStart);
+  const bodyArr = Int32Array.from(bodyAtoms);
+  // Occurrence lists (compressed): the clauses in whose body each atom appears.
+  const occStart = new Int32Array(atomCount + 1);
+  for (const x of bodyArr) {
+    occStart[x + 1] = (occStart[x + 1] ?? 0) + 1;
+  }
+  for (let x = 0; x < atomCount; x++) {
+    occStart[x + 1] = (occStart[x + 1] ?? 0) + (occStart[x] ?? 0);
+  }
+  const occClauses = new Int32Array(bodyArr.length);
+  const fill = occStart.slice(0, atomCount);
+  for (let c = 0; c < nClauses; c++) {
+    for (let k = startArr[c] ?? 0; k < (startArr[c + 1] ?? 0); k++) {
+      const x = bodyArr[k] ?? 0;
+      const pos = fill[x] ?? 0;
+      occClauses[pos] = c;
+      fill[x] = pos + 1;
+    }
+  }
+
+  /** Least model of the program with each `not obs(s)` read as false where assumedObs[s] = 1. */
+  const leastModel = (assumedObs: Uint8Array): Uint8Array => {
+    const truth = new Uint8Array(atomCount);
+    const remaining = new Int32Array(nClauses);
+    const stack = new Int32Array(atomCount);
+    let sp = 0;
+    const fire = (x: number): void => {
+      if (truth[x] !== 1) {
+        truth[x] = 1;
+        stack[sp++] = x;
+      }
+    };
+    for (let c = 0; c < nClauses; c++) {
+      const guard = guardArr[c] ?? -1;
+      if (guard >= 0 && assumedObs[guard] === 1) {
+        remaining[c] = -1;
+        continue;
+      }
+      const length = (startArr[c + 1] ?? 0) - (startArr[c] ?? 0);
+      remaining[c] = length;
+      if (length === 0) {
+        fire(headArr[c] ?? 0);
+      }
+    }
+    while (sp > 0) {
+      const x = stack[--sp] ?? 0;
+      for (let k = occStart[x] ?? 0; k < (occStart[x + 1] ?? 0); k++) {
+        const c = occClauses[k] ?? 0;
+        const left = remaining[c] ?? 0;
+        if (left > 0) {
+          remaining[c] = left - 1;
+          if (left === 1) {
+            fire(headArr[c] ?? 0);
+          }
+        }
+      }
+    }
+    return truth;
+  };
+
+  type Interpretation = {
+    readonly truth: Uint8Array;
+    readonly coll: Uint8Array;
+    readonly obs: Uint8Array;
+  };
+  /** Γ(J): the least model under J's obs atoms, extended with its coll and obs atoms. */
+  const gamma = (assumedObs: Uint8Array): Interpretation => {
+    const truth = leastModel(assumedObs);
+    const coll = new Uint8Array(nS);
+    for (let s = 0; s < nS; s++) {
+      coll[s] = truth[s] === 1 && truth[nS + s] === 1 ? 1 : 0;
+    }
+    // obs(B, A) ← coll(B', A) for every B' ∈ 𝔅(Σ) with B' ⊑ B (⊑ reflexive).
+    const obs = new Uint8Array(nS);
+    for (let b = 0; b < nb; b++) {
+      for (const sub of subsOf[b] ?? []) {
+        for (let a = 0; a < nu; a++) {
+          if (coll[sub * nu + a] === 1) {
+            obs[b * nu + a] = 1;
+          }
+        }
+      }
+    }
+    return { truth, coll, obs };
+  };
+
+  // Alternating fixpoint: under rises from ∅ to the true atoms, over = Γ(under) falls to the
+  // atoms that are true or undefined.
+  let under: Interpretation = {
+    truth: new Uint8Array(atomCount),
+    coll: new Uint8Array(nS),
+    obs: new Uint8Array(nS),
+  };
+  let over = gamma(under.obs);
+
+  // An omitted Scoped Cut instance (ambiguous meet) can fire only if its premises are reachable
+  // when no slot is obstructed; then the program needs the meet and the kernel reports it.
+  for (const cut of ambiguousCuts) {
+    if (
+      over.truth[liveAtom("+", cut.antecedent)] === 1 &&
+      over.truth[liveAtom("+", cut.conditional)] === 1
+    ) {
+      throw new Error(
+        `Π(Σ): Scoped Cut needs the meet of "${boundaryOf(cut.antecedent)}" and "${boundaryOf(cut.conditional)}", which is ambiguous (${meetErrors.get(cut.key) ?? "ambiguous meet"}).`,
+      );
+    }
+  }
+
+  const sameTruth = (x: Uint8Array, y: Uint8Array): boolean => {
+    for (let i = 0; i < x.length; i++) {
+      if (x[i] !== y[i]) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const maxRounds = 2 * atomCount + 4;
+  for (let round = 0; ; round++) {
+    if (round > maxRounds) {
+      throw new Error(`Π(Σ): the alternating fixpoint did not converge within ${maxRounds} rounds.`);
+    }
+    const next = gamma(over.obs);
+    if (sameTruth(next.truth, under.truth)) {
+      break;
+    }
+    under = next;
+    over = gamma(under.obs);
+  }
+  for (let x = 0; x < atomCount; x++) {
+    if (under.truth[x] === 1 && over.truth[x] !== 1) {
+      throw new Error("Π(Σ): internal error, a true atom is missing from Γ(true).");
+    }
+  }
+
+  const code = (u: Uint8Array, o: Uint8Array, i: number): number =>
+    u[i] === 1 ? TRUE : o[i] === 1 ? UNDEFINED : FALSE;
+  const recCodes: [Uint8Array, Uint8Array] = [new Uint8Array(nS), new Uint8Array(nS)];
+  const liveCodes: [Uint8Array, Uint8Array] = [new Uint8Array(nS), new Uint8Array(nS)];
+  const collCodes = new Uint8Array(nS);
+  const obsCodes = new Uint8Array(nS);
+  for (let s = 0; s < nS; s++) {
+    recCodes[0][s] = code(under.truth, over.truth, recAtom("+", s));
+    recCodes[1][s] = code(under.truth, over.truth, recAtom("-", s));
+    liveCodes[0][s] = code(under.truth, over.truth, liveAtom("+", s));
+    liveCodes[1][s] = code(under.truth, over.truth, liveAtom("-", s));
+    collCodes[s] = code(under.coll, over.coll, s);
+    obsCodes[s] = code(under.obs, over.obs, s);
+  }
+
+  // ------------------------------------------------------------ witnessing entries
+  const entries: GroundEntry[] = [];
+  const entryLeaves: (readonly string[])[] = [];
+  const entryLive: boolean[] = [];
+  const allByKey: (number[] | undefined)[] = new Array<number[] | undefined>(2 * nS);
+  const liveByKey: (number[] | undefined)[] = new Array<number[] | undefined>(2 * nS);
+  const dedup = new Set<string>();
+  const instancesByPrem: (number[] | undefined)[] = new Array<number[] | undefined>(2 * nS);
+  const premKey = (pr: Prem): number => pr.slot * 2 + polIndex(pr.p);
+  instances.forEach((inst, i) => {
+    const keys = new Set<number>();
+    for (const pr of inst.prems) {
+      keys.add(premKey(pr));
+    }
+    for (const alternatives of inst.choices) {
+      for (const alt of alternatives) {
+        for (const pr of alt) {
+          keys.add(premKey(pr));
+        }
+      }
+    }
+    for (const k of keys) {
+      const list = instancesByPrem[k] ?? [];
+      list.push(i);
+      instancesByPrem[k] = list;
+    }
+  });
+
+  const candidates = (pr: Prem, phase: 1 | 2): readonly number[] => {
+    const k = premKey(pr);
+    const list = (phase === 1 || pr.live ? liveByKey[k] : allByKey[k]) ?? [];
+    if (pr.baseId === null) {
+      return list;
+    }
+    return list.filter((e) => {
+      const prov = entries[e]?.provenance;
+      return prov?.kind === "base" && prov.baseId === pr.baseId;
+    });
+  };
+
+  const fresh: number[] = [];
+  const addEntry = (inst: Instance, deps: readonly number[], phase: 1 | 2): void => {
+    const s = inst.slot;
+    const pi = polIndex(inst.p);
+    let leaves: readonly string[];
+    if (inst.origin === "base") {
+      leaves = [inst.baseId ?? ""];
+    } else if (inst.origin === "structural") {
+      leaves = [`@${inst.structural ?? inst.rule}`];
+    } else {
+      const set = new Set<string>();
+      for (const d of deps) {
+        for (const l of entryLeaves[d] ?? []) {
+          set.add(l);
+        }
+      }
+      if (inst.tag !== null) {
+        set.add(inst.tag);
+      }
+      leaves = [...set].sort();
+    }
+    const dedupKey = `${s}\u0000${pi}\u0000${leaves.join(",")}`;
+    if (dedup.has(dedupKey)) {
+      return;
+    }
+    const live = phase === 1 || (obsCodes[s] === FALSE && deps.every((d) => entryLive[d] === true));
+    if (live ? liveCodes[pi][s] !== TRUE : recCodes[pi][s] !== TRUE) {
+      throw new Error(
+        `Π(Σ): internal error, a derivation of (${boundaryOf(s)}, ${inst.p}, ${itemKey(itemOf(s))}) disagrees with the well-founded model.`,
+      );
+    }
+    if (entries.length >= MAX_PROVENANCE_ENTRIES) {
+      throw new Error(
+        `Π(Σ): more than ${MAX_PROVENANCE_ENTRIES} witnessing entries; the kernel reports this instead of truncating them.`,
+      );
+    }
+    dedup.add(dedupKey);
+    const index = entries.length;
+    const entryId = `e${index + 1}`;
+    const item = itemOf(s);
+    const provenance: Provenance =
+      inst.origin === "base"
+        ? { kind: "base", baseId: inst.baseId ?? "" }
+        : inst.origin === "structural"
+          ? { kind: "structural", rule: inst.structural ?? "bottom-excl" }
+          : inst.coverCells !== null
+            ? {
+                kind: "derived",
+                rule: inst.rule,
+                depEntryIds: deps.map((d) => entries[d]?.entryId ?? ""),
+                baseLeaves: leaves,
+                coverCells: inst.coverCells,
+              }
+            : {
+                kind: "derived",
+                rule: inst.rule,
+                depEntryIds: deps.map((d) => entries[d]?.entryId ?? ""),
+                baseLeaves: leaves,
+              };
+    entries.push({
+      entryId,
+      boundary: boundaryOf(s),
+      polarity: inst.p,
+      item,
+      key: itemKey(item),
+      provenance,
+    });
+    entryLeaves.push(leaves);
+    entryLive.push(live);
+    const k = s * 2 + pi;
+    (allByKey[k] ??= []).push(index);
+    if (live) {
+      (liveByKey[k] ??= []).push(index);
+    }
+    fresh.push(index);
+  };
+
+  /** Derive entries from one instance with the current entries (phase 1: Live only). */
+  const tryInstance = (inst: Instance, phase: 1 | 2): void => {
+    if (phase === 1 && obsCodes[inst.slot] !== FALSE) {
+      return;
+    }
+    const lists: (readonly number[])[] = [];
+    for (const pr of inst.prems) {
+      const c = candidates(pr, phase);
+      if (c.length === 0) {
+        return;
+      }
+      lists.push(inst.firstOnly ? c.slice(0, 1) : c);
+    }
+    for (const alternatives of inst.choices) {
+      let chosen: number[] | undefined;
+      for (const alt of alternatives) {
+        const picks: number[] = [];
+        for (const pr of alt) {
+          const first = candidates(pr, phase)[0];
+          if (first === undefined) {
+            break;
+          }
+          picks.push(first);
+        }
+        if (picks.length === alt.length) {
+          chosen = picks;
           break;
         }
       }
-      sccs.push(comp);
+      if (chosen === undefined) {
+        return;
+      }
+      for (const e of chosen) {
+        lists.push([e]);
+      }
+    }
+    // Every combination of witnessing entries (one per premise).
+    const positions = new Array<number>(lists.length).fill(0);
+    for (;;) {
+      addEntry(
+        inst,
+        lists.map((l, j) => l[positions[j] ?? 0] ?? 0),
+        phase,
+      );
+      let j = lists.length - 1;
+      while (j >= 0) {
+        const next = (positions[j] ?? 0) + 1;
+        if (next < (lists[j]?.length ?? 0)) {
+          positions[j] = next;
+          break;
+        }
+        positions[j] = 0;
+        j -= 1;
+      }
+      if (j < 0) {
+        break;
+      }
     }
   };
 
-  for (const n of nodes) {
-    if (!indices.has(n)) {
-      strongConnect(n);
+  const runPhase = (phase: 1 | 2): void => {
+    let dirty: number[] = instances.map((_, i) => i);
+    const mark = new Uint8Array(instances.length);
+    while (dirty.length > 0) {
+      fresh.length = 0;
+      for (const i of dirty) {
+        const inst = instances[i];
+        if (inst !== undefined) {
+          tryInstance(inst, phase);
+        }
+      }
+      mark.fill(0);
+      const next: number[] = [];
+      for (const e of fresh) {
+        const entry = entries[e];
+        if (entry === undefined) {
+          continue;
+        }
+        const s = slotOf(bIndex.get(entry.boundary) ?? 0, uIndex.get(entry.key) ?? 0);
+        for (const i of instancesByPrem[s * 2 + polIndex(entry.polarity)] ?? []) {
+          if (mark[i] === 0) {
+            mark[i] = 1;
+            next.push(i);
+          }
+        }
+      }
+      dirty = next;
     }
-  }
+  };
+  runPhase(1);
+  runPhase(2);
 
-  const sccOf = new Map<string, number>();
-  for (let i = 0; i < sccs.length; i++) {
-    for (const n of sccs[i] ?? []) {
-      sccOf.set(n, i);
-    }
-  }
-  const hasExternalIncoming = new Array<boolean>(sccs.length).fill(false);
-  for (const [u, outs] of adj) {
-    const su = sccOf.get(u);
-    if (su === undefined) {
-      continue;
-    }
-    for (const v of outs) {
-      const sv = sccOf.get(v);
-      if (sv !== undefined && sv !== su) {
-        hasExternalIncoming[sv] = true;
+  // Every true rec atom has a witnessing entry and every true live atom a Live one.
+  for (let s = 0; s < nS; s++) {
+    for (const pi of [0, 1] as const) {
+      const k = s * 2 + pi;
+      if ((recCodes[pi][s] === TRUE) !== ((allByKey[k]?.length ?? 0) > 0)) {
+        throw new Error(
+          `Π(Σ): internal error, the records of (${boundaryOf(s)}, ${pi === 0 ? "+" : "-"}, ${itemKey(itemOf(s))}) lack witnesses.`,
+        );
+      }
+      if ((liveCodes[pi][s] === TRUE) !== ((liveByKey[k]?.length ?? 0) > 0)) {
+        throw new Error(
+          `Π(Σ): internal error, the authority of (${boundaryOf(s)}, ${pi === 0 ? "+" : "-"}, ${itemKey(itemOf(s))}) lacks a Live witness.`,
+        );
       }
     }
   }
 
-  const sources: (readonly string[])[] = [];
-  for (let i = 0; i < sccs.length; i++) {
-    const comp = sccs[i];
-    if (comp !== undefined && !hasExternalIncoming[i]) {
-      sources.push(comp);
+  const liveEntryIds = new Set<string>();
+  entries.forEach((e, i) => {
+    if (entryLive[i] === true) {
+      liveEntryIds.add(e.entryId);
     }
-  }
-  return sources;
-}
+  });
 
-function directSubItems(item: Item): readonly Item[] {
-  switch (item.kind) {
-    case "atom":
-    case "bottom":
-    case "equiv":
-    case "ref":
-      return [];
-    case "flip":
-      return [item.inner];
-    case "and":
-    case "or":
-      return [item.left, item.right];
-    case "implies":
-      return [item.antecedent, item.consequent];
-    case "forall":
-    case "exists":
-      return item.domainConstraint !== undefined
-        ? [item.body, item.domainConstraint]
-        : [item.body];
-    case "refl":
-      return [item.targetItem];
-  }
+  return {
+    boundaries,
+    universe,
+    rec: recCodes,
+    live: liveCodes,
+    coll: collCodes,
+    obs: obsCodes,
+    entries,
+    liveEntryIds,
+  };
 }
 
 export function andAll(items: readonly Item[]): Item {
