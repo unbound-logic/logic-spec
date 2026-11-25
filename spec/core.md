@@ -124,7 +124,7 @@ Every normative item below carries one label from the claim status ladder of [AG
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_symmetric_downward_heredity_and_disjoint_zero_leakage" min="1" reason="Symmetric downward heredity and disjoint zero-leakage meet collision are verified" -->
 
 10. `Decided` **Inference Quarantine, Sub-Boundary Obstruction & Revision Obligation** ([`layer1-collision-quarantine`](../docs/design-review.md#layer1-collision-quarantine), [`layer3-structural-rules-and-cut`](../docs/design-review.md#layer3-structural-rules-and-cut)):
-    - **Audit status**: `Live` is fixed below only by naming a mechanism; the evaluation program ratified in [`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling) will define it.
+    - **Definition**: `Collision`, obstruction and `Live` are defined by the evaluation program of item 14; this item describes their consequences. **Audit status**: the reference kernel still computes them with SCC heuristics until it is aligned with item 14 under [`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling).
     - **No Explosion**: `Collision` on `(B, A)` never licenses deriving arbitrary items `Z` (`Ex Falso Quodlibet` is excluded from `UL-Core`).
     - **Transmission Authorization (`Live`)**: A ground `Σ ; B ⊩± A [π]` is **transmission-authorized (`Live`)** iff:
       1. Every node `(B_k, X_k)` along provenance DAG `π` is itself `Live` (not quarantined); and
@@ -132,7 +132,7 @@ Every normative item below carries one label from the claim status ladder of [AG
     - **Quarantine Propagation**: If `(B', A)` enters `Collision` (for any non-empty `B' ⊑ B`), then:
       - `(B', A)` and the obstructed broad ground `(B, ±A)` lose `Live` authority immediately;
       - Any downstream derived ground `Y [π_Y]` whose DAG `π_Y` passes through an un-`Live` node loses `Live` authority, while `Y` remains `Live` if it possesses an independent well-founded DAG `π'_Y` whose nodes are all `Live`;
-      - **Stratified Quarantine (No Ghost Collisions)**: Transmissive rules gated on `Live` (`Scoped Cut`/`MP`, `∧I`/`∧E`, `∨I`/`∨E`, `⊥_B`, `≈_B`, and `imposs-excl`) never fire from definitively obstructed premises or falsified conditionals (e.g., `X → A` refuted by `+X ∧ -A`); defeated branches under obstruction cannot fabricate ghost collisions against independently grounded opposite polarities (realized via an alternating fixpoint over obstruction sets), while symmetric conflicts and downward heredity records remain preserved;
+      - **Stratified Quarantine (No Ghost Collisions)**: Transmissive rules gated on `Live` (`Scoped Cut`/`MP`, `∧I`/`∧E`, `∨I`/`∨E`, `⊥_B`, `≈_B`, and `imposs-excl`) never fire from definitively obstructed premises or falsified conditionals (e.g., `X → A` refuted by `+X ∧ -A`); defeated branches under obstruction cannot fabricate ghost collisions against independently grounded opposite polarities (item 14), while symmetric conflicts and downward heredity records remain preserved;
       - A **Revision Obligation** `Rev(B', A)` is recorded in `O_rev` until discharged via `Retract` or `RefineBoundary` (obeying M1 + M2).
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Inference Quarantine, upstream obstruction, and selective provenance survival are verified" -->
     <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_symmetric_conflict" min="1" reason="Stratified quarantine eliminates ghost collisions and preserves symmetric conflicts" -->
@@ -219,3 +219,55 @@ Every normative item below carries one label from the claim status ladder of [AG
     <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_atomic_cover_2k_boolean_algebra_reporting" min="1" reason="Multi-cell 2^k atomic cover reporting distinguishing +, -, and split is verified" -->
     <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen" min="1" reason="UL-Classical precondition enforcement (monotoneOnly, reachable No-Gaps, compound exclusion consistency, and domainConstraint) is verified" -->
     <!-- @assert-count target="test/deduction.test.ts" symbol="function test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation" min="1" reason="Syntactic UL-Minimal vs UL-Intuitionistic proof-theoretic separation via bottom elimination is verified" -->
+
+## 5. Evaluation Program
+
+14. `Decided` **Evaluation Program `Π(Σ)` and Well-Founded Authority** ([`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling), [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import)):
+    - **Role**: `Π(Σ)` fixes, for an inquiry state `Σ` and a finite set `Q` of queried items, which ground records exist on which boundaries, which of them collide, which are obstructed, and which are transmission-authorized. Its meaning is the well-founded model of the program (Van Gelder, Ross and Schlipf, 1991). Items 8–12 describe consequences of this item; where a description there disagrees with this item, this item governs. An implementation is a projection of `Π(Σ)`: where it cannot reach the fixpoint within its bounds, it reports non-convergence instead of returning a truncated result.
+    - **Universe**:
+      - `𝔅(Σ)` is the set of non-empty boundaries declared in `Σ`; every quantification over sub-boundaries in this item ranges over `𝔅(Σ)`.
+      - `U(Σ, Q)` is the set of items tracked by `Σ` and the items of `Q`, closed under direct sub-items, under quantifier instances `A(w)` and `δ(w)` for `w ∈ Dom(D)`, and under congruence rewrites of atoms by the handles of the boundaries in `𝔅(Σ)`. A polarity flip `~A` belongs to `U(Σ, Q)` only when it is tracked or queried. `U(Σ, Q)` is finite because `Σ`, `Q`, the boundaries and their domains are finite.
+    - **Atoms**: for `B ∈ 𝔅(Σ)`, `A ∈ U(Σ, Q)` and `p ∈ {+, -}`: `rec(B, p, A)`, a ground record of polarity `p` for `A` on `B`; `live(B, p, A)`, that record is transmission-authorized; `coll(B, A)`; and `obs(B, A)`.
+    - **Program**: negation occurs only through `obs`.
+      ```text
+      coll(B, A) ← rec(B, +, A), rec(B, -, A)
+      obs(B, A)  ← coll(B', A)                          for every B' ∈ 𝔅(Σ) with B' ⊑ B
+
+      for every instance of a rule below with conclusion (B, p, A),
+      record premises R and Live premises L:
+        rec(B, p, A)  ← rec(P) for each P ∈ R, live(P) for each P ∈ L
+        live(B, p, A) ← live(P) for each P ∈ R ∪ L, not obs(B, A)
+      ```
+    - **Firing principle**: positive conclusions, and exclusions inferred from positive evidence, take `Live` premises. The exclusion of a compound takes the exclusion records of its components as record premises, while its context premises (the antecedent of a counterexample, domain membership `±δ`, cover cells) are `Live`. A record from record premises exists so that conflicts surface and obstruct upward; it transmits only when all its premises are `Live`.
+    - **Rules** (`p̄` is the opposite polarity; "constrained" means the quantifier carries `[δ]`):
+
+      | Rule | Conclusion | Record premises | `Live` premises | Side condition |
+      | :--- | :--- | :--- | :--- | :--- |
+      | Base | `(B, p, A)` | — | — | `Observe±(B, A, w)` in `G±` |
+      | Theorem | `(B, p, A)` | the base records it requires | the grounds it requires | a recorded theorem |
+      | Structural | `(B, -, ⊥)`; `(B, +, A → ⊥)` and `(B, -, A)`; `(B, +, t ≈_B t)`; a reflection value | — | — | always; `B ⊓ [A] = ⊥_B` in `C_B`; `t ∈ Dom(B)`; item 3 |
+      | Downward heredity | `(B', p, A)` | `(B, p, A)` | — | `B' ⊑ B` |
+      | Polarity flip | `(B, p̄, ~A)`; `(B, p̄, A)` | `(B, p, A)`; `(B, p, ~A)` | — | `~A ∈ U(Σ, Q)` |
+      | `∧I`; `∧E` | `(B, +, A ∧ C)`; `(B, +, A)` and `(B, +, C)` | — | `(B, +, A)`, `(B, +, C)`; `(B, +, A ∧ C)` | — |
+      | `∧` exclusion | `(B, -, A ∧ C)` | `(B, -, A)` or `(B, -, C)` | — | — |
+      | `∨` by cover | `(B, +, A ∨ C)` | — | `(Bᵢ, +, A)` or `(Bᵢ, +, C)` for every cell | `{Bᵢ} ▷ B` witnessed |
+      | `∨` exclusion | `(B, -, A ∨ C)` | `(B, -, A)`, `(B, -, C)` | — | — |
+      | `∨E` | `(B, +, E)` | — | `(B, +, A ∨ C)`, `(B, +, A → E)`, `(B, +, C → E)` | — |
+      | Scoped Cut | `(B₁ ⊓ B₂, +, C)` | — | `(B₁, +, A)`, `(B₂, +, A → C)` | `B₁ ⊓ B₂ ≠ ⊥_B` |
+      | Counterexample | `(B, -, A → C)` | `(B, -, C)` | `(B, +, A)` | — |
+      | `imposs-excl` | `(B, -, A)` | — | `(B, +, A → ⊥)` | — |
+      | Incompatibility | `(B', -, C)`; `(B', -, A)` | — | `(B', +, A)`; `(B', +, C)` | `A ⊥_B C` in `C_B`, `B' ⊑ B` |
+      | `≈` symmetry; transitivity | `(B, +, u ≈_D t)`; `(B, +, t ≈_D v)` | — | `(B, +, t ≈_D u)`; it and `(B, +, u ≈_D v)` | — |
+      | Congruence | `(B, p, R[u/t])` | — | `(B, +, t ≈_D u)`, `(B, p, R)` | `R` an atom of a relation native to `D`, `B ⊑ D` |
+      | `∀E` | `(B, +, A(w))` | — | `(B, +, ∀(x : D) A(x))`, and `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
+      | `∀` counterexample | `(B, -, ∀(x : D) A(x))` | `(B, -, A(w))` | `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
+      | `∀` generic | `(B, +, ∀(x : D) A(x))` | — | for every `w ∈ Dom(D)`: `(B, -, δ(w))`, or `(B, +, A(w))` with `(B, +, δ(w))` if constrained | `CloseDomain(D)` in `C_B` |
+      | `∃I` | `(B, +, ∃(x : D) A(x))` | — | `(B, +, A(w))`, and `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
+      | `∃` exclusion | `(B, -, ∃(x : D) A(x))` | `(B, -, A(w))` for every `w ∈ Dom(D)` not excluded by `δ` | `(B, -, δ(w))` for the handles `δ` excludes | `CloseDomain(D)` in `C_B` |
+      | Cover-Gluing | `(B, p, A)` | — | `(Bᵢ, p, A)` for every cell | `{Bᵢ} ▷ B` witnessed, other than `{B}` |
+    - **Reporting**, in the well-founded model `M` of `Π(Σ)`:
+      - A record of `(B, p, A)` is **present** when `rec(B, p, A)` is true or undefined in `M`. The local status of `(B, A)` (`Open`, `Grounded`, `Excluded`, `Collision`) is read from its present records.
+      - `(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`, and each such `(B, A)` carries a revision obligation `Rev(B, A)`.
+      - The authority of a present record is `Live` when `live(B, p, A)` is true in `M`, `Undetermined` when it is undefined, and `Quarantined` when it is false. Only `Live` records transmit, so a symmetric conflict reads `Collision` with `Undetermined` authority on both sides and transmits on neither.
+      - A provenance DAG of a `Live` record is any finite derivation of it by rule instances whose premises are `Live`. It explains the record; it does not define it.
+    - **Pending interfaces**: a "witnessed" cover is one that stays valid under [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift); `B₁ ⊓ B₂ ≠ ⊥_B` means an overlap that is known under [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world); `CloseDomain(D)` is the closure of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import). Until those are specified, the registered covers and computed meets of item 4 and item 5 stand in for them.
