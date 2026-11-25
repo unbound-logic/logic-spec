@@ -223,10 +223,11 @@ Every normative item below carries one label from the claim status ladder of [AG
 ## 5. Evaluation Program
 
 14. `Decided` **Evaluation Program `Π(Σ)` and Well-Founded Authority** ([`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling), [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import)):
-    - **Role**: `Π(Σ)` fixes, for an inquiry state `Σ` and a finite set `Q` of queried items, which ground records exist on which boundaries, which of them collide, which are obstructed, and which are transmission-authorized. Its meaning is the well-founded model of the program (Van Gelder, Ross and Schlipf, 1991). Items 8–12 describe consequences of this item; where a description there disagrees with this item, this item governs. An implementation is a projection of `Π(Σ)`: where it cannot reach the fixpoint within its bounds, it reports non-convergence instead of returning a truncated result.
+    - **Role**: `Π(Σ)` fixes, for an inquiry state `Σ` and a finite set `Q` of queried items, which ground records exist on which boundaries, which of them collide, which are obstructed, and which are transmission-authorized. Its meaning is the well-founded model of the program (Van Gelder, Ross and Schlipf, 1991). Items 8–12 describe consequences of this item; where a description there disagrees with this item, this item governs. An implementation is a projection of `Π(Σ)`: where it cannot reach the fixpoint within its bounds, or where a meet the program needs is ambiguous, it reports an error instead of returning a truncated or guessed result. The readings of this item recorded by the clean-room oracle in `test/oracle/AMBIGUITIES.md` are ratified as written there, except where this item now states otherwise.
     - **Universe**:
-      - `𝔅(Σ)` is the set of non-empty boundaries declared in `Σ`; every quantification over sub-boundaries in this item ranges over `𝔅(Σ)`.
-      - `U(Σ, Q)` is the set of items tracked by `Σ` and the items of `Q`, closed under direct sub-items, under quantifier instances `A(w)` and `δ(w)` for `w ∈ Dom(D)`, and under congruence rewrites of atoms by the handles of the boundaries in `𝔅(Σ)`. A polarity flip `~A` belongs to `U(Σ, Q)` only when it is tracked or queried. `U(Σ, Q)` is finite because `Σ`, `Q`, the boundaries and their domains are finite.
+      - `𝔅(Σ)` is the set of non-empty boundaries declared in `Σ`, including `⊤_B`; every quantification over sub-boundaries in this item ranges over `𝔅(Σ)`, and `⊑` is reflexive.
+      - The items **tracked** by `Σ` are the items of its base observations and recorded theorems, both sides of each incompatibility `A ⊥_B C`, and both `A` and `A → ⊥` for each structural collapse `B ⊓ [A] = ⊥_B`.
+      - `U(Σ, Q)` is the set of tracked items and the items of `Q`, closed under direct sub-items, under quantifier instances `A(w)` and `δ(w)` for `w ∈ Dom(D)` (a quantifier contributes its instances, not its open body), and under congruence rewrites: replacing the handle at one position of a relational atom or of an `≈` item by a handle of a boundary in `𝔅(Σ)`. A polarity flip belongs to `U(Σ, Q)` exactly when it arises in this way; `U(Σ, Q)` is not closed under prefixing `~` to its members. `U(Σ, Q)` is finite because `Σ`, `Q`, the boundaries and their domains are finite.
     - **Atoms**: for `B ∈ 𝔅(Σ)`, `A ∈ U(Σ, Q)` and `p ∈ {+, -}`: `rec(B, p, A)`, a ground record of polarity `p` for `A` on `B`; `live(B, p, A)`, that record is transmission-authorized; `coll(B, A)`; and `obs(B, A)`.
     - **Program**: negation occurs only through `obs`.
       ```text
@@ -245,7 +246,7 @@ Every normative item below carries one label from the claim status ladder of [AG
       | :--- | :--- | :--- | :--- | :--- |
       | Base | `(B, p, A)` | — | — | `Observe±(B, A, w)` in `G±` |
       | Theorem | `(B, p, A)` | the base records it requires | the grounds it requires | a recorded theorem |
-      | Structural | `(B, -, ⊥)`; `(B, +, A → ⊥)` and `(B, -, A)`; `(B, +, t ≈_B t)`; a reflection value | — | — | always; `B ⊓ [A] = ⊥_B` in `C_B`; `t ∈ Dom(B)`; item 3 |
+      | Structural | `(B, -, ⊥)`; `(B, +, A → ⊥)` and `(B, -, A)`; `(B, +, t ≈_B t)`; a reflection value | — | — | always; `B ⊓ [A] = ⊥_B` in `C_B`, on that `B` only (sub-boundaries receive it by heredity); `t ∈ Dom(B)`; item 3 |
       | Downward heredity | `(B', p, A)` | `(B, p, A)` | — | `B' ⊑ B` |
       | Polarity flip | `(B, p̄, ~A)`; `(B, p̄, A)` | `(B, p, A)`; `(B, p, ~A)` | — | `~A ∈ U(Σ, Q)` |
       | `∧I`; `∧E` | `(B, +, A ∧ C)`; `(B, +, A)` and `(B, +, C)` | — | `(B, +, A)`, `(B, +, C)`; `(B, +, A ∧ C)` | — |
@@ -258,16 +259,16 @@ Every normative item below carries one label from the claim status ladder of [AG
       | `imposs-excl` | `(B, -, A)` | — | `(B, +, A → ⊥)` | — |
       | Incompatibility | `(B', -, C)`; `(B', -, A)` | — | `(B', +, A)`; `(B', +, C)` | `A ⊥_B C` in `C_B`, `B' ⊑ B` |
       | `≈` symmetry; transitivity | `(B, +, u ≈_D t)`; `(B, +, t ≈_D v)` | — | `(B, +, t ≈_D u)`; it and `(B, +, u ≈_D v)` | — |
-      | Congruence | `(B, p, R[u/t])` | — | `(B, +, t ≈_D u)`, `(B, p, R)` | `R` an atom of a relation native to `D`, `B ⊑ D` |
+      | Congruence | `(B, p, R')`, where `R'` replaces one occurrence of `t` in `R` by `u` | — | `(B, +, t ≈_D u)`, `(B, p, R)` | `R` a relational atom of a relation native to `D`, `B ⊑ D` |
       | `∀E` | `(B, +, A(w))` | — | `(B, +, ∀(x : D) A(x))`, and `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
       | `∀` counterexample | `(B, -, ∀(x : D) A(x))` | `(B, -, A(w))` | `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
-      | `∀` generic | `(B, +, ∀(x : D) A(x))` | — | for every `w ∈ Dom(D)`: `(B, -, δ(w))`, or `(B, +, A(w))` with `(B, +, δ(w))` if constrained | `CloseDomain(D)` in `C_B` |
+      | `∀` generic | `(B, +, ∀(x : D) A(x))` | — | for every `w ∈ Dom(D)`: `(B, -, δ(w))` (constrained only), or `(B, +, A(w))` with `(B, +, δ(w))` if constrained | `CloseDomain(D)` in `C_B`, `D ≠ ⊥_B` |
       | `∃I` | `(B, +, ∃(x : D) A(x))` | — | `(B, +, A(w))`, and `(B, +, δ(w))` if constrained | `w ∈ Dom(D)` |
-      | `∃` exclusion | `(B, -, ∃(x : D) A(x))` | `(B, -, A(w))` for every `w ∈ Dom(D)` not excluded by `δ` | `(B, -, δ(w))` for the handles `δ` excludes | `CloseDomain(D)` in `C_B` |
+      | `∃` exclusion | `(B, -, ∃(x : D) A(x))` | `(B, -, A(w))` for each handle not in the excluded part | `(B, -, δ(w))` for each handle in the excluded part (constrained only) | one instance per split of `Dom(D)` into an excluded part and the rest; `CloseDomain(D)` in `C_B`, `D ≠ ⊥_B` |
       | Cover-Gluing | `(B, p, A)` | — | `(Bᵢ, p, A)` for every cell | `{Bᵢ} ▷ B` witnessed, other than `{B}` |
     - **Reporting**, in the well-founded model `M` of `Π(Σ)`:
-      - A record of `(B, p, A)` is **present** when `rec(B, p, A)` is true or undefined in `M`. The local status of `(B, A)` (`Open`, `Grounded`, `Excluded`, `Collision`) is read from its present records.
-      - `(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`, and each such `(B, A)` carries a revision obligation `Rev(B, A)`.
-      - The authority of a present record is `Live` when `live(B, p, A)` is true in `M`, `Undetermined` when it is undefined, and `Quarantined` when it is false. Only `Live` records transmit, so a symmetric conflict reads `Collision` with `Undetermined` authority on both sides and transmits on neither.
+      - A record of `(B, p, A)` is **present** when `rec(B, p, A)` is true in `M`; a record whose atom is undefined is possible but not present, and no status rests on it.
+      - `(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`, so a possible conflict is never hidden, and each such `(B, A)` carries a revision obligation `Rev(B, A)`. Otherwise its local status is `Grounded`, `Excluded` or `Open` according to which of its records are present.
+      - The authority of a present record is `Live` when `live(B, p, A)` is true in `M`, `Undetermined` when it is undefined, and `Quarantined` when it is false; an absent record has no authority. Only `Live` records transmit, so a symmetric conflict reads `Collision` with `Undetermined` authority on both sides and transmits on neither.
       - A provenance DAG of a `Live` record is any finite derivation of it by rule instances whose premises are `Live`. It explains the record; it does not define it.
     - **Pending interfaces**: a "witnessed" cover is one that stays valid under [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift); `B₁ ⊓ B₂ ≠ ⊥_B` means an overlap that is known under [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world); `CloseDomain(D)` is the closure of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import). Until those are specified, the registered covers and computed meets of item 4 and item 5 stand in for them.
