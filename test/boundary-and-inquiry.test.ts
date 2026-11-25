@@ -524,6 +524,17 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   bSem3.defineMeet("X", "Y", "XY");
   assert.throws(() => bSem3.declareDisjoint("X", "Y"), /meet|common|disjoint/i);
 
+  const bSem4 = new BoundarySystem();
+  bSem4.defineBoundary("U");
+  bSem4.defineBoundary("V");
+  bSem4.defineMeet("U", "V", BOT_BOUNDARY);
+  assert.throws(() => bSem4.defineBoundary("UV", { parents: ["U", "V"] }), /disjoint/i);
+  bSem4.defineBoundary("U1", { parents: ["U"] });
+  bSem4.defineBoundary("V1", { parents: ["V"] });
+  assert.throws(() => bSem4.defineBoundary("U1V1", { parents: ["U1", "V1"] }), /disjoint/i);
+  assert.equal(bSem4.meet("U1", "V1"), BOT_BOUNDARY);
+  assert.equal(bSem4.overlaps("U1", "V1"), false);
+
   // 2. ≈_B reflexivity, symmetry, transitivity + engine-side ∀E + domainConstraint + Live-gated ∃I
   const b = new BoundarySystem();
   b.defineBoundary("D", {

@@ -83,7 +83,7 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
   // Full worked-examples §1 boiling-point scenario: Σ0 -> Σ1 -> Σ2
   const b = new BoundarySystem();
   b.defineBoundary("B_all", {
-    nativeRelations: ["Pressure", "Heat100", "Boils", "Cook"],
+    nativeRelations: ["Pressure", "Heat100", "Boils", "HeatedAt", "BoilsAt", "Cook"],
     handles: [
       { id: "1atm", criterion: "I_P(1atm)", kind: "structural" },
       { id: "2atm", criterion: "I_P(2atm)", kind: "structural" },
@@ -152,7 +152,7 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
     fromBoundary: "B_all",
     toBoundary: "B_1atm",
     originalUniversal: genAll,
-    targetRelation: "Boils",
+    targetRelation: "BoilsAt",
     criterionItem: atom("Pressure", [
       { role: "target", handle: "p" },
       { role: "value", handle: "1atm" },
