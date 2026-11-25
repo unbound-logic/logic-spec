@@ -269,12 +269,14 @@ function test_fuzz_semilattice_and_finitary_covers(): void {
               assert.equal(bs.overlaps(u1, v1), false, `${ctx} overlaps must be false`);
               if (commonNonEmptySubs(bs, nodes, u, v).length === 0) {
                 const probeClone = bs.clone();
+                // Empty handle sets keep domain monotonicity from rejecting the probe children
+                // first, so only the disjoint-parents check is exercised.
                 try {
-                  probeClone.defineBoundary("__check_disj__", { parents: [u, v] });
+                  probeClone.defineBoundary("__check_disj__", { parents: [u, v], handles: [] });
                 } catch {
                   const testClone = bs.clone();
                   assert.throws(
-                    () => testClone.defineBoundary("__bad_joint__", { parents: [u1, v1] }),
+                    () => testClone.defineBoundary("__bad_joint__", { parents: [u1, v1], handles: [] }),
                     /disjoint/i,
                     `${ctx} joint child under (${u1}, ${v1}) should be rejected`,
                   );

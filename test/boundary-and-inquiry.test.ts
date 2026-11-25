@@ -574,6 +574,7 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   eDom.observeNegative("D", p("t2"), "w_np2");
   eDom.observePositive("D", q("t2"), "w_q2");
   eDom.observeNegative("D", q("t1"), "w_nq1");
+  eDom.closeDomain("D");
 
   const constrainedAll = forall("x", "D", p("x"), delta("x"));
   const constrainedEx = exists("x", "D", q("x"), delta("x"));

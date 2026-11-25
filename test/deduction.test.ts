@@ -838,6 +838,7 @@ function test_deduction_quantifier_domain_constraint_enforcement(): void {
   e.observeNegative("R", addId("2"), "w_nadd2");
   e.observePositive("R", inv("2"), "w_inv2");
   e.observeNegative("R", inv("0"), "w_ninv0");
+  e.closeDomain("R");
 
   // 1. Bug A: forall-elim on R ⊩+ ∀(x : R ⊓ [~AddId(x)]) Invertible(x) MUST enforce domainConstraint!
   const missingConstraintProof = verifyDerivation(e, {
