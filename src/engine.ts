@@ -13,6 +13,7 @@ import {
   collectHandles,
   collectRelations,
   computeItemLevel,
+  equiv,
   flip,
   itemKey,
   or,
@@ -25,7 +26,10 @@ export type DerivedStatus = "Open" | "Grounded" | "Excluded" | "Collision";
 
 export type Provenance =
   | { readonly kind: "base"; readonly baseId: string }
-  | { readonly kind: "structural"; readonly rule: "bottom-excl" | "struct-imposs" | "refl-eval" }
+  | {
+      readonly kind: "structural";
+      readonly rule: "bottom-excl" | "struct-imposs" | "refl-eval" | "equiv-refl";
+    }
   | {
       readonly kind: "derived";
       readonly rule: string;
@@ -259,6 +263,7 @@ type StageRecord = {
   readonly incompatibilities: readonly IncompatibilityConstraint[];
   readonly structuralCollapses: readonly { readonly boundary: string; readonly item: Item }[];
   readonly trackedItems: ReadonlyMap<string, Item>;
+  readonly boundarySnapshot: BoundarySystem;
 };
 
 /**
@@ -523,6 +528,17 @@ export class InquiryEngine {
         }
       }
       const critSnap = this.evaluate([req.originalUniversal, ...probeItems]);
+      const hasInconsistentSurvivor = survivingHandles.some((h) => {
+        const critInstance = substituteHandle(req.criterionItem, critVar, h.id);
+        return critSnap.isLive(req.fromBoundary, "-", critInstance);
+      });
+      if (hasInconsistentSurvivor) {
+        return {
+          ok: false,
+          violation: "M1-unwitnessed-proxy",
+          reason: `M1(iii) violation: surviving handle in "${req.toBoundary}" witnesses negation of splitting criterion δ.`,
+        };
+      }
       const hasIndependentLiveWitness = survivingHandles.some((h) => {
         if (req.originalUniversal.kind === "forall") {
           const targetInstance = substituteHandle(
@@ -536,16 +552,13 @@ export class InquiryEngine {
           }
         }
         const critInstance = substituteHandle(req.criterionItem, critVar, h.id);
-        return (
-          critSnap.isLive(req.fromBoundary, "+", critInstance) ||
-          critSnap.isLive(req.fromBoundary, "-", critInstance)
-        );
+        return critSnap.isLive(req.fromBoundary, "+", critInstance);
       });
       if (!hasIndependentLiveWitness) {
         return {
           ok: false,
           violation: "M1-unwitnessed-proxy",
-          reason: `M1(iii) violation: splitting criterion lacks an independent Live witness on a non-refuted surviving handle of "${req.toBoundary}".`,
+          reason: `M1(iii) violation: splitting criterion lacks an independent Live positive witness (+δ) on a non-refuted surviving handle of "${req.toBoundary}".`,
         };
       }
     }
@@ -568,7 +581,7 @@ export class InquiryEngine {
     if (currentRecord === undefined) {
       throw new Error(`Missing archived inquiry stage ${this.#stage}.`);
     }
-    return this.#evaluateRecord(currentRecord, extraItems);
+    return this.#evaluateRecord({ ...currentRecord, boundarySnapshot: this.boundaries }, extraItems);
   }
 
   /** Evaluate the frozen historical inquiry state at `stage` (0 <= stage <= current stage). */
@@ -587,6 +600,7 @@ export class InquiryEngine {
     record: StageRecord,
     extraItems: readonly Item[] = [],
   ): EvaluationSnapshot {
+    const bounds = record.boundarySnapshot;
     const universe = new Map<string, Item>();
     const enqueueItem = (it: Item): void => {
       const k = itemKey(it);
@@ -598,8 +612,11 @@ export class InquiryEngine {
         enqueueItem(sub);
       }
       if (it.kind === "forall" || it.kind === "exists") {
-        for (const h of this.boundaries.handlesOf(it.domain)) {
+        for (const h of bounds.handlesOf(it.domain)) {
           enqueueItem(substituteHandle(it.body, it.variable, h.id));
+          if (it.domainConstraint !== undefined) {
+            enqueueItem(substituteHandle(it.domainConstraint, it.variable, h.id));
+          }
         }
       }
     };
@@ -618,7 +635,7 @@ export class InquiryEngine {
       if (!Number.isInteger(it.reflectedLevel) || it.reflectedLevel < computeItemLevel(it.targetItem)) {
         continue;
       }
-      if (!this.#isDefinedNonEmptyBoundary(it.targetBoundary)) {
+      if (!this.#isDefinedNonEmptyBoundary(bounds, it.targetBoundary)) {
         continue;
       }
       const priorRecord = this.#stageArchive.get(it.targetStage);
@@ -643,7 +660,7 @@ export class InquiryEngine {
       return prov.baseLeaves;
     };
 
-    const nonEmptyB = this.boundaries.nonEmptyBoundaries();
+    const nonEmptyB = bounds.nonEmptyBoundaries();
     const bot = bottom();
 
     type ClosurePassResult = {
@@ -831,7 +848,7 @@ export class InquiryEngine {
           const colB = c.slice(0, sep);
           const colKey = c.slice(sep + 1);
           for (const b of nonEmptyB) {
-            if (this.boundaries.refines(colB, b)) {
+            if (bounds.refines(colB, b)) {
               obstructed.add(`${b}\0${colKey}`);
             }
           }
@@ -839,6 +856,18 @@ export class InquiryEngine {
         const liveIds = computeAuthorized(obstructed);
         return { collisions, obstructed, liveIds };
       };
+
+      // Seed structural congruence reflexivity t ≈_B t for admissible handles referenced in universe
+      for (const it of universe.values()) {
+        if (
+          it.kind === "equiv" &&
+          it.left === it.right &&
+          this.#isDefinedNonEmptyBoundary(bounds, it.boundary) &&
+          bounds.isAdmissibleHandle(it.boundary, it.left)
+        ) {
+          addEntry(it.boundary, "+", it, { kind: "structural", rule: "equiv-refl" });
+        }
+      }
 
       // 2. Fixpoint closure over all UL-Core rules gated against definitively obstructed slots.
       for (let iter = 0; iter < 64; iter++) {
@@ -848,7 +877,7 @@ export class InquiryEngine {
 
         // A) Symmetric downward heredity (for both + and -)
         for (const e of snapshotList) {
-          for (const sub of this.boundaries.nonEmptySubBoundaries(e.boundary)) {
+          for (const sub of bounds.nonEmptySubBoundaries(e.boundary)) {
             if (sub !== e.boundary) {
               addEntry(sub, e.polarity, e.item, makeDerived("down", [e.entryId]));
             }
@@ -930,7 +959,7 @@ export class InquiryEngine {
                 }
               }
               // D2: Cover-Witnessed Disjunction across finitary witnessed covers of b
-              for (const cover of this.boundaries.witnessedCoversOf(b)) {
+              for (const cover of bounds.witnessedCoversOf(b)) {
                 const cellDeps: string[] = [];
                 let covered = true;
                 for (const cell of cover) {
@@ -948,35 +977,103 @@ export class InquiryEngine {
                 }
               }
             } else if (it.kind === "forall") {
-              const handles = this.boundaries.handlesOf(it.domain);
+              const handles = bounds.handlesOf(it.domain);
+              const domCons = it.domainConstraint;
+              const liveAllList = liveByBPolKey.get(slotKey(b, "+", k)) ?? [];
               for (const h of handles) {
-                const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
-                  addEntry(b, "-", it, makeDerived("forall-counter", [negInst.entryId]));
+                const instItem = substituteHandle(it.body, it.variable, h.id);
+                const instK = itemKey(instItem);
+                const deltaK =
+                  domCons !== undefined
+                    ? itemKey(substituteHandle(domCons, it.variable, h.id))
+                    : undefined;
+                const liveDelta =
+                  deltaK !== undefined
+                    ? liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0]
+                    : undefined;
+                if (deltaK === undefined) {
+                  for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
+                    addEntry(b, "-", it, makeDerived("forall-counter", [negInst.entryId]));
+                  }
+                  for (const la of liveAllList) {
+                    addEntry(b, "+", instItem, makeDerived("forall-elim", [la.entryId]));
+                  }
+                } else if (liveDelta !== undefined) {
+                  for (const negInst of entriesByBPolKey.get(slotKey(b, "-", instK)) ?? []) {
+                    addEntry(
+                      b,
+                      "-",
+                      it,
+                      makeDerived("forall-counter", [liveDelta.entryId, negInst.entryId]),
+                    );
+                  }
+                  for (const la of liveAllList) {
+                    addEntry(
+                      b,
+                      "+",
+                      instItem,
+                      makeDerived("forall-elim", [la.entryId, liveDelta.entryId]),
+                    );
+                  }
                 }
               }
               if (handles.length > 0) {
                 const allDeps: string[] = [];
                 let allOk = true;
+                let hasAdmissible = deltaKCheck(domCons);
                 for (const h of handles) {
                   const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                  const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
-                  if (liveInst === undefined) {
-                    allOk = false;
-                    break;
+                  if (domCons !== undefined) {
+                    const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
+                    const negDelta = liveByBPolKey.get(slotKey(b, "-", deltaK))?.[0];
+                    if (negDelta !== undefined) {
+                      allDeps.push(negDelta.entryId);
+                      continue;
+                    }
+                    const posDelta = liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0];
+                    const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
+                    if (posDelta === undefined || liveInst === undefined) {
+                      allOk = false;
+                      break;
+                    }
+                    hasAdmissible = true;
+                    allDeps.push(posDelta.entryId, liveInst.entryId);
+                  } else {
+                    const liveInst = liveByBPolKey.get(slotKey(b, "+", instK))?.[0];
+                    if (liveInst === undefined) {
+                      allOk = false;
+                      break;
+                    }
+                    allDeps.push(liveInst.entryId);
                   }
-                  allDeps.push(liveInst.entryId);
                 }
-                if (allOk) {
+                if (allOk && hasAdmissible) {
                   addEntry(b, "+", it, makeDerived("forall-generic", allDeps));
                 }
               }
             } else if (it.kind === "exists") {
-              const handles = this.boundaries.handlesOf(it.domain);
+              const handles = bounds.handlesOf(it.domain);
+              const domCons = it.domainConstraint;
               for (const h of handles) {
                 const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
-                for (const posInst of entriesByBPolKey.get(slotKey(b, "+", instK)) ?? []) {
-                  addEntry(b, "+", it, makeDerived("exists-intro", [posInst.entryId]));
+                const livePosList = liveByBPolKey.get(slotKey(b, "+", instK)) ?? [];
+                if (domCons === undefined) {
+                  for (const posInst of livePosList) {
+                    addEntry(b, "+", it, makeDerived("exists-intro", [posInst.entryId]));
+                  }
+                } else {
+                  const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
+                  const liveDelta = liveByBPolKey.get(slotKey(b, "+", deltaK))?.[0];
+                  if (liveDelta !== undefined) {
+                    for (const posInst of livePosList) {
+                      addEntry(
+                        b,
+                        "+",
+                        it,
+                        makeDerived("exists-intro", [liveDelta.entryId, posInst.entryId]),
+                      );
+                    }
+                  }
                 }
               }
               if (handles.length > 0) {
@@ -985,6 +1082,14 @@ export class InquiryEngine {
                 for (const h of handles) {
                   const instK = itemKey(substituteHandle(it.body, it.variable, h.id));
                   const negInst = liveByBPolKey.get(slotKey(b, "-", instK))?.[0];
+                  if (domCons !== undefined) {
+                    const deltaK = itemKey(substituteHandle(domCons, it.variable, h.id));
+                    const negDelta = liveByBPolKey.get(slotKey(b, "-", deltaK))?.[0];
+                    if (negDelta !== undefined) {
+                      allNegDeps.push(negDelta.entryId);
+                      continue;
+                    }
+                  }
                   if (negInst === undefined) {
                     allNeg = false;
                     break;
@@ -1013,7 +1118,7 @@ export class InquiryEngine {
             if (ant.polarity !== "+" || ant.key !== antK) {
               continue;
             }
-            const meetB = this.boundaries.meet(ant.boundary, imp.boundary);
+            const meetB = bounds.meet(ant.boundary, imp.boundary);
             if (meetB !== BOT_BOUNDARY) {
               addEntry(
                 meetB,
@@ -1064,7 +1169,7 @@ export class InquiryEngine {
         for (const inc of record.incompatibilities) {
           const lk = itemKey(inc.left);
           const rk = itemKey(inc.right);
-          for (const b of this.boundaries.nonEmptySubBoundaries(inc.boundary)) {
+          for (const b of bounds.nonEmptySubBoundaries(inc.boundary)) {
             for (const la of liveByBPolKey.get(slotKey(b, "+", lk)) ?? []) {
               addEntry(
                 b,
@@ -1119,20 +1224,46 @@ export class InquiryEngine {
           }
         }
 
-        // G) Boundary-Scoped Congruence ≈_B (native relations only!)
+        // G) Boundary-Scoped Congruence ≈_B (symmetry, transitivity, and native relation substitution)
         for (const eq of liveAll) {
           if (eq.polarity !== "+" || eq.item.kind !== "equiv") {
             continue;
           }
           const eqB = eq.item.boundary;
-          if (!this.boundaries.refines(eq.boundary, eqB) && eq.boundary !== eqB) {
+          if (!bounds.refines(eq.boundary, eqB) && eq.boundary !== eqB) {
             continue;
+          }
+          if (eq.item.left !== eq.item.right) {
+            addEntry(
+              eq.boundary,
+              "+",
+              equiv(eqB, eq.item.right, eq.item.left),
+              makeDerived("equiv-sym", [eq.entryId]),
+            );
+          }
+          for (const eq2 of liveAll) {
+            if (
+              eq2.entryId !== eq.entryId &&
+              eq2.boundary === eq.boundary &&
+              eq2.polarity === "+" &&
+              eq2.item.kind === "equiv" &&
+              eq2.item.boundary === eqB &&
+              eq.item.right === eq2.item.left &&
+              eq.item.left !== eq2.item.right
+            ) {
+              addEntry(
+                eq.boundary,
+                "+",
+                equiv(eqB, eq.item.left, eq2.item.right),
+                makeDerived("equiv-trans", [eq.entryId, eq2.entryId]),
+              );
+            }
           }
           for (const target of liveAll) {
             if (target.boundary !== eq.boundary || target.item.kind !== "atom") {
               continue;
             }
-            if (!this.boundaries.hasNativeRelation(eqB, target.item.relation)) {
+            if (!bounds.hasNativeRelation(eqB, target.item.relation)) {
               continue;
             }
             const leftVal = eq.item.left;
@@ -1186,7 +1317,7 @@ export class InquiryEngine {
         for (const it of universe.values()) {
           const ik = itemKey(it);
           for (const b of nonEmptyB) {
-            for (const cover of this.boundaries.witnessedCoversOf(b)) {
+            for (const cover of bounds.witnessedCoversOf(b)) {
               if (cover.length === 1 && cover[0] === b) {
                 continue;
               }
@@ -1328,7 +1459,7 @@ export class InquiryEngine {
           const subSep = sSub.indexOf("\0");
           const bSub = sSub.slice(0, subSep);
           const kSub = sSub.slice(subSep + 1);
-          if (kSub === k && bSub !== b && this.boundaries.refines(bSub, b)) {
+          if (kSub === k && bSub !== b && bounds.refines(bSub, b)) {
             adj.get(sSub)?.add(s);
           }
         }
@@ -1401,12 +1532,12 @@ export class InquiryEngine {
     this.#captureStage();
   }
 
-  #isDefinedNonEmptyBoundary(boundary: string): boolean {
+  #isDefinedNonEmptyBoundary(bounds: BoundarySystem, boundary: string): boolean {
     if (boundary === BOT_BOUNDARY) {
       return false;
     }
     try {
-      return this.boundaries.refines(boundary, boundary);
+      return bounds.refines(boundary, boundary);
     } catch {
       return false;
     }
@@ -1420,6 +1551,7 @@ export class InquiryEngine {
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
       trackedItems: new Map(this.#trackedItems),
+      boundarySnapshot: this.boundaries.clone(),
     });
   }
 
@@ -1437,6 +1569,10 @@ export class InquiryEngine {
 
 function slotKey(boundary: string, polarity: Polarity, key: string): string {
   return `${boundary}\0${polarity}\0${key}`;
+}
+
+function deltaKCheck(domCons: Item | undefined): boolean {
+  return domCons === undefined;
 }
 
 /** Tarjan strongly connected components restricted to those with zero external incoming edges. */

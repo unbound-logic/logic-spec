@@ -103,8 +103,63 @@ export function evaluateClassicalSpecialization(
   if (boundary === BOT_BOUNDARY) {
     return { ok: false, reason: `Cannot evaluate UL-Classical on "${BOT_BOUNDARY}".` };
   }
+  if (!engine.monotoneOnly) {
+    return { ok: false, reason: "UL-Classical requires a frozen/monotone Σ (monotoneOnly: true)." };
+  }
 
-  const snap = engine.evaluate([...atoms, ...queryItems]);
+  const groundAtomMap = new Map<string, Item>();
+  const collectGroundAtoms = (item: Item): string | undefined => {
+    switch (item.kind) {
+      case "atom":
+      case "equiv": {
+        const k = itemKey(item);
+        if (!groundAtomMap.has(k)) {
+          groundAtomMap.set(k, item);
+        }
+        return undefined;
+      }
+      case "bottom":
+        return undefined;
+      case "flip":
+        return collectGroundAtoms(item.inner);
+      case "and":
+      case "or":
+        return collectGroundAtoms(item.left) ?? collectGroundAtoms(item.right);
+      case "implies":
+        return collectGroundAtoms(item.antecedent) ?? collectGroundAtoms(item.consequent);
+      case "forall":
+      case "exists": {
+        for (const h of engine.boundaries.handlesOf(item.domain)) {
+          const bodyErr = collectGroundAtoms(substituteHandle(item.body, item.variable, h.id));
+          if (bodyErr !== undefined) {
+            return bodyErr;
+          }
+          if (item.domainConstraint !== undefined) {
+            const consErr = collectGroundAtoms(
+              substituteHandle(item.domainConstraint, item.variable, h.id),
+            );
+            if (consErr !== undefined) {
+              return consErr;
+            }
+          }
+        }
+        return undefined;
+      }
+      case "refl":
+      case "ref":
+        return `UL-Classical requires level n = 0 closed formulas; found "${item.kind}".`;
+    }
+  };
+
+  for (const it of [...atoms, ...queryItems]) {
+    const err = collectGroundAtoms(it);
+    if (err !== undefined) {
+      return { ok: false, reason: err };
+    }
+  }
+  const allGroundAtoms = [...groundAtomMap.values()];
+
+  const snap = engine.evaluate([...atoms, ...queryItems, ...allGroundAtoms]);
   if (!snap.isCollisionFree()) {
     return { ok: false, reason: "UL-Classical requires No-Gluts (zero collisions)." };
   }
@@ -120,9 +175,9 @@ export function evaluateClassicalSpecialization(
     };
   }
 
-  // Enforce No-Gaps on all base atoms in every atomic cell B*_i.
+  // Enforce No-Gaps on all base atoms and congruences reachable across atoms and queryItems.
   for (const cell of atomicCover) {
-    for (const a of atoms) {
+    for (const a of allGroundAtoms) {
       const st = snap.statusOf(cell, a);
       if (st === "Open") {
         return {
@@ -133,55 +188,78 @@ export function evaluateClassicalSpecialization(
     }
   }
 
+  let conflictReason: string | undefined;
   const evalOnAtomicCell = (cell: string, item: Item): Polarity => {
+    const checkConsistent = (pol: Polarity): Polarity => {
+      const st = snap.statusOf(cell, item);
+      if ((st === "Grounded" && pol === "-") || (st === "Excluded" && pol === "+")) {
+        conflictReason ??= `UL-Classical valuation of "${itemKey(item)}" (${pol}) conflicts with existing "${st}" ground on atomic cell "${cell}".`;
+      }
+      return pol;
+    };
+
     switch (item.kind) {
       case "atom": {
         const st = snap.statusOf(cell, item);
-        return st === "Grounded" ? "+" : "-";
+        return checkConsistent(st === "Grounded" ? "+" : "-");
       }
       case "bottom":
-        return "-";
+        return checkConsistent("-");
       case "equiv": {
         const st = snap.statusOf(cell, item);
-        return st === "Grounded" ? "+" : "-";
+        return checkConsistent(st === "Grounded" ? "+" : "-");
       }
       case "flip":
-        return evalOnAtomicCell(cell, item.inner) === "+" ? "-" : "+";
+        return checkConsistent(evalOnAtomicCell(cell, item.inner) === "+" ? "-" : "+");
       case "and":
-        return evalOnAtomicCell(cell, item.left) === "+" &&
-          evalOnAtomicCell(cell, item.right) === "+"
-          ? "+"
-          : "-";
+        return checkConsistent(
+          evalOnAtomicCell(cell, item.left) === "+" && evalOnAtomicCell(cell, item.right) === "+"
+            ? "+"
+            : "-",
+        );
       case "or":
-        return evalOnAtomicCell(cell, item.left) === "+" ||
-          evalOnAtomicCell(cell, item.right) === "+"
-          ? "+"
-          : "-";
+        return checkConsistent(
+          evalOnAtomicCell(cell, item.left) === "+" || evalOnAtomicCell(cell, item.right) === "+"
+            ? "+"
+            : "-",
+        );
       case "implies": {
-        // UL-Core: -(A → C) ⇔ +A ∧ -C; No-Gaps closes non-refuted conditionals to +(A → C).
+        // Under atomic-generated No-Gaps + No-Gluts closure, non-refuted conditionals close to +.
         const ant = evalOnAtomicCell(cell, item.antecedent);
         const con = evalOnAtomicCell(cell, item.consequent);
-        return ant === "+" && con === "-" ? "-" : "+";
+        return checkConsistent(ant === "+" && con === "-" ? "-" : "+");
       }
       case "forall": {
         const handles = engine.boundaries.handlesOf(item.domain);
         for (const h of handles) {
+          if (item.domainConstraint !== undefined) {
+            const cInst = substituteHandle(item.domainConstraint, item.variable, h.id);
+            if (evalOnAtomicCell(cell, cInst) === "-") {
+              continue;
+            }
+          }
           const inst = substituteHandle(item.body, item.variable, h.id);
           if (evalOnAtomicCell(cell, inst) === "-") {
-            return "-";
+            return checkConsistent("-");
           }
         }
-        return "+";
+        return checkConsistent("+");
       }
       case "exists": {
         const handles = engine.boundaries.handlesOf(item.domain);
         for (const h of handles) {
+          if (item.domainConstraint !== undefined) {
+            const cInst = substituteHandle(item.domainConstraint, item.variable, h.id);
+            if (evalOnAtomicCell(cell, cInst) === "-") {
+              continue;
+            }
+          }
           const inst = substituteHandle(item.body, item.variable, h.id);
           if (evalOnAtomicCell(cell, inst) === "+") {
-            return "+";
+            return checkConsistent("+");
           }
         }
-        return "-";
+        return checkConsistent("-");
       }
       case "refl":
       case "ref":
@@ -196,6 +274,9 @@ export function evaluateClassicalSpecialization(
     const cellPolarities = new Map<string, Polarity>();
     for (const cell of atomicCover) {
       cellPolarities.set(cell, evalOnAtomicCell(cell, q));
+    }
+    if (conflictReason !== undefined) {
+      return { ok: false, reason: conflictReason };
     }
     const values = [...cellPolarities.values()];
     const pol: GlobalCoverStatus = values.every((p) => p === "+")

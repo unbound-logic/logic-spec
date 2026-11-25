@@ -51,6 +51,43 @@ export class BoundarySystem {
     this.#handles.set(BOT_BOUNDARY, new Map());
   }
 
+  /** Create a deep independent snapshot copy of the current BoundarySystem. */
+  clone(): BoundarySystem {
+    const copy = new BoundarySystem();
+    copy.#defined.clear();
+    for (const id of this.#defined) {
+      copy.#defined.add(id);
+    }
+    copy.#parents.clear();
+    for (const [id, ps] of this.#parents) {
+      copy.#parents.set(id, new Set(ps));
+    }
+    copy.#disjointPairs.clear();
+    for (const dp of this.#disjointPairs) {
+      copy.#disjointPairs.add(dp);
+    }
+    copy.#explicitMeets.clear();
+    for (const [k, m] of this.#explicitMeets) {
+      copy.#explicitMeets.set(k, m);
+    }
+    copy.#nativeRelations.clear();
+    for (const [id, rels] of this.#nativeRelations) {
+      copy.#nativeRelations.set(id, new Set(rels));
+    }
+    copy.#handles.clear();
+    for (const [id, hm] of this.#handles) {
+      copy.#handles.set(id, new Map(hm));
+    }
+    copy.#registeredCovers.clear();
+    for (const [target, coverList] of this.#registeredCovers) {
+      copy.#registeredCovers.set(
+        target,
+        coverList.map((cells) => [...cells]),
+      );
+    }
+    return copy;
+  }
+
   /** Register a new Domain Boundary into the semilattice. */
   defineBoundary(id: string, config: BoundaryConfig = {}): void {
     if (id === TOP_BOUNDARY || id === BOT_BOUNDARY) {
@@ -62,6 +99,23 @@ export class BoundarySystem {
     const parentList = config.parents ?? [TOP_BOUNDARY];
     for (const p of parentList) {
       this.#assertDefined(p);
+    }
+    for (let i = 0; i < parentList.length; i++) {
+      const pi = parentList[i];
+      if (pi === undefined) {
+        continue;
+      }
+      if (pi === BOT_BOUNDARY) {
+        throw new Error(`Non-empty boundary "${id}" cannot have "${BOT_BOUNDARY}" as a parent.`);
+      }
+      for (let j = i + 1; j < parentList.length; j++) {
+        const pj = parentList[j];
+        if (pj !== undefined && this.#hasDisjointAncestors(pi, pj)) {
+          throw new Error(
+            `Cannot define non-empty boundary "${id}" under disjoint parents "${pi}" and "${pj}".`,
+          );
+        }
+      }
     }
 
     this.#defined.add(id);
@@ -106,6 +160,25 @@ export class BoundarySystem {
     if (a === b && a !== BOT_BOUNDARY) {
       throw new Error(`Non-empty boundary "${a}" cannot be disjoint from itself.`);
     }
+    if (a !== BOT_BOUNDARY && b !== BOT_BOUNDARY) {
+      if (this.refines(a, b) || this.refines(b, a)) {
+        throw new Error(`Cannot declare "${a}" and "${b}" disjoint because one refines the other.`);
+      }
+      const explicitMeet = this.#explicitMeets.get(pairKey(a, b));
+      if (explicitMeet !== undefined && explicitMeet !== BOT_BOUNDARY) {
+        throw new Error(
+          `Cannot declare "${a}" and "${b}" disjoint: explicit non-empty meet "${explicitMeet}" is registered.`,
+        );
+      }
+      const common = [...this.#defined].filter(
+        (c) => c !== BOT_BOUNDARY && this.refines(c, a) && this.refines(c, b),
+      );
+      if (common.length > 0) {
+        throw new Error(
+          `Cannot declare "${a}" and "${b}" disjoint: common non-empty sub-boundaries [${common.join(", ")}] exist.`,
+        );
+      }
+    }
     this.#disjointPairs.add(pairKey(a, b));
   }
 
@@ -116,6 +189,11 @@ export class BoundarySystem {
     this.#assertDefined(meetId);
     if (!this.refines(meetId, a) || !this.refines(meetId, b)) {
       throw new Error(`Meet "${meetId}" must refine both "${a}" and "${b}".`);
+    }
+    if (meetId !== BOT_BOUNDARY && this.#hasDisjointAncestors(a, b)) {
+      throw new Error(
+        `Cannot register non-empty meet "${meetId}" for disjoint boundaries "${a}" and "${b}".`,
+      );
     }
     this.#explicitMeets.set(pairKey(a, b), meetId);
   }
@@ -373,6 +451,17 @@ export class BoundarySystem {
     if (!this.#defined.has(boundary)) {
       throw new Error(`Unknown boundary "${boundary}".`);
     }
+  }
+
+  #hasDisjointAncestors(a: string, b: string): boolean {
+    for (const x of this.#ancestorsOf(a)) {
+      for (const y of this.#ancestorsOf(b)) {
+        if (this.#disjointPairs.has(pairKey(x, y))) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   #ancestorsOf(b: string): Set<string> {
