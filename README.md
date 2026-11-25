@@ -26,6 +26,7 @@ The executable TypeScript reference kernel (`src/`) and test suite (`test/`) run
 - `test/deduction.test.ts` — Standalone `Cover-Gluing`, `→I` combinators & anti-vacuity, open-domain `∀I`/`∃E` eigenvariable checks, and `UL-Minimal` vs. `UL-Intuitionistic` tests.
 - `test/reflection.test.ts` — Immutable stage archive traces, nested `Refl_k@Σ_t` meta-reasoning, Vector 2 operational Curry immunity, and `refl-intro` stratification tests.
 - `test/specializations.test.ts` — Four-tier specialization and classical `2`/`2^k` recovery derivations (`4A`–`4C`).
+- `test/property-fuzz.test.ts` — Deterministic seeded property-based fuzzing suite (`Mulberry32`, configurable via `UL_FUZZ_SEED` / `UL_FUZZ_MULTIPLIER`) stress-testing `MT-1`–`MT-9` across semilattice/cover axioms, biased `G-15` conflict graphs, disjoint survival, stage-archive reflection, capture-avoiding substitution & deduction constraints, `UL-Classical` `2`/`2^k` recovery, and `M1`/`M2` anti-immunization.
 
 ## Verification
 
@@ -39,7 +40,7 @@ npm run verify
 `npm run verify` runs six sequential gates declared in `package.json`:
 
 1. `npm run typecheck` — Erasable TypeScript check (`tsc --noEmit`).
-2. `npm test` — Node test runner executing all six adversarial suites in `test/`.
+2. `npm test` — Node test runner executing all seven adversarial suites in `test/`.
 3. `npm run spec-graph` — Verifies specification graph links, `README.md` orientation paths/commands, and `docs/design-review.md` registers.
 4. `npm run spec-guard` — Runs all `@assert-count` assertions binding `spec/core.md`, `spec/worked-examples.md`, and `spec/metatheory.md` to executable tests.
 5. `npm run spec-guard:prove` — Mutation/fault-injection proof verifying every `@assert-count` rule catches failing implementations.
