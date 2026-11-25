@@ -171,6 +171,9 @@ export class BoundarySystem {
     }
     if (meetId === BOT_BOUNDARY) {
       this.#assertCanBeDisjoint(a, b);
+      if (a !== BOT_BOUNDARY && b !== BOT_BOUNDARY) {
+        this.#disjointPairs.add(pairKey(a, b));
+      }
     } else if (this.#hasDisjointAncestors(a, b)) {
       throw new Error(
         `Cannot register non-empty meet "${meetId}" for disjoint boundaries "${a}" and "${b}".`,

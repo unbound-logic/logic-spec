@@ -534,7 +534,8 @@ export class InquiryEngine {
 
     // M1(iii) Independent Excess-Content Witness (Anti-Proxy Guard):
     // When contingent handles are excised, reject vacuous sub-boundaries and require at least one
-    // non-refuted surviving handle u in toBoundary where δ(u) carries a Live (+ or -) witness.
+    // non-refuted surviving handle u in toBoundary where δ(u) carries a Live (+) witness
+    // (and no surviving handle witnesses Live (-)).
     const fromHandles = this.boundaries.handlesOf(req.fromBoundary);
     const toHandleIds = new Set(this.boundaries.handlesOf(req.toBoundary).map((h) => h.id));
     const removedContingent = fromHandles.filter(
