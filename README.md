@@ -4,6 +4,7 @@ Living specification for an end-to-end logic system (`UL-Core`) designed from fi
 
 ## Reading Map
 
+- **[`unbound-logic` charter](https://github.com/unbound-logic/.github/blob/main/CHARTER.md)** — Organization-wide design principles, each with the ratified decisions it rests on.
 - **[AGENTS.md](AGENTS.md)** — Epistemic stance, five reasoning guardrails (Anti-Inertia Audit, Constructive Socratic Challenge, Terminology Hygiene, Anti-Triviality Test, Claim Status Ladder), language split, and workflow rules.
 - **[spec/core.md](spec/core.md)** — Normative formal specification of `UL-Core` (v0.2.0; each item labelled `Exploratory`, `Decided`, `Tested`, or `Proved`): role-indexed content grammar (`G3`), boundary meet-semilattice & finitary covers, inquiry state transitions (`M1`, `M2`, `Retract`), dual-polarity provenance calculus, Quarantine, Curry Paradox firewall, and the four-tier specialization spectrum (`UL-Core` ⊃ `UL-Minimal` ⊃ `UL-Intuitionistic` ⊃ `UL-Classical`, the last restricted to finite domains).
 - **[spec/worked-examples.md](spec/worked-examples.md)** — Step-by-step formal derivations and adversarial stress-tests exercising `spec/core.md` across multi-regime collision/quarantine, `M1` & `M2` anti-immunization, Curry attacks, and classical recovery.
