@@ -52,8 +52,8 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      Observe⁺(B_1atm, Rule_broad, w₁')
      Observe⁺(B_1atm, ∀(p : B_1atm) (HeatedAt(p) → BoilsAt(p)), w₄')
      ```
-     - **M1 Check**: `δ(p) := Pressure(p, 1atm)` is non-circular (does not mention `Boils`) and structurally definable (physical regime parameter). Admissible.
-     - **M2 Check**: `(B_all, Gen_all)` stays recorded as **`Excluded (-)`** (never erased), while `∀(p : B_1atm) (Heat100(p) → Boils(p))` is **`Grounded (+)`** with explicit narrowing provenance, discharging `O_rev`.
+     - **M1 Check**: `δ(p) := Pressure(p, 1atm)` is non-circular (does not mention `BoilsAt`) and structurally definable (physical regime parameter). Admissible.
+     - **M2 Check**: `(B_all, Gen_all)` stays recorded as **`Excluded (-)`** (never erased), while `∀(p : B_1atm) (HeatedAt(p) → BoilsAt(p))` is **`Grounded (+)`** with explicit narrowing provenance, discharging `O_rev`.
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Boiling-point multi-regime collision, selective quarantine, and M2 non-erasure are verified" -->
 
 ---
