@@ -7,7 +7,7 @@ import {
   verifyIntuitionisticSpecialization,
   verifyMinimalSpecialization,
 } from "../src/specializations.ts";
-import { and, atom, equiv, exists, flip, forall, implies, itemKey, or } from "../src/syntax.ts";
+import { and, atom, bottom, equiv, exists, flip, forall, implies, itemKey, or } from "../src/syntax.ts";
 
 function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   // Tier 2 & 3: UL-Minimal & UL-Intuitionistic (monotoneOnly + No-Gluts)
@@ -225,6 +225,19 @@ function test_classical_specialization_guards_compound_exclusions_nogaps_and_fro
     assert.equal(resDom.results.get(itemKey(constrainedForall))?.polarity, "+");
     assert.equal(resDom.results.get(itemKey(constrainedExists))?.polarity, "-");
   }
+
+  // 5. Priority 2 Cleanup #1: conflict detected on negCollapseEquivalent of the LAST query item q
+  const eLastImposs = new InquiryEngine(b, { monotoneOnly: true });
+  const qAtom = atom("Q_Last");
+  eLastImposs.observeNegative("B_star", qAtom, "w_nq");
+  eLastImposs.observeNegative("B_star", implies(qAtom, bottom()), "w_nimp_bot");
+  const resLastConflict = evaluateClassicalSpecialization(
+    eLastImposs,
+    "B_star",
+    [qAtom],
+    [qAtom],
+  );
+  assert.equal(resLastConflict.ok, false);
 }
 
 test("four-tier deductive spectrum and classical recovery", test_four_tier_deductive_spectrum_and_classical_recovery);

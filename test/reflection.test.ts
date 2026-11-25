@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { BoundarySystem } from "../src/boundary.ts";
 import { verifyDerivation } from "../src/deduction.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { atom, implies, refl, reflStatus } from "../src/syntax.ts";
+import { atom, forall, implies, refl, reflStatus } from "../src/syntax.ts";
 
 function test_cross_stage_reflection_trace_and_historical_immutability(): void {
   const b = new BoundarySystem();
@@ -157,9 +157,77 @@ function test_stage_archive_isolates_historical_boundary_and_cover_mutations(): 
   assert.equal(engine.evaluate([reflAt2]).statusOf("B", reflAt2), "Excluded");
 }
 
+function test_cross_stage_reflection_rejects_post_stage_boundaries(): void {
+  // 1. Bug C: Boundaries created AFTER stage t must not be hallucinated or crash evaluation at Σ_t
+  const b = new BoundarySystem();
+  b.defineBoundary("B", { nativeRelations: ["P"] });
+  const engine = new InquiryEngine(b);
+  const a = atom("A");
+  engine.observePositive("B", a, "w_a"); // Σ1 (B_new does NOT exist yet!)
+
+  b.defineBoundary("B_new", { nativeRelations: ["P"] });
+  engine.observePositive("B", atom("Tick"), "w_tick"); // Σ2 (B_new exists in Σ2, not Σ1)
+
+  const reflHalluc = reflStatus(0, 1, "B_new", a, "Open");
+  const snapHalluc = engine.evaluate([reflHalluc]);
+  assert.equal(snapHalluc.statusOf("B", reflHalluc), "Open");
+
+  const deductHalluc = verifyDerivation(engine, {
+    kind: "refl-intro",
+    boundary: "B",
+    reflItem: reflHalluc,
+  });
+  assert.equal(deductHalluc.ok, false);
+  if (!deductHalluc.ok) {
+    assert.equal(deductHalluc.violation, "invalid-boundary");
+  }
+
+  const reflInnerDomain = refl(
+    0,
+    "B",
+    "+",
+    forall("x", "B_new", atom("P", [{ role: "arg", handle: "x" }])),
+    1,
+  );
+  const snapNoCrash = engine.evaluate([reflInnerDomain]);
+  assert.equal(snapNoCrash.statusOf("B", reflInnerDomain), "Open");
+
+  const deductInnerDomain = verifyDerivation(engine, {
+    kind: "refl-intro",
+    boundary: "B",
+    reflItem: reflInnerDomain,
+  });
+  assert.equal(deductInnerDomain.ok, false);
+  if (!deductInnerDomain.ok) {
+    assert.equal(deductInnerDomain.violation, "invalid-boundary");
+  }
+
+  // 2. Priority 2 Cleanup #2: witnessCover vertical transition advances stage and isolates history
+  const bCov = new BoundarySystem();
+  bCov.defineBoundary("B");
+  bCov.defineBoundary("B1", { parents: ["B"] });
+  bCov.defineBoundary("B2", { parents: ["B"] });
+  bCov.declareDisjoint("B1", "B2");
+  const eCov = new InquiryEngine(bCov);
+  const p = atom("P");
+  eCov.observePositive("B1", p, "w_b1"); // Σ1
+  eCov.observePositive("B2", p, "w_b2"); // Σ2
+  eCov.witnessCover("B", ["B1", "B2"]); // Σ3
+
+  assert.equal(eCov.stage, 3);
+  assert.match(eCov.transitionLog[2] ?? "", /WitnessCover/);
+  assert.equal(eCov.evaluateAtStage(2, [p]).statusOf("B", p), "Open");
+  assert.equal(eCov.evaluate([p]).statusOf("B", p), "Grounded");
+  assert.equal(eCov.evaluateAtStage(3, [p]).statusOf("B", p), "Grounded");
+}
+
 test("cross-stage reflection trace and historical immutability", test_cross_stage_reflection_trace_and_historical_immutability);
 test("cross-stage reflection Curry immunity and deduction stratification", test_cross_stage_reflection_curry_immunity_and_deduction_stratification);
 test(
   "stage archive isolates historical boundary and cover mutations",
   test_stage_archive_isolates_historical_boundary_and_cover_mutations,
+);
+test(
+  "cross-stage reflection rejects post-stage boundaries",
+  test_cross_stage_reflection_rejects_post_stage_boundaries,
 );

@@ -514,6 +514,8 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   bSem2.defineBoundary("Q");
   bSem2.defineBoundary("PQ", { parents: ["P", "Q"] });
   assert.throws(() => bSem2.declareDisjoint("P", "Q"), /common|meet|disjoint|refine/i);
+  assert.throws(() => bSem2.defineMeet("P", "Q", BOT_BOUNDARY), /common|meet|disjoint|refine/i);
+  assert.throws(() => bSem2.defineMeet("P", "PQ", BOT_BOUNDARY), /refine|disjoint/i);
 
   const bSem3 = new BoundarySystem();
   bSem3.defineBoundary("X");

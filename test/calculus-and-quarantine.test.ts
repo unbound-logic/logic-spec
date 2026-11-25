@@ -100,10 +100,10 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
   b.declareDisjoint("B_1atm", "B_2atm");
 
   const engine = new InquiryEngine(b);
-  const heatAt = (p: string) => atom("Heat100", [{ role: "pressure", handle: p }]);
-  const boilsAt = (p: string) => atom("Boils", [{ role: "pressure", handle: p }]);
-  const heat100 = heatAt("1atm");
-  const boils = boilsAt("1atm");
+  const heat100 = atom("Heat100", [{ role: "substance", handle: "h2o" }]);
+  const boils = atom("Boils", [{ role: "substance", handle: "h2o" }]);
+  const heatAt = (p: string) => atom("HeatedAt", [{ role: "pressure", handle: p }]);
+  const boilsAt = (p: string) => atom("BoilsAt", [{ role: "pressure", handle: p }]);
   const cook = atom("Cook", [{ role: "item", handle: "pasta" }]);
   const ruleBroad = implies(heat100, boils);
   const ruleCook = implies(boils, cook);
@@ -119,8 +119,8 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
 
   const snap0 = engine.evaluate([cook, genAll]);
   assert.equal(snap0.isCollisionFree(), true);
-  assert.equal(snap0.liveGrounds("B_1atm", "+", boils).length, 4); // overbroad derivations via w1 / w4 plus independent local w_emp
-  assert.equal(snap0.liveGrounds("B_1atm", "+", cook).length, 4);
+  assert.equal(snap0.liveGrounds("B_1atm", "+", boils).length, 2); // π1 (via w1) and π2 (w_emp)
+  assert.equal(snap0.liveGrounds("B_1atm", "+", cook).length, 2);
 
   // Stage Σ1: Counterexample at 2 atm
   engine.observePositive("B_2atm", heat100, "w5");
@@ -519,6 +519,77 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snapCycle.allGrounds("B", "+", y).length, 0);
   assert.equal(snapCycle.statusOf("B", y), "Excluded");
   assert.equal(snapCycle.isLive("B", "-", y), true);
+
+  // Part C (Bug B): Reverse conditional +(Y → C) must NOT hijack {A, C, Y} into a single source SCC
+  const eRevC = new InquiryEngine(b);
+  eRevC.addIncompatibility("B", a, c);
+  eRevC.observePositive("B", a, "wa");
+  eRevC.observePositive("B", c, "wc");
+  eRevC.observePositive("B", implies(a, x), "wax");
+  eRevC.observePositive("B", implies(x, y), "wxy");
+  eRevC.observeNegative("B", y, "wny");
+  eRevC.observePositive("B", implies(y, c), "wyc");
+
+  const snapRevC = eRevC.evaluate([a, c, x, y]);
+  assert.equal(snapRevC.statusOf("B", a), "Collision");
+  assert.equal(snapRevC.isLive("B", "+", a), false);
+  assert.equal(snapRevC.statusOf("B", c), "Collision");
+  assert.equal(snapRevC.isLive("B", "+", c), false);
+  assert.equal(snapRevC.allGrounds("B", "+", x).length, 0);
+  assert.equal(snapRevC.allGrounds("B", "+", y).length, 0);
+  assert.equal(snapRevC.statusOf("B", y), "Excluded");
+  assert.equal(snapRevC.isLive("B", "-", y), true);
+
+  // Part D (Bug B self-cyclic variant): +(Y → ~A) must NOT merge Y into {A, C}
+  const eRevNotA = new InquiryEngine(b);
+  eRevNotA.addIncompatibility("B", a, c);
+  eRevNotA.observePositive("B", a, "wa");
+  eRevNotA.observePositive("B", c, "wc");
+  eRevNotA.observePositive("B", implies(a, x), "wax");
+  eRevNotA.observePositive("B", implies(x, y), "wxy");
+  eRevNotA.observeNegative("B", y, "wny");
+  eRevNotA.observePositive("B", implies(y, flip(a)), "wyna");
+
+  const snapRevNotA = eRevNotA.evaluate([a, c, x, y, flip(a)]);
+  assert.equal(snapRevNotA.statusOf("B", a), "Collision");
+  assert.equal(snapRevNotA.isLive("B", "+", a), false);
+  assert.equal(snapRevNotA.statusOf("B", c), "Collision");
+  assert.equal(snapRevNotA.isLive("B", "+", c), false);
+  assert.equal(snapRevNotA.allGrounds("B", "+", x).length, 0);
+  assert.equal(snapRevNotA.allGrounds("B", "+", y).length, 0);
+  assert.equal(snapRevNotA.statusOf("B", y), "Excluded");
+  assert.equal(snapRevNotA.isLive("B", "-", y), true);
+
+  // Part E (Bug B subset-minimal variant): +(Y → ~C) has ancestors {A, Y} ⊋ {A} and must NOT hijack {A, C}
+  const eRevNotC = new InquiryEngine(b);
+  eRevNotC.addIncompatibility("B", a, c);
+  eRevNotC.observePositive("B", a, "wa");
+  eRevNotC.observePositive("B", c, "wc");
+  eRevNotC.observePositive("B", implies(a, x), "wax");
+  eRevNotC.observePositive("B", implies(x, y), "wxy");
+  eRevNotC.observeNegative("B", y, "wny");
+  eRevNotC.observePositive("B", implies(y, flip(c)), "wync");
+
+  const snapRevNotC = eRevNotC.evaluate([a, c, x, y, flip(c)]);
+  assert.equal(snapRevNotC.statusOf("B", a), "Collision");
+  assert.equal(snapRevNotC.isLive("B", "+", a), false);
+  assert.equal(snapRevNotC.statusOf("B", c), "Collision");
+  assert.equal(snapRevNotC.isLive("B", "+", c), false);
+  assert.equal(snapRevNotC.allGrounds("B", "+", x).length, 0);
+  assert.equal(snapRevNotC.allGrounds("B", "+", y).length, 0);
+  assert.equal(snapRevNotC.statusOf("B", y), "Excluded");
+  assert.equal(snapRevNotC.isLive("B", "-", y), true);
+
+  // Part F (Cleanup #4a): Collided (+A and -A) must NOT refute +(A → C) via counter-implies
+  const eCollAnt = new InquiryEngine(b);
+  eCollAnt.observePositive("B", a, "wa");
+  eCollAnt.observeNegative("B", a, "wna");
+  eCollAnt.observePositive("B", implies(a, c), "wac");
+  eCollAnt.observeNegative("B", c, "wnc");
+  const snapCollAnt = eCollAnt.evaluate([a, c, implies(a, c)]);
+  assert.equal(snapCollAnt.statusOf("B", a), "Collision");
+  assert.equal(snapCollAnt.statusOf("B", implies(a, c)), "Grounded");
+  assert.equal(snapCollAnt.isLive("B", "+", implies(a, c)), true);
 }
 
 test("dual-polarity statuses and well-founded DAG rejects cycles", test_dual_polarity_statuses_and_well_founded_dag_rejects_cycles);

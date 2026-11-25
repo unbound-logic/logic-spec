@@ -818,3 +818,253 @@ test(
   "Glivenko double impossibility does not derive LEM or DNE",
   test_glivenko_double_imposs_does_not_derive_lem_or_dne,
 );
+
+function test_deduction_quantifier_domain_constraint_enforcement(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("R", {
+    nativeRelations: ["AddId", "Invertible"],
+    handles: [
+      { id: "0", criterion: "I_R(0)", kind: "structural" },
+      { id: "2", criterion: "I_R(2)", kind: "structural" },
+    ],
+  });
+  const e = new InquiryEngine(b);
+  const addId = (h: string) => atom("AddId", [{ role: "el", handle: h }]);
+  const inv = (h: string) => atom("Invertible", [{ role: "el", handle: h }]);
+  const nonZeroCons = flip(addId("x"));
+  const constrainedUniv = forall("x", "R", inv("x"), nonZeroCons);
+
+  e.observePositive("R", addId("0"), "w_add0");
+  e.observeNegative("R", addId("2"), "w_nadd2");
+  e.observePositive("R", inv("2"), "w_inv2");
+  e.observeNegative("R", inv("0"), "w_ninv0");
+
+  // 1. Bug A: forall-elim on R ⊩+ ∀(x : R ⊓ [~AddId(x)]) Invertible(x) MUST enforce domainConstraint!
+  const missingConstraintProof = verifyDerivation(e, {
+    kind: "forall-elim",
+    universal: { kind: "live-ground", boundary: "R", polarity: "+", item: constrainedUniv },
+    term: "0",
+  });
+  assert.equal(missingConstraintProof.ok, false);
+  if (!missingConstraintProof.ok) {
+    assert.equal(missingConstraintProof.violation, "type-mismatch");
+  }
+
+  const failedConstraintProof = verifyDerivation(e, {
+    kind: "forall-elim",
+    universal: { kind: "live-ground", boundary: "R", polarity: "+", item: constrainedUniv },
+    term: "0",
+    constraintProof: {
+      kind: "live-ground",
+      boundary: "R",
+      polarity: "+",
+      item: flip(addId("0")),
+    },
+  });
+  assert.equal(failedConstraintProof.ok, false);
+  if (!failedConstraintProof.ok) {
+    assert.equal(failedConstraintProof.violation, "ground-not-live");
+  }
+
+  const validConstrainedElim = verifyDerivation(e, {
+    kind: "forall-elim",
+    universal: { kind: "live-ground", boundary: "R", polarity: "+", item: constrainedUniv },
+    term: "2",
+    constraintProof: {
+      kind: "live-ground",
+      boundary: "R",
+      polarity: "+",
+      item: flip(addId("2")),
+    },
+  });
+  assert.equal(validConstrainedElim.ok, true);
+  if (validConstrainedElim.ok) {
+    assert.equal(itemKey(validConstrainedElim.item), itemKey(inv("2")));
+    assert.equal(validConstrainedElim.requiredBaseIds.includes("w_nadd2"), true);
+  }
+
+  // Reject spurious constraintProof when universal has NO domainConstraint
+  const unconstrainedUniv = forall("x", "R", equiv("R", "x", "x"));
+  const snapExtra = e.evaluate([unconstrainedUniv]);
+  assert.equal(snapExtra.isLive("R", "+", unconstrainedUniv), true);
+  const strayConstraintProof = verifyDerivation(e, {
+    kind: "forall-elim",
+    universal: { kind: "live-ground", boundary: "R", polarity: "+", item: unconstrainedUniv },
+    term: "2",
+    constraintProof: { kind: "equiv-refl", boundary: "R", term: "2" },
+  });
+  assert.equal(strayConstraintProof.ok, false);
+  if (!strayConstraintProof.ok) {
+    assert.equal(strayConstraintProof.violation, "type-mismatch");
+  }
+
+  // 2. Constrained forall-intro: valid discharge, shadowed-assumption, domainConstraint freshness, and missing pairing
+  const validForallIntroCons = verifyDerivation(e, {
+    kind: "forall-intro",
+    boundary: "R",
+    variable: "x",
+    domain: "R",
+    eigenvar: "α",
+    templateBody: flip(addId("x")),
+    domainConstraint: nonZeroCons,
+    constraintAssumpId: "hNonZero",
+    body: { kind: "assume", assumptionId: "hNonZero", boundary: "R" },
+  });
+  assert.equal(validForallIntroCons.ok, true);
+  if (validForallIntroCons.ok) {
+    assert.equal(itemKey(validForallIntroCons.item), itemKey(forall("x", "R", flip(addId("x")), nonZeroCons)));
+  }
+
+  const shadowedConstraintAssump = verifyDerivation(e, {
+    kind: "implies-intro",
+    boundary: "R",
+    assumptionId: "hDup",
+    antecedent: inv("2"),
+    body: {
+      kind: "forall-intro",
+      boundary: "R",
+      variable: "x",
+      domain: "R",
+      eigenvar: "α",
+      templateBody: flip(addId("x")),
+      domainConstraint: nonZeroCons,
+      constraintAssumpId: "hDup",
+      body: { kind: "assume", assumptionId: "hDup", boundary: "R" },
+    },
+  });
+  assert.equal(shadowedConstraintAssump.ok, false);
+  if (!shadowedConstraintAssump.ok) {
+    assert.equal(shadowedConstraintAssump.violation, "shadowed-assumption");
+  }
+
+  const freshCollisionInConstraint = verifyDerivation(e, {
+    kind: "forall-intro",
+    boundary: "R",
+    variable: "x",
+    domain: "R",
+    eigenvar: "0",
+    templateBody: inv("x"),
+    domainConstraint: flip(addId("0")),
+    constraintAssumpId: "hZero",
+    body: { kind: "assume", assumptionId: "hZero", boundary: "R" },
+  });
+  assert.equal(freshCollisionInConstraint.ok, false);
+  if (!freshCollisionInConstraint.ok) {
+    assert.equal(freshCollisionInConstraint.violation, "eigenvariable-not-fresh");
+  }
+
+  // Also test bound-variable collision inside domainConstraint: eigenvar "u" equals inner bound "u"
+  const boundCollisionInConstraint = verifyDerivation(e, {
+    kind: "forall-intro",
+    boundary: "R",
+    variable: "x",
+    domain: "R",
+    eigenvar: "u",
+    templateBody: inv("x"),
+    domainConstraint: exists("u", "R", flip(addId("u"))),
+    constraintAssumpId: "hBound",
+    body: {
+      kind: "forall-elim",
+      universal: { kind: "live-ground", boundary: "R", polarity: "+", item: constrainedUniv },
+      term: "u",
+    },
+  });
+  assert.equal(boundCollisionInConstraint.ok, false);
+  if (!boundCollisionInConstraint.ok) {
+    assert.equal(boundCollisionInConstraint.violation, "eigenvariable-not-fresh");
+  }
+
+  // 3. Constrained exists-intro & exists-elim
+  const validExIntroCons = verifyDerivation(e, {
+    kind: "exists-intro",
+    witnessTerm: "2",
+    variable: "x",
+    domain: "R",
+    templateBody: inv("x"),
+    domainConstraint: nonZeroCons,
+    constraintProof: {
+      kind: "live-ground",
+      boundary: "R",
+      polarity: "+",
+      item: flip(addId("2")),
+    },
+    witnessProof: { kind: "live-ground", boundary: "R", polarity: "+", item: inv("2") },
+  });
+  assert.equal(validExIntroCons.ok, true);
+  if (validExIntroCons.ok) {
+    assert.equal(itemKey(validExIntroCons.item), itemKey(exists("x", "R", inv("x"), nonZeroCons)));
+  }
+
+  const missingExConstraintProof = verifyDerivation(e, {
+    kind: "exists-intro",
+    witnessTerm: "2",
+    variable: "x",
+    domain: "R",
+    templateBody: inv("x"),
+    domainConstraint: nonZeroCons,
+    witnessProof: { kind: "live-ground", boundary: "R", polarity: "+", item: inv("2") },
+  });
+  assert.equal(missingExConstraintProof.ok, false);
+  if (!missingExConstraintProof.ok) {
+    assert.equal(missingExConstraintProof.violation, "type-mismatch");
+  }
+
+  // exists-elim passes +δ(γ) into body to feed constrained forall-elim without γ escaping conclusion!
+  const constrainedExItem = exists("x", "R", inv("x"), nonZeroCons);
+  const safeRes = atom("SafeResult");
+  const safeConsAll = forall("x", "R", implies(flip(addId("x")), safeRes), nonZeroCons);
+  const validExElimCons = verifyDerivation(e, {
+    kind: "implies-intro",
+    boundary: "R",
+    assumptionId: "hSafeAll",
+    antecedent: safeConsAll,
+    body: {
+      kind: "implies-intro",
+      boundary: "R",
+      assumptionId: "hExCons",
+      antecedent: constrainedExItem,
+      body: {
+        kind: "exists-elim",
+        existential: { kind: "assume", assumptionId: "hExCons", boundary: "R" },
+        witnessVar: "γ",
+        assumptionId: "hBodyInv",
+        constraintAssumpId: "hBodyNonZero",
+        body: {
+          kind: "implies-elim",
+          premise: { kind: "assume", assumptionId: "hBodyNonZero", boundary: "R" },
+          conditional: {
+            kind: "forall-elim",
+            universal: { kind: "assume", assumptionId: "hSafeAll", boundary: "R" },
+            term: "γ",
+            constraintProof: { kind: "assume", assumptionId: "hBodyNonZero", boundary: "R" },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(validExElimCons.ok, true);
+
+  const shadowedExElimIds = verifyDerivation(e, {
+    kind: "implies-intro",
+    boundary: "R",
+    assumptionId: "hExCons",
+    antecedent: constrainedExItem,
+    body: {
+      kind: "exists-elim",
+      existential: { kind: "assume", assumptionId: "hExCons", boundary: "R" },
+      witnessVar: "γ",
+      assumptionId: "hSame",
+      constraintAssumpId: "hSame",
+      body: { kind: "assume", assumptionId: "hSame", boundary: "R" },
+    },
+  });
+  assert.equal(shadowedExElimIds.ok, false);
+  if (!shadowedExElimIds.ok) {
+    assert.equal(shadowedExElimIds.violation, "shadowed-assumption");
+  }
+}
+
+test(
+  "deduction quantifier domainConstraint enforcement",
+  test_deduction_quantifier_domain_constraint_enforcement,
+);
