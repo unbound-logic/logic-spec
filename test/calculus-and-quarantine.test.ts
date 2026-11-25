@@ -119,8 +119,8 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
 
   const snap0 = engine.evaluate([cook, genAll]);
   assert.equal(snap0.isCollisionFree(), true);
-  assert.equal(snap0.liveGrounds("B_1atm", "+", boils).length, 2); // π1 and π2
-  assert.equal(snap0.liveGrounds("B_1atm", "+", cook).length, 2);
+  assert.equal(snap0.liveGrounds("B_1atm", "+", boils).length, 4); // overbroad derivations via w1 / w4 plus independent local w_emp
+  assert.equal(snap0.liveGrounds("B_1atm", "+", cook).length, 4);
 
   // Stage Σ1: Counterexample at 2 atm
   engine.observePositive("B_2atm", heat100, "w5");

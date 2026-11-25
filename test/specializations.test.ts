@@ -7,7 +7,7 @@ import {
   verifyIntuitionisticSpecialization,
   verifyMinimalSpecialization,
 } from "../src/specializations.ts";
-import { and, atom, flip, implies, itemKey, or } from "../src/syntax.ts";
+import { and, atom, equiv, exists, flip, forall, implies, itemKey, or } from "../src/syntax.ts";
 
 function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   // Tier 2 & 3: UL-Minimal & UL-Intuitionistic (monotoneOnly + No-Gluts)
@@ -35,7 +35,7 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   bCov.declareDisjoint("B1_star", "B2_star");
   bCov.registerCover("B", ["B1_star", "B2_star"]);
 
-  const eCov = new InquiryEngine(bCov);
+  const eCov = new InquiryEngine(bCov, { monotoneOnly: true });
   eCov.observePositive("B1_star", aClaim, "w_b1_a");
   eCov.observeNegative("B2_star", aClaim, "w_b2_na");
 
@@ -55,7 +55,7 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   // 4B & 4C on atomic closed boundary B*
   const bAtomic = new BoundarySystem();
   bAtomic.defineBoundary("B_star");
-  const eAtomic = new InquiryEngine(bAtomic);
+  const eAtomic = new InquiryEngine(bAtomic, { monotoneOnly: true });
   const cClaim = atom("C");
   const pClaim = atom("P");
   const qClaim = atom("Q");
@@ -91,7 +91,7 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   }
 
   // Verify Modus Tollens impossibility: if +P had been asserted instead of -P, No-Gluts catches the collision
-  const eConflict = new InquiryEngine(bAtomic);
+  const eConflict = new InquiryEngine(bAtomic, { monotoneOnly: true });
   eConflict.observePositive("B_star", pImpliesQ, "w_pq");
   eConflict.observePositive("B_star", flip(qClaim), "w_nq");
   eConflict.observePositive("B_star", pClaim, "w_p");
@@ -112,7 +112,7 @@ function test_classical_atomic_cover_2k_boolean_algebra_reporting(): void {
   bCov.declareDisjoint("B1_star", "B2_star");
   bCov.registerCover("B", ["B1_star", "B2_star"]);
 
-  const engine = new InquiryEngine(bCov);
+  const engine = new InquiryEngine(bCov, { monotoneOnly: true });
   const aClaim = atom("A");
   engine.observePositive("B1_star", aClaim, "w_b1_a");
   engine.observeNegative("B2_star", aClaim, "w_b2_na");
@@ -146,8 +146,93 @@ function test_classical_atomic_cover_2k_boolean_algebra_reporting(): void {
   }
 }
 
+function test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B_star", {
+    nativeRelations: ["P", "D_pred"],
+    handles: [
+      { id: "a", criterion: "I(a)", kind: "structural" },
+      { id: "b", criterion: "I(b)", kind: "structural" },
+    ],
+  });
+
+  const aClaim = atom("A");
+  const cClaim = atom("C");
+
+  // 1. Reject non-monotone engine (UL-Classical requires frozen/monotone Σ)
+  const eNonMon = new InquiryEngine(b, { monotoneOnly: false });
+  eNonMon.observeNegative("B_star", aClaim, "w_na");
+  eNonMon.observeNegative("B_star", cClaim, "w_nc");
+  const resNonMon = evaluateClassicalSpecialization(
+    eNonMon,
+    "B_star",
+    [aClaim, cClaim],
+    [implies(aClaim, cClaim)],
+  );
+  assert.equal(resNonMon.ok, false);
+
+  // 2. Reject existing Live compound exclusion conflicting with classical truth table (-(A → C) alongside -A, -C)
+  const eCompExcl = new InquiryEngine(b, { monotoneOnly: true });
+  eCompExcl.observeNegative("B_star", aClaim, "w_na");
+  eCompExcl.observeNegative("B_star", cClaim, "w_nc");
+  eCompExcl.observeNegative("B_star", implies(aClaim, cClaim), "w_neg_imp");
+  const resCompExcl = evaluateClassicalSpecialization(
+    eCompExcl,
+    "B_star",
+    [aClaim, cClaim],
+    [implies(aClaim, cClaim)],
+  );
+  assert.equal(resCompExcl.ok, false);
+
+  // 3. Reject queryItems mentioning an Open atom or Open equiv omitted from `atoms`
+  const eGaps = new InquiryEngine(b, { monotoneOnly: true });
+  eGaps.observeNegative("B_star", aClaim, "w_na");
+  const resOpenAtom = evaluateClassicalSpecialization(
+    eGaps,
+    "B_star",
+    [aClaim],
+    [implies(aClaim, atom("UncheckedOpen"))],
+  );
+  assert.equal(resOpenAtom.ok, false);
+
+  const resOpenEquiv = evaluateClassicalSpecialization(
+    eGaps,
+    "B_star",
+    [aClaim],
+    [equiv("B_star", "a", "b")],
+  );
+  assert.equal(resOpenEquiv.ok, false);
+
+  // 4. Support domainConstraint in UL-Classical forall / exists
+  const p = (h: string) => atom("P", [{ role: "arg", handle: h }]);
+  const dPred = (h: string) => atom("D_pred", [{ role: "arg", handle: h }]);
+  const eDom = new InquiryEngine(b, { monotoneOnly: true });
+  eDom.observePositive("B_star", dPred("a"), "w_da");
+  eDom.observeNegative("B_star", dPred("b"), "w_ndb");
+  eDom.observePositive("B_star", p("a"), "w_pa");
+  eDom.observeNegative("B_star", p("b"), "w_npb");
+
+  const constrainedForall = forall("x", "B_star", p("x"), dPred("x"));
+  const constrainedExists = exists("x", "B_star", p("x"), flip(dPred("x")));
+  const resDom = evaluateClassicalSpecialization(
+    eDom,
+    "B_star",
+    [dPred("a"), dPred("b"), p("a"), p("b")],
+    [constrainedForall, constrainedExists],
+  );
+  assert.equal(resDom.ok, true);
+  if (resDom.ok) {
+    assert.equal(resDom.results.get(itemKey(constrainedForall))?.polarity, "+");
+    assert.equal(resDom.results.get(itemKey(constrainedExists))?.polarity, "-");
+  }
+}
+
 test("four-tier deductive spectrum and classical recovery", test_four_tier_deductive_spectrum_and_classical_recovery);
 test(
   "classical atomic cover 2^k Boolean algebra reporting",
   test_classical_atomic_cover_2k_boolean_algebra_reporting,
+);
+test(
+  "classical specialization guards compound exclusions No-Gaps and frozen constraints",
+  test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen,
 );

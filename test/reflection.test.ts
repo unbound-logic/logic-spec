@@ -131,5 +131,35 @@ function test_cross_stage_reflection_curry_immunity_and_deduction_stratification
   }
 }
 
+function test_stage_archive_isolates_historical_boundary_and_cover_mutations(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("B1", { parents: ["B"] });
+  b.defineBoundary("B2", { parents: ["B"] });
+  b.declareDisjoint("B1", "B2");
+
+  const engine = new InquiryEngine(b);
+  const p = atom("P");
+  engine.observePositive("B1", p, "w_b1"); // Σ1
+  engine.observePositive("B2", p, "w_b2"); // Σ2 (cover not yet registered)
+
+  // Mutate BoundarySystem after Σ2 by registering cover {B1, B2} ▷ B
+  b.registerCover("B", ["B1", "B2"]);
+  engine.observePositive("B", atom("Tick"), "w_tick"); // Σ3
+
+  // Historical Σ2 must remain isolated from post-Σ2 registerCover mutation
+  assert.equal(engine.evaluateAtStage(2, [p]).statusOf("B", p), "Open");
+  // Live evaluation at Σ3 sees the registered cover
+  assert.equal(engine.evaluate([p]).statusOf("B", p), "Grounded");
+
+  // Reflection against Σ2 observes historical Open/non-Live rather than retroactively Grounded
+  const reflAt2 = refl(0, "B", "+", p, 2);
+  assert.equal(engine.evaluate([reflAt2]).statusOf("B", reflAt2), "Excluded");
+}
+
 test("cross-stage reflection trace and historical immutability", test_cross_stage_reflection_trace_and_historical_immutability);
 test("cross-stage reflection Curry immunity and deduction stratification", test_cross_stage_reflection_curry_immunity_and_deduction_stratification);
+test(
+  "stage archive isolates historical boundary and cover mutations",
+  test_stage_archive_isolates_historical_boundary_and_cover_mutations,
+);

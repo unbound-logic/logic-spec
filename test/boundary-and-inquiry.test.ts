@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY } from "../src/boundary.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { and, atom, equiv, flip, forall } from "../src/syntax.ts";
+import { and, atom, equiv, exists, flip, forall } from "../src/syntax.ts";
 
 function test_boundary_meet_semilattice_and_non_witnessing_bottom(): void {
   const b = new BoundarySystem();
@@ -417,6 +417,170 @@ function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_struc
     criterionItem: flip(atom("AddId", [{ role: "el", handle: "x" }])),
   });
   assert.equal(resMath.ok, true);
+
+  // Reject surviving handle whose sole witness is Live -δ(u) (contradicts B' = B ⊓ [δ])
+  const eOnlyNeg = new InquiryEngine(bProxy);
+  eOnlyNeg.observeNegative(
+    "Swan",
+    atom("White", [{ role: "subject", handle: "swan_402" }]),
+    "obs_tue",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+  eOnlyNeg.observePositive(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_101" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_au_only",
+    { handle: "swan_101", criterion: "I_Swan(cygnus)" },
+  );
+  const resNegWitness = eOnlyNeg.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_NonAU",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: habX,
+  });
+  assert.equal(resNegWitness.ok, false);
+  if (!resNegWitness.ok) {
+    assert.equal(resNegWitness.violation, "M1-unwitnessed-proxy");
+  }
+
+  // Reject keeping a surviving handle with Live -δ(v) even when another handle has Live +δ(u)
+  const bTwo = new BoundarySystem();
+  bTwo.defineBoundary("Swan", {
+    nativeRelations: ["White", "Habitat"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "swan_102", criterion: "I_Swan(cygnus)", kind: "contingent" },
+      { id: "Australia", criterion: "I_Region(AU)", kind: "structural" },
+    ],
+  });
+  bTwo.defineBoundary("Swan_NonAU", {
+    parents: ["Swan"],
+    handleFilter: (h) => h.id !== "swan_402",
+  });
+  const eTwo = new InquiryEngine(bTwo);
+  eTwo.observeNegative(
+    "Swan",
+    atom("White", [{ role: "subject", handle: "swan_402" }]),
+    "obs_tue",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
+  eTwo.observeNegative(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_101" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_eu_101",
+    { handle: "swan_101", criterion: "I_Swan(cygnus)" },
+  );
+  eTwo.observePositive(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_102" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_au_102",
+    { handle: "swan_102", criterion: "I_Swan(cygnus)" },
+  );
+  const resInconsistentSurvivor = eTwo.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_NonAU",
+    originalUniversal: genSwan,
+    targetRelation: "White",
+    criterionItem: habX,
+  });
+  assert.equal(resInconsistentSurvivor.ok, false);
+  if (!resInconsistentSurvivor.ok) {
+    assert.equal(resInconsistentSurvivor.violation, "M1-unwitnessed-proxy");
+  }
+}
+
+function test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency(): void {
+  // 1. Semilattice consistency checks between defineMeet / declareDisjoint / defineBoundary
+  const bSem = new BoundarySystem();
+  bSem.defineBoundary("A");
+  bSem.defineBoundary("B");
+  bSem.declareDisjoint("A", "B");
+  assert.throws(() => bSem.defineBoundary("Joint", { parents: ["A", "B"] }), /disjoint/i);
+  assert.throws(() => bSem.defineMeet("A", "B", "A"), /refine|disjoint/i);
+
+  const bSem2 = new BoundarySystem();
+  bSem2.defineBoundary("P");
+  bSem2.defineBoundary("Q");
+  bSem2.defineBoundary("PQ", { parents: ["P", "Q"] });
+  assert.throws(() => bSem2.declareDisjoint("P", "Q"), /common|meet|disjoint|refine/i);
+
+  const bSem3 = new BoundarySystem();
+  bSem3.defineBoundary("X");
+  bSem3.defineBoundary("Y");
+  bSem3.defineBoundary("XY", { parents: ["X", "Y"] });
+  bSem3.defineMeet("X", "Y", "XY");
+  assert.throws(() => bSem3.declareDisjoint("X", "Y"), /meet|common|disjoint/i);
+
+  // 2. ≈_B reflexivity, symmetry, transitivity + engine-side ∀E + domainConstraint + Live-gated ∃I
+  const b = new BoundarySystem();
+  b.defineBoundary("D", {
+    nativeRelations: ["P", "Q", "Delta"],
+    handles: [
+      { id: "t1", criterion: "I(t1)", kind: "structural" },
+      { id: "t2", criterion: "I(t2)", kind: "structural" },
+      { id: "t3", criterion: "I(t3)", kind: "structural" },
+    ],
+  });
+  const e = new InquiryEngine(b);
+  const p = (h: string) => atom("P", [{ role: "arg", handle: h }]);
+  const q = (h: string) => atom("Q", [{ role: "arg", handle: h }]);
+  const delta = (h: string) => atom("Delta", [{ role: "arg", handle: h }]);
+
+  // ≈_B laws
+  e.observePositive("D", equiv("D", "t1", "t2"), "w_12");
+  e.observePositive("D", equiv("D", "t2", "t3"), "w_23");
+  const snapEq = e.evaluate([equiv("D", "t1", "t1"), equiv("D", "t2", "t1"), equiv("D", "t1", "t3")]);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t1")), true);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t2", "t1")), true);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t3")), true);
+
+  // Engine-side ∀E
+  e.observePositive("D", forall("x", "D", p("x")), "w_all_p");
+  const snapForallE = e.evaluate([p("t1"), p("t2"), p("t3")]);
+  assert.equal(snapForallE.isLive("D", "+", p("t1")), true);
+  assert.equal(snapForallE.isLive("D", "+", p("t2")), true);
+  assert.equal(snapForallE.isLive("D", "+", p("t3")), true);
+
+  // domainConstraint on ∀ and ∃
+  const eDom = new InquiryEngine(b);
+  eDom.observePositive("D", delta("t1"), "w_d1");
+  eDom.observeNegative("D", delta("t2"), "w_nd2");
+  eDom.observeNegative("D", delta("t3"), "w_nd3");
+  eDom.observePositive("D", p("t1"), "w_p1");
+  eDom.observeNegative("D", p("t2"), "w_np2");
+  eDom.observePositive("D", q("t2"), "w_q2");
+  eDom.observeNegative("D", q("t1"), "w_nq1");
+
+  const constrainedAll = forall("x", "D", p("x"), delta("x"));
+  const constrainedEx = exists("x", "D", q("x"), delta("x"));
+  const snapDom = eDom.evaluate([constrainedAll, constrainedEx]);
+  assert.equal(snapDom.statusOf("D", constrainedAll), "Grounded");
+  assert.equal(snapDom.isLive("D", "+", constrainedAll), true);
+  assert.equal(snapDom.allGrounds("D", "+", constrainedEx).length, 0);
+  assert.equal(snapDom.statusOf("D", constrainedEx), "Excluded");
+  assert.equal(snapDom.isLive("D", "-", constrainedEx), true);
+
+  // Live-gated exists-intro: collided +P(t1) must NOT witness +∃(x : D) P(x)
+  const eExLive = new InquiryEngine(b);
+  const exP = exists("x", "D", p("x"));
+  eExLive.observePositive("D", p("t1"), "w_p1");
+  eExLive.observeNegative("D", p("t1"), "w_np1");
+  eExLive.observeNegative("D", exP, "w_nex");
+  const snapEx = eExLive.evaluate([exP]);
+  assert.equal(snapEx.allGrounds("D", "+", exP).length, 0);
+  assert.equal(snapEx.statusOf("D", exP), "Excluded");
+  assert.equal(snapEx.isLive("D", "-", exP), true);
 }
 
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
@@ -424,3 +588,7 @@ test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitar
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
 test("inquiry updates retract non-commutativity and M1/M2", test_inquiry_updates_retract_non_commutativity_and_m1_m2);
 test("M1(iii) excess content blocks disguised proxies and preserves structural singularities", test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities);
+test(
+  "core engine congruence forall-elim domainConstraint and semilattice consistency",
+  test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency,
+);
