@@ -1,0 +1,32 @@
+name: fuzz
+
+# Long property-based fuzzing runs of test/property-fuzz.test.ts, started by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      multiplier:
+        description: UL_FUZZ_MULTIPLIER (scales the number of seeds per suite)
+        default: "50"
+      seed:
+        description: UL_FUZZ_SEED (runs one seed per suite; leave empty to use the multiplier)
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node --test test/property-fuzz.test.ts
+        env:
+          UL_FUZZ_MULTIPLIER: ${{ inputs.multiplier }}
+          UL_FUZZ_SEED: ${{ inputs.seed }}
