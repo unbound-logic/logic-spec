@@ -467,6 +467,60 @@ function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
   assert.equal(snapConf.statusOf("B", bottom()), "Excluded");
 }
 
+function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
+  // Part A: Direct symmetric conflict (A ⊥_B C, +A, +C) with 2-hop chain A → X → Y and -Y
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  const e = new InquiryEngine(b);
+  const a = atom("A");
+  const c = atom("C");
+  const x = atom("X");
+  const y = atom("Y");
+
+  e.addIncompatibility("B", a, c);
+  e.observePositive("B", a, "wa");
+  e.observePositive("B", c, "wc");
+  e.observePositive("B", implies(a, x), "wax");
+  e.observePositive("B", implies(x, y), "wxy");
+  e.observeNegative("B", y, "wny");
+
+  const snap = e.evaluate([a, c, x, y, flip(y)]);
+  assert.equal(snap.statusOf("B", a), "Collision");
+  assert.equal(snap.isLive("B", "+", a), false);
+  assert.equal(snap.statusOf("B", c), "Collision");
+  assert.equal(snap.isLive("B", "+", c), false);
+  assert.equal(snap.allGrounds("B", "+", x).length, 0);
+  assert.equal(snap.allGrounds("B", "+", y).length, 0);
+  assert.equal(snap.statusOf("B", y), "Excluded");
+  assert.equal(snap.isLive("B", "-", y), true);
+  assert.equal(snap.statusOf("B", flip(y)), "Grounded");
+  assert.equal(snap.isLive("B", "+", flip(y)), true);
+
+  // Part B: 2-hop mutual symmetric conflict cycle (+A, +(A→C), C ⊥_B D, +D, +(D→E), E ⊥_B A)
+  const eCycle = new InquiryEngine(b);
+  const d = atom("D");
+  const eItem = atom("E");
+  eCycle.observePositive("B", a, "wa");
+  eCycle.observePositive("B", implies(a, c), "wac");
+  eCycle.addIncompatibility("B", c, d);
+  eCycle.observePositive("B", d, "wd");
+  eCycle.observePositive("B", implies(d, eItem), "wde");
+  eCycle.addIncompatibility("B", eItem, a);
+  eCycle.observePositive("B", implies(a, x), "wax");
+  eCycle.observePositive("B", implies(x, y), "wxy");
+  eCycle.observeNegative("B", y, "wny");
+
+  const snapCycle = eCycle.evaluate([a, c, d, eItem, x, y]);
+  assert.equal(snapCycle.statusOf("B", a), "Collision");
+  assert.equal(snapCycle.isLive("B", "+", a), false);
+  assert.equal(snapCycle.statusOf("B", d), "Collision");
+  assert.equal(snapCycle.isLive("B", "+", d), false);
+  assert.equal(snapCycle.allGrounds("B", "+", x).length, 0);
+  assert.equal(snapCycle.allGrounds("B", "+", y).length, 0);
+  assert.equal(snapCycle.statusOf("B", y), "Excluded");
+  assert.equal(snapCycle.isLive("B", "-", y), true);
+}
+
 test("dual-polarity statuses and well-founded DAG rejects cycles", test_dual_polarity_statuses_and_well_founded_dag_rejects_cycles);
 test("symmetric downward heredity and disjoint zero leakage", test_symmetric_downward_heredity_and_disjoint_zero_leakage);
 test("quarantine upstream obstruction and selective survival", test_quarantine_upstream_obstruction_and_selective_survival);
@@ -479,4 +533,8 @@ test(
 test(
   "bottom non-witnessing guard and structural impossibility contraposition",
   test_bottom_non_witnessing_guard_and_imposs_contraposition,
+);
+test(
+  "symmetric conflict zero ghost leakage across multihop MP",
+  test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp,
 );

@@ -8,12 +8,16 @@ import {
   atom,
   bottom,
   checkRecursiveDefinitionSystem,
+  equiv,
   exists,
+  flip,
   forall,
   implies,
   itemKey,
+  or,
   ref,
   structImposs,
+  substituteHandle,
 } from "../src/syntax.ts";
 
 function test_standalone_cover_gluing_and_quarantine_propagation(): void {
@@ -571,7 +575,246 @@ function test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation(): void
   }
 }
 
+function test_capture_avoiding_substitution_and_quantifier_bound_variable_freshness(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("D", { nativeRelations: ["R"] });
+  const engine = new InquiryEngine(b);
+  const relR = (a: string, c: string) =>
+    atom("R", [
+      { role: "a", handle: a },
+      { role: "b", handle: c },
+    ]);
+
+  // 1A: Reject zero-premise variable-capture proof of ∀(x : D) ∀(α : D) (x ≈_D α)
+  const badCaptureProof = verifyDerivation(engine, {
+    kind: "forall-intro",
+    boundary: "D",
+    variable: "x",
+    domain: "D",
+    eigenvar: "α",
+    templateBody: forall("α", "D", equiv("D", "x", "α")),
+    body: {
+      kind: "forall-intro",
+      boundary: "D",
+      variable: "α",
+      domain: "D",
+      eigenvar: "β",
+      templateBody: equiv("D", "α", "α"),
+      body: { kind: "equiv-refl", boundary: "D", term: "β" },
+    },
+  });
+  assert.equal(badCaptureProof.ok, false);
+  if (!badCaptureProof.ok) {
+    assert.equal(badCaptureProof.violation, "eigenvariable-not-fresh");
+  }
+
+  // 1B: Capture-avoiding substituteHandle and forall-elim rename colliding inner binder "y"
+  const nestedExists = exists("y", "D", relR("x", "y"));
+  const sub = substituteHandle(nestedExists, "x", "y");
+  assert.equal(sub.kind, "exists");
+  if (sub.kind === "exists") {
+    assert.notEqual(sub.variable, "y");
+    assert.equal(itemKey(sub.body), itemKey(relR("y", sub.variable)));
+  }
+
+  const bHandles = new BoundarySystem();
+  bHandles.defineBoundary("D", {
+    nativeRelations: ["R"],
+    handles: [{ id: "y", criterion: "I_D(y)", kind: "structural" }],
+  });
+  const eHandles = new InquiryEngine(bHandles);
+  const allEx = forall("x", "D", exists("y", "D", relR("x", "y")));
+  const elimCaptureSafe = verifyDerivation(eHandles, {
+    kind: "implies-intro",
+    boundary: "D",
+    assumptionId: "hAll",
+    antecedent: allEx,
+    body: {
+      kind: "forall-elim",
+      universal: { kind: "assume", assumptionId: "hAll", boundary: "D" },
+      term: "y",
+    },
+  });
+  assert.equal(elimCaptureSafe.ok, true);
+  if (elimCaptureSafe.ok && elimCaptureSafe.item.kind === "implies") {
+    const con = elimCaptureSafe.item.consequent;
+    assert.equal(con.kind, "exists");
+    if (con.kind === "exists") {
+      assert.notEqual(con.variable, "y");
+      assert.equal(itemKey(con.body), itemKey(relR("y", con.variable)));
+    }
+  }
+
+  // 1C: Reject exists-elim witnessVar colliding with inner bound variable and reject captured exists-intro
+  const badExElim = verifyDerivation(engine, {
+    kind: "implies-intro",
+    boundary: "D",
+    assumptionId: "hEx",
+    antecedent: exists("x", "D", exists("γ", "D", relR("x", "γ"))),
+    body: {
+      kind: "exists-elim",
+      existential: { kind: "assume", assumptionId: "hEx", boundary: "D" },
+      witnessVar: "γ",
+      assumptionId: "hBody",
+      body: { kind: "assume", assumptionId: "hBody", boundary: "D" },
+    },
+  });
+  assert.equal(badExElim.ok, false);
+  if (!badExElim.ok) {
+    assert.equal(badExElim.violation, "eigenvariable-not-fresh");
+  }
+
+  const badExIntroCapture = verifyDerivation(eHandles, {
+    kind: "implies-intro",
+    boundary: "D",
+    assumptionId: "hCap",
+    antecedent: exists("y", "D", relR("y", "y")),
+    body: {
+      kind: "exists-intro",
+      witnessTerm: "y",
+      variable: "x",
+      domain: "D",
+      templateBody: exists("y", "D", relR("x", "y")),
+      witnessProof: { kind: "assume", assumptionId: "hCap", boundary: "D" },
+    },
+  });
+  assert.equal(badExIntroCapture.ok, false);
+  if (!badExIntroCapture.ok) {
+    assert.equal(badExIntroCapture.violation, "type-mismatch");
+  }
+}
+
+function test_admitted_theorem_incompat_persistence_and_intermediate_quarantine(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+
+  // 3A: Theorem depending on material incompatibility A ⊥_B C must persist and be Live
+  const e3A = new InquiryEngine(b);
+  const a = atom("A");
+  const c = atom("C");
+  e3A.addIncompatibility("B", a, c);
+  e3A.observePositive("B", a, "wa");
+
+  const admitIncompat = admitVerifiedDerivation(
+    e3A,
+    {
+      kind: "flip-intro",
+      inner: { kind: "live-ground", boundary: "B", polarity: "-", item: c },
+    },
+    "thm_flip_c",
+  );
+  assert.equal(admitIncompat.ok, true);
+  assert.equal(e3A.evaluate().isLive("B", "+", flip(c)), true);
+  assert.equal(e3A.evaluate().statusOf("B", flip(c)), "Grounded");
+
+  assert.equal(e3A.retract("wa"), true);
+  assert.equal(e3A.evaluate([flip(c)]).statusOf("B", flip(c)), "Open");
+
+  // 3B: Theorem relying on derived intermediate +(P ∧ Q) must be quarantined when (B, P ∧ Q) collides
+  const e3B = new InquiryEngine(b);
+  const p = atom("P");
+  const q = atom("Q");
+  const r = atom("R");
+  const pAndQ = and(p, q);
+  e3B.observePositive("B", p, "wp");
+  e3B.observePositive("B", q, "wq");
+
+  const admitInterm = admitVerifiedDerivation(
+    e3B,
+    {
+      kind: "implies-intro",
+      boundary: "B",
+      assumptionId: "hR",
+      antecedent: r,
+      body: { kind: "live-ground", boundary: "B", polarity: "+", item: pAndQ },
+    },
+    "thm_r_pq",
+  );
+  assert.equal(admitInterm.ok, true);
+  assert.equal(e3B.evaluate().isLive("B", "+", implies(r, pAndQ)), true);
+
+  e3B.observeNegative("B", pAndQ, "wnpq");
+  const snapColl = e3B.evaluate();
+  assert.equal(snapColl.statusOf("B", pAndQ), "Collision");
+  assert.equal(snapColl.isLive("B", "+", implies(r, pAndQ)), false);
+
+  assert.equal(e3B.retract("wnpq"), true);
+  assert.equal(e3B.evaluate().isLive("B", "+", implies(r, pAndQ)), true);
+}
+
+function test_glivenko_double_imposs_does_not_derive_lem_or_dne(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  const eMin = new InquiryEngine(b, { monotoneOnly: true });
+
+  const p = atom("P_Open");
+  const lemP = or(p, structImposs(p));
+  const negLemP = structImposs(lemP);
+  const glivenkoFormula = structImposs(negLemP);
+
+  // Zero-premise minimal-logic derivation of (((P ∨ (P → ⊥)) → ⊥) → ⊥)
+  const glivenkoProof = {
+    kind: "implies-intro" as const,
+    boundary: "B",
+    assumptionId: "hNegLem",
+    antecedent: negLemP,
+    body: {
+      kind: "implies-elim" as const,
+      conditional: { kind: "assume" as const, assumptionId: "hNegLem", boundary: "B" },
+      premise: {
+        kind: "or-intro" as const,
+        side: "right" as const,
+        other: p,
+        witness: {
+          kind: "implies-intro" as const,
+          boundary: "B",
+          assumptionId: "hP",
+          antecedent: p,
+          body: {
+            kind: "implies-elim" as const,
+            conditional: { kind: "assume" as const, assumptionId: "hNegLem", boundary: "B" },
+            premise: {
+              kind: "or-intro" as const,
+              side: "left" as const,
+              other: structImposs(p),
+              witness: { kind: "assume" as const, assumptionId: "hP", boundary: "B" },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(verifyDerivation(eMin, glivenkoProof, "UL-Core").ok, true);
+  const admitted = admitVerifiedDerivation(eMin, glivenkoProof, "thm_glivenko", "UL-Minimal");
+  assert.equal(admitted.ok, true);
+  if (admitted.ok) {
+    assert.equal(itemKey(admitted.item), itemKey(glivenkoFormula));
+  }
+
+  // imposs-excl derives -(lemP → ⊥), yet must NOT invert into +(P ∨ (P → ⊥)) or +P!
+  const snap = eMin.evaluate([p, lemP, negLemP, glivenkoFormula]);
+  assert.equal(snap.statusOf("B", glivenkoFormula), "Grounded");
+  assert.equal(snap.statusOf("B", negLemP), "Excluded");
+  assert.equal(snap.statusOf("B", lemP), "Open");
+  assert.equal(snap.allGrounds("B", "+", lemP).length, 0);
+  assert.equal(snap.statusOf("B", p), "Open");
+  assert.equal(snap.allGrounds("B", "+", p).length, 0);
+}
+
 test("standalone Cover-Gluing and Quarantine propagation", test_standalone_cover_gluing_and_quarantine_propagation);
 test("natural deduction implies-intro, anti-vacuity, and Quarantine bridge", test_natural_deduction_implies_intro_and_anti_vacuity_quarantine);
 test("schematic forall-intro and exists-elim eigenvariable soundness on open domains", test_schematic_forall_intro_eigenvariable_soundness_on_open_domains);
 test("UL-Minimal vs UL-Intuitionistic proof-theoretic separation", test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation);
+test(
+  "capture-avoiding substitution and quantifier bound variable freshness",
+  test_capture_avoiding_substitution_and_quantifier_bound_variable_freshness,
+);
+test(
+  "admitted theorem incompat persistence and intermediate quarantine",
+  test_admitted_theorem_incompat_persistence_and_intermediate_quarantine,
+);
+test(
+  "Glivenko double impossibility does not derive LEM or DNE",
+  test_glivenko_double_imposs_does_not_derive_lem_or_dne,
+);
