@@ -16,23 +16,25 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 1. `Consensus` **Boiling Point Under `1 atm` vs. `2 atm`** ([`core.md`](core.md) §2 items 4, 7; §3 items 8–12):
    - **Signature & Boundaries**:
      - `B_1atm ⊑ B_all`, `B_2atm ⊑ B_all`, with `B_1atm ⊓ B_2atm = ⊥_B` (disjoint regimes).
-     - Items: `Heat100 := HeatedTo(substance: h2o, temp: 100C)`, `Boils := Boils(substance: h2o)`, `Cook := CooksAt100C(item: pasta)`, `Rule_broad := Heat100 → Boils`, `Rule_cook := Boils → Cook`, and `Gen_all := ∀(p : B_all) (Heat100(p) → Boils(p))`.
+     - Items: `Heat100(p) := HeatedTo(substance: h2o, temp: 100C, pressure: p)`, `Boils(p) := Boils(substance: h2o, pressure: p)`, `Cook := CooksAt100C(item: pasta)`, `Rule_broad := Heat100(1atm) → Boils(1atm)`, `Rule_cook := Boils(1atm) → Cook`, and `Gen_all := ∀(p : B_all) (Heat100(p) → Boils(p))`.
    - **Stage `Σ₀` (Initial Grounding)**:
      ```text
-     Observe⁺(B_all,  Rule_broad, w₁)
-     Observe⁺(B_all,  Rule_cook,  w₂)
-     Observe⁺(B_1atm, Heat100,    w₃)
-     Observe⁺(B_1atm, Boils,      w_emp)   // independent local observation at 1 atm
-     Observe⁺(B_all,  Gen_all,    w₄)
+     Observe⁺(B_all,  Rule_broad,   w₁)
+     Observe⁺(B_all,  Rule_cook,    w₂)
+     Observe⁺(B_1atm, Heat100(1atm), w₃)
+     Observe⁺(B_1atm, Boils(1atm),  w_emp)   // independent local observation at 1 atm
+     Observe⁺(B_all,  Gen_all,      w₄)
      ```
-     - By downward heredity (§3 item 9) and Scoped Cut (§3 item 11), `B_1atm ⊩⁺ Boils` has two independent `Live` provenance DAGs:
+     - By downward heredity (§3 item 9) and Scoped Cut (§3 item 11), `B_1atm ⊩⁺ Boils(1atm)` has two independent `Live` provenance DAGs:
        - `π₁ = MP(w₃, Down(B_all→B_1atm, w₁))` (depends on overbroad `w₁`)
        - `π₂ = w_emp` (independent local witness)
      - Likewise `B_1atm ⊩⁺ Cook` has both `MP(π₁, Down(w₂))` and `MP(π₂, Down(w₂))`.
    - **Stage `Σ₁` (Counterexample Arrives at `2 atm`)**:
      ```text
-     Observe⁺(B_2atm, Heat100, w₅)
-     Observe⁻(B_2atm, Boils,   w₆)         // water at 2 atm does not boil at 100C
+     Observe⁺(B_2atm, Heat100(1atm), w₅)
+     Observe⁻(B_2atm, Boils(1atm),   w₆)      // localized refutation colliding with Rule_broad on B_2atm
+     Observe⁺(B_all,  Heat100(2atm), w₅_all)
+     Observe⁻(B_all,  Boils(2atm),   w₆_all)  // water at 2 atm does not boil at 100C
      ```
      - By §3 item 12 (`-(A → C)`), derive `B_2atm ⊩⁻ Rule_broad [Counter(w₅, w₆)]`.
      - By symmetric downward heredity (§3 item 9), `w₁` inherits down to `B_2atm ⊩⁺ Rule_broad [Down(B_all→B_2atm, w₁)]` → **`(B_2atm, Rule_broad)` enters `Collision`** and records `Rev(B_2atm, Rule_broad) ∈ O_rev`.
@@ -40,8 +42,8 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      - **Upstream Obstruction & Selective Quarantine (§3 item 10)**:
        - `(B_all, +Rule_broad [w₁])` is obstructed by sub-boundary collision at `B_2atm` and loses `Live` authority immediately.
        - Therefore `π₁ = MP(w₃, Down(B_all→B_1atm, w₁))` loses `Live` authority (you may no longer rely on the falsified universal law at `1 atm`).
-       - However, `π₂ = w_emp` and `MP(π₂, Down(w₂))` contain no un-`Live` nodes, so `B_1atm ⊩⁺ Boils [w_emp]` and `B_1atm ⊩⁺ Cook [MP(π₂, Down(w₂))]` **remain `Live`** without global Explosion.
-     - Simultaneously, `w = 2atm ∈ Dom(B_all)` yields `B_all ⊩⁻ Gen_all`, colliding with `w₄` and recording `Rev(B_all, Gen_all) ∈ O_rev`.
+       - However, `π₂ = w_emp` and `MP(π₂, Down(w₂))` contain no un-`Live` nodes, so `B_1atm ⊩⁺ Boils(1atm) [w_emp]` and `B_1atm ⊩⁺ Cook [MP(π₂, Down(w₂))]` **remain `Live`** without global Explosion.
+     - Simultaneously, `w = 2atm ∈ Dom(B_all)` with `w₅_all` and `w₆_all` yields `B_all ⊩⁻ (Heat100(2atm) → Boils(2atm))`, hence `B_all ⊩⁻ Gen_all` by §3 item 12, colliding with `w₄` and recording `Rev(B_all, Gen_all) ∈ O_rev`.
    - **Stage `Σ₂` (Discharge via `Retract` + `RefineBoundary` Obeying `M1` & `M2`)**:
      ```text
      Retract(w₁)
@@ -109,8 +111,8 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      3. By `No-Gluts`, every per-cell ground is `Live`.
      4. By §3 item 12 (Cover-Witnessed Disjunction `D2`), `{B*_i} ▷ B` witnesses `B ⊩⁺ (A ∨ ~A)`.
    - **Derivation 4B — Material Implication Closure Without Modus Ponens Leakage**:
-     1. Suppose `B* ⊩⁻ A` and `B* ⊩⁻ C` (in `UL-Core`, `A → C` remains `Open`).
-     2. By `No-Gluts`, `B* ⊩⁺ A` fails; hence `B* ⊩⁻ (A → C)` (`+A ∧ -C`) fails.
+     1. Suppose atomic-generated `B*` has `B* ⊩⁻ A` and `B* ⊩⁻ C` (in `UL-Core`, `A → C` remains `Open`).
+     2. By `No-Gluts`, `B* ⊩⁺ A` fails; hence under `UL-Classical` closure over atomic/congruence grounds, neither `+A ∧ -C` nor any exclusion `B* ⊩⁻ (A → C)` holds.
      3. By `No-Gaps`, `B* ⊩⁺ (A → C)` holds (recovering classical `False → False` = True).
      4. Because `B* ⊩⁺ A` does not hold (`No-Gluts`), Scoped Cut / Modus Ponens (§3 item 11) **cannot** fire to derive `+C`.
    - **Derivation 4C — Classical Modus Tollens (`+(A → C)` and `+(~C)` ⇒ `+(~A)`)**:
