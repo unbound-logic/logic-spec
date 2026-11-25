@@ -66,4 +66,124 @@ Rules for `decided` entries:
 
 ## 7. Open Design Problems
 
-None currently open from Phase 1 (Layers 1–8). New questions uncovered during formal specification in `spec/` will be recorded here.
+No Phase 1 (Layers 1–8) question remains open. The entries below were found on 2026-11-25 by a Claude Code audit of `spec/` against the reference kernel at commit `785b74e`, using read-only probes. Implementation entries state a reproduction, with an executable snippet for each under [Audit Reproductions](design-review.md#audit-reproductions); claim and governance entries cite the passages concerned. They remain `open` (`[Exploratory]`) until the maintainer ratifies a resolution.
+
+| Key | Problem | Resolution | Status |
+| :--- | :--- | :--- | :--- |
+| `audit-m1-criterion-decoupling` | **The M1 splitting criterion `δ` is not bound to the refined boundary `B'`.** [core.md](../spec/core.md) §2 item 7 defines `RefineBoundary(B → B' = B ⊓ [δ])`, but `refineBoundary` in [`src/engine.ts`](../src/engine.ts) never checks that `Dom(B')` consists of the handles of `B` that satisfy `δ`: `B'` is fixed beforehand by `defineBoundary` (`handles` / `handleFilter`), and `δ` is only screened by M1(i)–(iii). Reproduction: boundary `Swan` with contingent handles `swan_402`, `swan_101`; `Swan_Rest ⊑ Swan` drops `swan_402` via `handleFilter`; `Observe⁻(Swan, White(swan_402))`, `Observe⁺(Swan, Feathered(swan_101))`, `Observe⁺(Swan, Feathered(swan_402))`; `refineBoundary(Swan → Swan_Rest)` with `δ := Feathered(x)` returns `ok: true` although the excised counterexample itself satisfies `δ` (`Live +Feathered(swan_402)`). Any predicate unrelated to the split that has one surviving positive witness therefore licenses excising a counterexample, which is the immunization M1 exists to block. The ratified Swan example ([`test/boundary-and-inquiry.test.ts`](../test/boundary-and-inquiry.test.ts), Attempt 3) likewise never establishes that `swan_402` fails `~Habitat(x, Australia)`. Separately, M1(i) forbids `δ` referencing `A` "directly or indirectly", but the kernel checks only direct relation names (`collectRelations(criterionItem).has(targetRelation)`), so dependence routed through a registered incompatibility or conditional is not detected. Affects [metatheory.md](../spec/metatheory.md) MT-7. Executable reproduction: R1 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-cover-non-vacuity-drift` | **Registered covers are not re-validated when the boundary system grows, and `C_B` cannot be revised.** `registerCover` in [`src/boundary.ts`](../src/boundary.ts) checks Refinement and Non-Vacuity only at registration, and `witnessedCoversOf` silently skips a Meet-Stability pullback that comes out empty instead of reporting that the cover is not exhaustive (Axioms 3 and 5 of [core.md](../spec/core.md) §2 item 5 together forbid a non-empty `B' ⊑ B` disjoint from every cell). Reproduction: `C1, C2 ⊑ B` declared disjoint, `WitnessCover({C1, C2} ▷ B)`, then `B3 ⊑ B` declared disjoint from `C1` and `C2`; `isWitnessedCover(B, [C1, C2])` stays `true`. With `Observe⁺(C1, P)` and `Observe⁺(C2, Q)`, `(B3, P ∨ Q)` is `Grounded` while `(B3, P)` and `(B3, Q)` are both `Open`; adding `Observe⁻(B3, P)` and `Observe⁻(B3, Q)` puts `(B3, P ∨ Q)` into `Collision` and records `Rev(B3, P ∨ Q)` although neither disjunct collides on any boundary. The MT-5 proof sketch in [metatheory.md](../spec/metatheory.md) relies on exactly this Non-Vacuity step. Because `Retract` removes only base observations from `G⁺ ∪ G⁻` and no transition withdraws a cover or incompatibility from `C_B`, the obligation cannot be discharged at its actual source, only by retracting correct observations. Executable reproduction: R2 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-unregistered-meet-closed-world` | **Absence of a registered common sub-boundary is read as disjointness.** `BoundarySystem.meet` in [`src/boundary.ts`](../src/boundary.ts) returns `⊥_B` whenever two boundaries have no explicit meet, no declared disjointness, and no registered common sub-boundary, and it throws `Ambiguous meet` when several maximal candidates exist, so `⊓` is not total. Reproduction: `Lab` and `Field` under `⊤_B`; `Observe⁺(Lab, P)` and `Observe⁻(Field, P)` yield no `Collision`; merely defining `LabField` with parents `Lab` and `Field` then produces one. [core.md](../spec/core.md) §2 item 4 states a bounded meet-semilattice in which two boundaries overlap iff `B₁ ⊓ B₂ ≠ ⊥_B`, and does not declare this closed-world default, which the Anti-Inertia Audit in [AGENTS.md](../AGENTS.md) §2 requires to be flagged. It also bears on MT-4 in [metatheory.md](../spec/metatheory.md), whose disjointness premise can then hold by omission rather than by declaration. Executable reproduction: R3 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-status-obstruction-mismatch` | **`statusOf` reports `Grounded` for an obstructed ground.** [core.md](../spec/core.md) §3 item 8 defines `Grounded` as at least one valid `π⁺`, no valid `π⁻`, and unobstructed on sub-boundaries. In the [`audit-cover-non-vacuity-drift`](design-review.md#audit-cover-non-vacuity-drift) reproduction, `EvaluationSnapshot.statusOf(B, P ∨ Q)` in [`src/engine.ts`](../src/engine.ts) returns `Grounded` while `isObstructed(B, P ∨ Q)` is `true` and `isLive(B, "+", P ∨ Q)` is `false`. Either the status definition or the kernel API must change so that a caller reading `statusOf` cannot mistake an obstructed ground for a transmission-authorized one. Executable reproduction: R2 under [Audit Reproductions](design-review.md#audit-reproductions) (final three assertions). | - | open |
+| `audit-evidence-label-integrity` | **`Consensus` is satisfied by the presence of a test-function name, and one label conflates ratification with evidence.** [AGENTS.md](../AGENTS.md) §2 item 5 defines `[Consensus]` as ratification by the maintainer, but `.spec-guard.json` configures `Consensus` with `evidence: test`, which `spec-guard claims` accepts whenever an `@assert-count` directive counts at least one occurrence of the text `function test_…` in a test file. `spec-guard prove` then shows only that each such rule fails when that text is removed in memory: it does not mutate or fault-inject the kernel, and nothing checks what the named test asserts or that it exercises the claim. At commit `785b74e` the 26 claims read `Consensus 26, Exploratory 0`, their 73 directives name 33 distinct test functions, and this section read "None currently open". The Verification section of [README.md](../README.md) describes this gate as "mutation resistance" and as a "Mutation/fault-injection proof verifying every `@assert-count` rule catches failing implementations", which misstates what it checks. No label separates a maintainer decision (`Decided`), behavior exercised by tests (`Tested`), and a result with a proof (`Proved`), so [metatheory.md](../spec/metatheory.md) presents MT-1–MT-9 as theorems "anchored to executable tests" on the strength of named tests alone. Affects every labelled claim in [core.md](../spec/core.md), [worked-examples.md](../spec/worked-examples.md) and [metatheory.md](../spec/metatheory.md), plus the README Verification section. | - | open |
+| `audit-metatheorem-overclaim` | **MT-8 and MT-9 claim more than their proof sketches and the kernel's finite semantics support.** MT-8 in [metatheory.md](../spec/metatheory.md) is titled "Soundness & Syntactic Completeness" and states that `UL-Intuitionistic` "yields Heyting Intuitionistic First-Order Logic (`NJ`) under finitary Beth-cover semantics", but its proof sketch shows only that Quarantine never triggers under `No-Gluts` and that `A ∨ ~A` and `(A → ⊥) → ⊥ ⊢ A` are not derivable on an `Open` item; it gives no completeness argument in any direction (every `NJ` theorem derivable, every derivable item an `NJ` theorem, or semantic completeness). The kernel evaluates over finite boundary systems with finite handle domains, and intuitionistic first-order logic is not complete for Kripke or Beth models on finite frames: the double-negation shift `∀x ¬¬A(x) → ¬¬∀x A(x)` holds in every such model yet is not provable in `NJ`, so a semantic completeness claim must either admit infinite structures or be restricted. MT-9 and [core.md](../spec/core.md) §4 item 13 present the `UL-Classical` result as classical first-order recovery and a "Tarskian classical first-order valuation", but it is defined only over a closed finite `Dom(B*)` or a finite atomic cover, which yields finite-domain classical semantics; validity over finite structures differs from first-order validity (Trakhtenbrot's theorem). The MT-9 proof also restates the truth tables through the `No-Gaps` closure of non-refuted conditionals, so it shows that closure is consistent rather than recovering classical logic independently. Affects MT-8, MT-9, core.md §4 item 13, and the scope sentence of [README.md](../README.md). | - | open |
+| `audit-spec-kernel-coupling` | **The core `Live` / `Collision` semantics is defined by the kernel, not by the specification.** [core.md](../spec/core.md) §3 item 10 gates every transmissive rule on `Live`, while `Live` depends on `Collision`, which depends on the entries those rules produce; the item settles this circularity only by naming a mechanism ("realized via an alternating fixpoint over obstruction sets"), not by defining it. MT-1 in [metatheory.md](../spec/metatheory.md) proves a least-fixpoint result for an operator `F_Σ` that treats `Entries(Σ)` and `obstructed_Σ` as fixed inputs, which is not the semantics core.md §3 item 10 describes, and then states that the actual behavior is a Van Gelder alternating fixpoint with self-cyclic and subset-minimal ancestor filtering and source-SCC symmetric conflict locking, identified by kernel symbols (`defObstructed`, `mayPass`, `computeSourceSCCs`). The same document grounds other results in kernel internals (`#stageArchive`, `BoundarySystem.clone()`, `runClosure`, and `kind === "contingent"` for M1(ii)–(iii)). A second implementation written from core.md alone therefore cannot be checked against the reference kernel. MT-1 further records that cross-conflict mutual bridges between two distinct symmetric sources lie beyond single-source SCC isolation, while its audit table marks G-1, G-7 and G-15 `Resolved` and MT-1 carries `Consensus`. Affects core.md §3 items 8 and 10, MT-1, MT-2, MT-7, and G-1, G-7, G-15. | - | open |
+
+### Audit Reproductions
+
+Each snippet reproduces, at commit `785b74e`, the kernel behavior cited by an implementation entry above. Each is self-contained: save it as a `.ts` file in the repository root and run `node <file>.ts` with the Node version `npm test` uses (Node 22+ with type stripping). Every assertion records the current, defective behavior, so a snippet that starts failing means the behavior has changed.
+
+#### R1: M1 accepts a criterion that the excised counterexample satisfies
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, forall } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("Swan", {
+  nativeRelations: ["White", "Feathered"],
+  handles: [
+    { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+    { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+  ],
+});
+b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+const e = new InquiryEngine(b);
+const rel = (name: string, handle: string) => atom(name, [{ role: "subject", handle }]);
+const auth = (handle: string) => ({ handle, criterion: "I_Swan" });
+e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+e.observePositive("Swan", rel("Feathered", "swan_101"), "f101", auth("swan_101"));
+e.observePositive("Swan", rel("Feathered", "swan_402"), "f402", auth("swan_402"));
+
+const res = e.refineBoundary({
+  fromBoundary: "Swan",
+  toBoundary: "Swan_Rest",
+  originalUniversal: forall("x", "Swan", rel("White", "x")),
+  targetRelation: "White",
+  criterionItem: rel("Feathered", "x"),
+});
+assert.equal(res.ok, true); // refinement admitted
+const excised = rel("Feathered", "swan_402");
+assert.equal(e.evaluate([excised]).isLive("Swan", "+", excised), true); // yet the excised handle satisfies δ
+```
+
+#### R2: A cover survives a sub-boundary disjoint from every cell; `statusOf` ignores obstruction
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, or } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("B");
+b.defineBoundary("C1", { parents: ["B"] });
+b.defineBoundary("C2", { parents: ["B"] });
+b.declareDisjoint("C1", "C2");
+const e = new InquiryEngine(b);
+e.witnessCover("B", ["C1", "C2"]);
+b.defineBoundary("B3", { parents: ["B"] });
+b.declareDisjoint("B3", "C1");
+b.declareDisjoint("B3", "C2");
+assert.equal(b.isWitnessedCover("B", ["C1", "C2"]), true); // still accepted as exhaustive
+
+const P = atom("P");
+const Q = atom("Q");
+const PQ = or(P, Q);
+e.observePositive("C1", P, "p1");
+e.observePositive("C2", Q, "q2");
+let s = e.evaluate([PQ]);
+assert.equal(s.statusOf("B3", PQ), "Grounded"); // disjunction grounded on B3 ...
+assert.equal(s.statusOf("B3", P), "Open"); // ... with neither disjunct known there
+assert.equal(s.statusOf("B3", Q), "Open");
+
+e.observeNegative("B3", P, "np3");
+e.observeNegative("B3", Q, "nq3");
+s = e.evaluate([PQ]);
+assert.equal(s.statusOf("B3", PQ), "Collision");
+for (const bd of ["B", "C1", "C2", "B3"]) {
+  assert.equal(s.isCollided(bd, P), false); // no disjunct collides anywhere
+  assert.equal(s.isCollided(bd, Q), false);
+}
+assert.deepEqual(s.revisionObligations().map((r) => r.boundary), ["B3"]);
+
+// audit-status-obstruction-mismatch
+assert.equal(s.statusOf("B", PQ), "Grounded");
+assert.equal(s.isObstructed("B", PQ), true);
+assert.equal(s.isLive("B", "+", PQ), false);
+```
+
+#### R3: No registered common sub-boundary is read as disjointness; meet can be ambiguous
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("Lab");
+b.defineBoundary("Field");
+const e = new InquiryEngine(b);
+e.observePositive("Lab", atom("P"), "lab");
+e.observeNegative("Field", atom("P"), "field");
+assert.equal(b.meet("Lab", "Field"), "⊥_B"); // never declared disjoint
+assert.equal(e.evaluate().isCollisionFree(), true);
+
+b.defineBoundary("LabField", { parents: ["Lab", "Field"] });
+assert.equal(e.evaluate().isCollisionFree(), false); // the same evidence now collides
+
+b.defineBoundary("LabField2", { parents: ["Lab", "Field"] });
+assert.throws(() => b.meet("Lab", "Field"), /Ambiguous meet/); // ⊓ is not total
+```
