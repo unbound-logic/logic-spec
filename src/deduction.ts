@@ -8,9 +8,10 @@
  */
 
 import { BOT_BOUNDARY, type BoundarySystem } from "./boundary.ts";
-import { type EvaluationSnapshot, type InquiryEngine } from "./engine.ts";
+import { type EvaluationSnapshot, type GroundDependency, type InquiryEngine } from "./engine.ts";
 import {
   and,
+  collectAllIdentifiers,
   collectHandles,
   computeItemLevel,
   equiv,
@@ -134,6 +135,7 @@ export type DerivationResult =
       readonly polarity: Polarity;
       readonly item: Item;
       readonly requiredBaseIds: readonly string[];
+      readonly requiredGrounds: readonly GroundDependency[];
     }
   | { readonly ok: false; readonly violation: ProofViolation; readonly reason: string };
 
@@ -150,6 +152,23 @@ function mergeSorted(...lists: readonly (readonly string[])[]): readonly string[
     }
   }
   return [...out].sort();
+}
+
+function mergeGroundDeps(
+  ...lists: readonly (readonly GroundDependency[])[]
+): readonly GroundDependency[] {
+  const seen = new Set<string>();
+  const out: GroundDependency[] = [];
+  for (const list of lists) {
+    for (const dep of list) {
+      const k = `${dep.boundary}\0${dep.polarity}\0${itemKey(dep.item)}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(dep);
+      }
+    }
+  }
+  return out;
 }
 
 function isDefinedNonEmptyBoundary(boundaries: BoundarySystem, boundary: string): boolean {
@@ -232,6 +251,7 @@ function verifyRoot(
           polarity: node.polarity,
           item: node.item,
           requiredBaseIds,
+          requiredGrounds: [{ boundary: node.boundary, polarity: node.polarity, item: node.item }],
         };
       }
 
@@ -264,6 +284,7 @@ function verifyRoot(
           polarity: "+",
           item: assumed.item,
           requiredBaseIds: [],
+          requiredGrounds: [],
         };
       }
 
@@ -292,6 +313,7 @@ function verifyRoot(
           polarity: inner.polarity,
           item: inner.item,
           requiredBaseIds: inner.requiredBaseIds,
+          requiredGrounds: inner.requiredGrounds,
         };
       }
 
@@ -332,6 +354,7 @@ function verifyRoot(
           polarity: "+",
           item: implies(node.antecedent, bodyRes.item),
           requiredBaseIds: bodyRes.requiredBaseIds,
+          requiredGrounds: bodyRes.requiredGrounds,
         };
       }
 
@@ -372,6 +395,7 @@ function verifyRoot(
           polarity: "+",
           item: cRes.item.consequent,
           requiredBaseIds: mergeSorted(pRes.requiredBaseIds, cRes.requiredBaseIds),
+          requiredGrounds: mergeGroundDeps(pRes.requiredGrounds, cRes.requiredGrounds),
         };
       }
 
@@ -405,6 +429,7 @@ function verifyRoot(
           polarity: "+",
           item: and(lRes.item, rRes.item),
           requiredBaseIds: mergeSorted(lRes.requiredBaseIds, rRes.requiredBaseIds),
+          requiredGrounds: mergeGroundDeps(lRes.requiredGrounds, rRes.requiredGrounds),
         };
       }
 
@@ -426,6 +451,7 @@ function verifyRoot(
           polarity: "+",
           item: node.side === "left" ? pRes.item.left : pRes.item.right,
           requiredBaseIds: pRes.requiredBaseIds,
+          requiredGrounds: pRes.requiredGrounds,
         };
       }
 
@@ -447,6 +473,7 @@ function verifyRoot(
           polarity: "+",
           item: node.side === "left" ? or(wRes.item, node.other) : or(node.other, wRes.item),
           requiredBaseIds: wRes.requiredBaseIds,
+          requiredGrounds: wRes.requiredGrounds,
         };
       }
 
@@ -469,6 +496,7 @@ function verifyRoot(
         const leftK = itemKey(node.left);
         const rightK = itemKey(node.right);
         const reqs: (readonly string[])[] = [];
+        const groundReqs: (readonly GroundDependency[])[] = [];
         for (const cp of node.cellProofs) {
           const cRes = verifyNode(cp.proof, assumptions, eigenScope);
           if (!cRes.ok) {
@@ -483,6 +511,7 @@ function verifyRoot(
             };
           }
           reqs.push(cRes.requiredBaseIds);
+          groundReqs.push(cRes.requiredGrounds);
         }
         return {
           ok: true,
@@ -490,6 +519,7 @@ function verifyRoot(
           polarity: "+",
           item: or(node.left, node.right),
           requiredBaseIds: mergeSorted(...reqs),
+          requiredGrounds: mergeGroundDeps(...groundReqs),
         };
       }
 
@@ -555,6 +585,11 @@ function verifyRoot(
             lRes.requiredBaseIds,
             rRes.requiredBaseIds,
           ),
+          requiredGrounds: mergeGroundDeps(
+            dRes.requiredGrounds,
+            lRes.requiredGrounds,
+            rRes.requiredGrounds,
+          ),
         };
       }
 
@@ -577,6 +612,7 @@ function verifyRoot(
         const targetK = itemKey(node.item);
         let agreedPol: Polarity | undefined;
         const reqs: (readonly string[])[] = [];
+        const groundReqs: (readonly GroundDependency[])[] = [];
         for (const cp of node.cellProofs) {
           const cRes = verifyNode(cp.proof, assumptions, eigenScope);
           if (!cRes.ok) {
@@ -599,6 +635,7 @@ function verifyRoot(
             };
           }
           reqs.push(cRes.requiredBaseIds);
+          groundReqs.push(cRes.requiredGrounds);
         }
         if (agreedPol === undefined) {
           return {
@@ -613,6 +650,7 @@ function verifyRoot(
           polarity: agreedPol,
           item: node.item,
           requiredBaseIds: mergeSorted(...reqs),
+          requiredGrounds: mergeGroundDeps(...groundReqs),
         };
       }
 
@@ -632,7 +670,7 @@ function verifyRoot(
           eigenScope.has(node.eigenvar) ||
           stateHandles.has(node.eigenvar) ||
           isHandleInAssumptions(node.eigenvar, assumptions) ||
-          collectHandles(qItem).has(node.eigenvar)
+          collectAllIdentifiers(qItem).has(node.eigenvar)
         ) {
           return {
             ok: false,
@@ -664,6 +702,7 @@ function verifyRoot(
           polarity: "+",
           item: qItem,
           requiredBaseIds: bRes.requiredBaseIds,
+          requiredGrounds: bRes.requiredGrounds,
         };
       }
 
@@ -692,6 +731,7 @@ function verifyRoot(
           polarity: "+",
           item: substituteHandle(uRes.item.body, uRes.item.variable, node.term),
           requiredBaseIds: uRes.requiredBaseIds,
+          requiredGrounds: uRes.requiredGrounds,
         };
       }
 
@@ -728,6 +768,7 @@ function verifyRoot(
           polarity: "+",
           item: exists(node.variable, node.domain, node.templateBody),
           requiredBaseIds: wRes.requiredBaseIds,
+          requiredGrounds: wRes.requiredGrounds,
         };
       }
 
@@ -747,7 +788,7 @@ function verifyRoot(
           eigenScope.has(node.witnessVar) ||
           stateHandles.has(node.witnessVar) ||
           isHandleInAssumptions(node.witnessVar, assumptions) ||
-          collectHandles(eRes.item).has(node.witnessVar)
+          collectAllIdentifiers(eRes.item).has(node.witnessVar)
         ) {
           return {
             ok: false,
@@ -793,6 +834,7 @@ function verifyRoot(
           polarity: "+",
           item: bRes.item,
           requiredBaseIds: mergeSorted(eRes.requiredBaseIds, bRes.requiredBaseIds),
+          requiredGrounds: mergeGroundDeps(eRes.requiredGrounds, bRes.requiredGrounds),
         };
       }
 
@@ -807,6 +849,7 @@ function verifyRoot(
           polarity: iRes.polarity === "+" ? "-" : "+",
           item: flip(iRes.item),
           requiredBaseIds: iRes.requiredBaseIds,
+          requiredGrounds: iRes.requiredGrounds,
         };
       }
 
@@ -828,6 +871,7 @@ function verifyRoot(
           polarity: iRes.polarity === "+" ? "-" : "+",
           item: iRes.item.inner,
           requiredBaseIds: iRes.requiredBaseIds,
+          requiredGrounds: iRes.requiredGrounds,
         };
       }
 
@@ -852,6 +896,7 @@ function verifyRoot(
           polarity: "+",
           item: equiv(node.boundary, node.term, node.term),
           requiredBaseIds: [],
+          requiredGrounds: [],
         };
       }
 
@@ -904,6 +949,7 @@ function verifyRoot(
           polarity: tRes.polarity,
           item: rewritten,
           requiredBaseIds: mergeSorted(eqRes.requiredBaseIds, tRes.requiredBaseIds),
+          requiredGrounds: mergeGroundDeps(eqRes.requiredGrounds, tRes.requiredGrounds),
         };
       }
 
@@ -963,6 +1009,7 @@ function verifyRoot(
           polarity: holds ? "+" : "-",
           item: node.reflItem,
           requiredBaseIds: [],
+          requiredGrounds: [],
         };
       }
 
@@ -991,12 +1038,81 @@ function verifyRoot(
           polarity: "+",
           item: node.target,
           requiredBaseIds: bRes.requiredBaseIds,
+          requiredGrounds: bRes.requiredGrounds,
         };
       }
     }
   }
 
   return verifyNode(rootNode, new Map<string, ActiveAssumption>(), new Map<string, string>());
+}
+
+function collectLiveGroundItems(node: ProofNode): readonly Item[] {
+  const out: Item[] = [];
+  const visit = (n: ProofNode): void => {
+    switch (n.kind) {
+      case "live-ground":
+        out.push(n.item);
+        return;
+      case "assume":
+      case "equiv-refl":
+      case "refl-intro":
+        return;
+      case "weaken-boundary":
+        visit(n.proof);
+        return;
+      case "implies-intro":
+      case "forall-intro":
+      case "flip-intro":
+      case "flip-elim":
+        visit(n.kind === "implies-intro" || n.kind === "forall-intro" ? n.body : n.inner);
+        return;
+      case "implies-elim":
+        visit(n.premise);
+        visit(n.conditional);
+        return;
+      case "and-intro":
+        visit(n.left);
+        visit(n.right);
+        return;
+      case "and-elim":
+        visit(n.pair);
+        return;
+      case "or-intro":
+        visit(n.witness);
+        return;
+      case "or-cover-intro":
+      case "cover-glue":
+        for (const cp of n.cellProofs) {
+          visit(cp.proof);
+        }
+        return;
+      case "or-elim":
+        visit(n.disjunction);
+        visit(n.leftBranch);
+        visit(n.rightBranch);
+        return;
+      case "forall-elim":
+        visit(n.universal);
+        return;
+      case "exists-intro":
+        visit(n.witnessProof);
+        return;
+      case "exists-elim":
+        visit(n.existential);
+        visit(n.body);
+        return;
+      case "equiv-subst":
+        visit(n.equivProof);
+        visit(n.targetProof);
+        return;
+      case "ex-falso-bottom":
+        visit(n.bottomProof);
+        return;
+    }
+  };
+  visit(node);
+  return out;
 }
 
 /**
@@ -1008,7 +1124,7 @@ export function verifyDerivation(
   proof: ProofNode,
   mode: DeductionMode = "UL-Core",
 ): DerivationResult {
-  const snapshot = engine.evaluate();
+  const snapshot = engine.evaluate(collectLiveGroundItems(proof));
   if (mode === "UL-Minimal" || mode === "UL-Intuitionistic") {
     if (!engine.monotoneOnly || !snapshot.isCollisionFree()) {
       return {
@@ -1034,7 +1150,14 @@ export function admitVerifiedDerivation(
 ): DerivationResult {
   const res = verifyDerivation(engine, proof, mode);
   if (res.ok) {
-    engine.recordTheorem(res.boundary, res.polarity, res.item, theoremId, res.requiredBaseIds);
+    engine.recordTheorem(
+      res.boundary,
+      res.polarity,
+      res.item,
+      theoremId,
+      res.requiredBaseIds,
+      res.requiredGrounds,
+    );
   }
   return res;
 }

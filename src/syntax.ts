@@ -255,29 +255,15 @@ export function substituteHandle(item: Item, variable: string, replacement: stri
         substituteHandle(item.consequent, variable, replacement),
       );
     case "forall":
-      if (item.variable === variable) {
+    case "exists": {
+      const prepared = prepareQuantifierSubstitution(item, variable, replacement);
+      if (prepared === undefined) {
         return item;
       }
-      return forall(
-        item.variable,
-        item.domain,
-        substituteHandle(item.body, variable, replacement),
-        item.domainConstraint !== undefined
-          ? substituteHandle(item.domainConstraint, variable, replacement)
-          : undefined,
-      );
-    case "exists":
-      if (item.variable === variable) {
-        return item;
-      }
-      return exists(
-        item.variable,
-        item.domain,
-        substituteHandle(item.body, variable, replacement),
-        item.domainConstraint !== undefined
-          ? substituteHandle(item.domainConstraint, variable, replacement)
-          : undefined,
-      );
+      return item.kind === "forall"
+        ? forall(prepared.variable, item.domain, prepared.body, prepared.domainConstraint)
+        : exists(prepared.variable, item.domain, prepared.body, prepared.domainConstraint);
+    }
     case "refl": {
       const subTarget = substituteHandle(item.targetItem, variable, replacement);
       if (item.targetStatus !== undefined) {
@@ -300,6 +286,67 @@ export function substituteHandle(item: Item, variable: string, replacement: stri
       );
     }
   }
+}
+
+function prepareQuantifierSubstitution(
+  item: Extract<Item, { kind: "forall" | "exists" }>,
+  variable: string,
+  replacement: string,
+): { readonly variable: string; readonly body: Item; readonly domainConstraint?: Item } | undefined {
+  if (item.variable === variable || variable === replacement) {
+    return undefined;
+  }
+  const freeInBody = collectHandles(item.body).has(variable);
+  const freeInConstraint =
+    item.domainConstraint !== undefined && collectHandles(item.domainConstraint).has(variable);
+  if (item.variable === replacement && (freeInBody || freeInConstraint)) {
+    const used = collectAllIdentifiers(item);
+    used.add(variable);
+    used.add(replacement);
+    let idx = 1;
+    let fresh = `${item.variable}_${idx}`;
+    while (used.has(fresh)) {
+      idx += 1;
+      fresh = `${item.variable}_${idx}`;
+    }
+    const renamedBody = substituteHandle(item.body, item.variable, fresh);
+    const renamedConstraint =
+      item.domainConstraint !== undefined
+        ? substituteHandle(item.domainConstraint, item.variable, fresh)
+        : undefined;
+    return {
+      variable: fresh,
+      body: substituteHandle(renamedBody, variable, replacement),
+      ...(renamedConstraint !== undefined
+        ? { domainConstraint: substituteHandle(renamedConstraint, variable, replacement) }
+        : {}),
+    };
+  }
+  return {
+    variable: item.variable,
+    body: substituteHandle(item.body, variable, replacement),
+    ...(item.domainConstraint !== undefined
+      ? { domainConstraint: substituteHandle(item.domainConstraint, variable, replacement) }
+      : {}),
+  };
+}
+
+/** Collect all free handles AND all bound quantifier variable identifiers occurring anywhere in an item. */
+export function collectAllIdentifiers(item: Item): Set<string> {
+  const out = new Set<string>();
+  walkItem(item, (node) => {
+    if (node.kind === "atom") {
+      for (const r of node.roles) {
+        out.add(r.handle);
+      }
+    } else if (node.kind === "equiv") {
+      out.add(node.left);
+      out.add(node.right);
+    } else if (node.kind === "forall" || node.kind === "exists") {
+      out.add(node.variable);
+    }
+  });
+  return out;
 }
 
 /** Collect all relation symbol names occurring anywhere inside an item. */

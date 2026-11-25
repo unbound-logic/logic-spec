@@ -81,6 +81,12 @@ export type M1Result =
       readonly reason: string;
     };
 
+export type GroundDependency = {
+  readonly boundary: string;
+  readonly polarity: Polarity;
+  readonly item: Item;
+};
+
 export type RevisionObligation = {
   readonly boundary: string;
   readonly itemKey: string;
@@ -243,6 +249,7 @@ type RecordedTheorem = {
   readonly polarity: Polarity;
   readonly item: Item;
   readonly requiredBaseIds: readonly string[];
+  readonly requiredGrounds: readonly GroundDependency[];
 };
 
 type StageRecord = {
@@ -328,6 +335,7 @@ export class InquiryEngine {
     item: Item,
     theoremId: string,
     requiredBaseIds: readonly string[] = [],
+    requiredGrounds: readonly GroundDependency[] = [],
   ): void {
     if (boundary === BOT_BOUNDARY) {
       throw new Error(
@@ -343,12 +351,16 @@ export class InquiryEngine {
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
     this.#trackItem(item);
+    for (const dep of requiredGrounds) {
+      this.#trackItem(dep.item);
+    }
     this.#theorems.set(theoremId, {
       theoremId,
       boundary,
       polarity,
       item,
       requiredBaseIds: [...requiredBaseIds],
+      requiredGrounds: [...requiredGrounds],
     });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Theorem${polarity}(${boundary}, ${itemKey(item)}, ${theoremId})`);
@@ -641,9 +653,22 @@ export class InquiryEngine {
       readonly liveIds: Set<string>;
     };
 
-    const runClosure = (blockedSlots: ReadonlySet<string>): ClosurePassResult => {
+    type LockedConflictEntry = {
+      readonly boundary: string;
+      readonly polarity: Polarity;
+      readonly item: Item;
+      readonly rule: string;
+      readonly baseLeaves: readonly string[];
+      readonly coverCells?: readonly string[];
+    };
+
+    const runClosure = (
+      blockedSlots: ReadonlySet<string>,
+      lockedConflictEntries: readonly LockedConflictEntry[] = [],
+    ): ClosurePassResult => {
       const entries: GroundEntry[] = [];
       const byEntryId = new Map<string, GroundEntry>();
+      const lockedEntryIds = new Set<string>();
       const dedupKeys = new Set<string>();
       let seq = 0;
 
@@ -699,7 +724,7 @@ export class InquiryEngine {
           : { kind: "derived", rule, depEntryIds, baseLeaves };
       };
 
-      // 1. Seed base observations, structural exclusions, verified theorems, and cross-stage reflections.
+      // 1. Seed base observations, locked symmetric-conflict witnesses, structural exclusions, and cross-stage reflections.
       const baseEntryIdByBaseId = new Map<string, string>();
       for (const obs of record.baseObservations.values()) {
         const created = addEntry(obs.boundary, obs.polarity, obs.item, {
@@ -710,24 +735,20 @@ export class InquiryEngine {
           baseEntryIdByBaseId.set(obs.baseId, created.entryId);
         }
       }
-      for (const thm of record.theorems.values()) {
-        const depEntryIds: string[] = [];
-        let allPresent = true;
-        for (const reqId of thm.requiredBaseIds) {
-          const entryId = baseEntryIdByBaseId.get(reqId);
-          if (entryId === undefined) {
-            allPresent = false;
-            break;
-          }
-          depEntryIds.push(entryId);
-        }
-        if (allPresent) {
-          addEntry(
-            thm.boundary,
-            thm.polarity,
-            thm.item,
-            makeDerived("theorem", depEntryIds, `@thm:${thm.theoremId}`),
-          );
+      for (const lc of lockedConflictEntries) {
+        const prov: Provenance =
+          lc.coverCells !== undefined
+            ? {
+                kind: "derived",
+                rule: lc.rule,
+                depEntryIds: [],
+                baseLeaves: lc.baseLeaves,
+                coverCells: lc.coverCells,
+              }
+            : { kind: "derived", rule: lc.rule, depEntryIds: [], baseLeaves: lc.baseLeaves };
+        const created = addEntry(lc.boundary, lc.polarity, lc.item, prov);
+        if (created !== undefined) {
+          lockedEntryIds.add(created.entryId);
         }
       }
       for (const b of nonEmptyB) {
@@ -761,6 +782,9 @@ export class InquiryEngine {
           changed = false;
           for (const e of entries) {
             if (auth.has(e.entryId)) {
+              continue;
+            }
+            if (lockedEntryIds.has(e.entryId)) {
               continue;
             }
             if (disallowedSlots.has(`${e.boundary}\0${e.key}`)) {
@@ -806,9 +830,9 @@ export class InquiryEngine {
           const sep = c.indexOf("\0");
           const colB = c.slice(0, sep);
           const colKey = c.slice(sep + 1);
-          for (const e of entries) {
-            if (e.key === colKey && this.boundaries.refines(colB, e.boundary)) {
-              obstructed.add(`${e.boundary}\0${e.key}`);
+          for (const b of nonEmptyB) {
+            if (this.boundaries.refines(colB, b)) {
+              obstructed.add(`${b}\0${colKey}`);
             }
           }
         }
@@ -1046,7 +1070,7 @@ export class InquiryEngine {
                 b,
                 "-",
                 inc.right,
-                makeDerived("incompat", [la.entryId], `incompat:${lk}⊥${rk}`),
+                makeDerived("incompat", [la.entryId], `@incompat:${lk}⊥${rk}`),
               );
             }
             for (const ra of liveByBPolKey.get(slotKey(b, "+", rk)) ?? []) {
@@ -1054,9 +1078,44 @@ export class InquiryEngine {
                 b,
                 "-",
                 inc.left,
-                makeDerived("incompat", [ra.entryId], `incompat:${lk}⊥${rk}`),
+                makeDerived("incompat", [ra.entryId], `@incompat:${lk}⊥${rk}`),
               );
             }
+          }
+        }
+
+        // F2) Admit verified theorems once their required base leaves and Live ground dependencies exist
+        for (const thm of record.theorems.values()) {
+          const depIdSet = new Set<string>();
+          let allSatisfied = true;
+          for (const reqId of thm.requiredBaseIds) {
+            const entryId = baseEntryIdByBaseId.get(reqId);
+            if (entryId === undefined) {
+              allSatisfied = false;
+              break;
+            }
+            depIdSet.add(entryId);
+          }
+          if (!allSatisfied) {
+            continue;
+          }
+          for (const dep of thm.requiredGrounds) {
+            const liveDep = liveByBPolKey.get(
+              slotKey(dep.boundary, dep.polarity, itemKey(dep.item)),
+            )?.[0];
+            if (liveDep === undefined) {
+              allSatisfied = false;
+              break;
+            }
+            depIdSet.add(liveDep.entryId);
+          }
+          if (allSatisfied) {
+            addEntry(
+              thm.boundary,
+              thm.polarity,
+              thm.item,
+              makeDerived("theorem", [...depIdSet], `@thm:${thm.theoremId}`),
+            );
           }
         }
 
@@ -1164,23 +1223,151 @@ export class InquiryEngine {
       };
     };
 
-    // Van Gelder alternating fixpoint over obstruction sets prevents ghost collisions from defeated derivations.
-    let defObstructed = new Set<string>();
+    // Van Gelder alternating fixpoint + source-SCC locking of symmetric conflicts prevents
+    // ghost collisions from both defeated branches and mutual incompatibility cycles.
+    const extraBlocked = new Set<string>();
+    const lockedEntriesMap = new Map<string, LockedConflictEntry>();
     let finalPass: ClosurePassResult | undefined;
-    for (let round = 0; round < 32; round++) {
-      const mayPass = runClosure(defObstructed);
-      const defPass = runClosure(mayPass.obstructed);
+
+    for (let outer = 0; outer < 32; outer++) {
+      const lockedList = [...lockedEntriesMap.values()];
+      let defObstructed = new Set<string>(extraBlocked);
+      let mayPass = runClosure(defObstructed, lockedList);
+      for (let round = 0; round < 32; round++) {
+        mayPass = runClosure(defObstructed, lockedList);
+        const defInput = new Set<string>(mayPass.obstructed);
+        for (const s of extraBlocked) {
+          defInput.add(s);
+        }
+        const defPass = runClosure(defInput, lockedList);
+        const nextDef = new Set<string>(defPass.obstructed);
+        for (const s of extraBlocked) {
+          nextDef.add(s);
+        }
+        if (
+          nextDef.size === defObstructed.size &&
+          [...nextDef].every((s) => defObstructed.has(s))
+        ) {
+          break;
+        }
+        defObstructed = nextDef;
+      }
       finalPass = mayPass;
-      if (
-        defPass.obstructed.size === defObstructed.size &&
-        [...defPass.obstructed].every((s) => defObstructed.has(s))
-      ) {
+
+      const unresolved = new Set<string>();
+      for (const s of mayPass.obstructed) {
+        if (!defObstructed.has(s)) {
+          unresolved.add(s);
+        }
+      }
+      if (unresolved.size === 0) {
         break;
       }
-      defObstructed = defPass.obstructed;
+
+      const entryMap = new Map<string, GroundEntry>();
+      for (const e of mayPass.entries) {
+        entryMap.set(e.entryId, e);
+      }
+      const adj = new Map<string, Set<string>>();
+      for (const s of unresolved) {
+        adj.set(s, new Set<string>());
+      }
+
+      const collectAncestorSlotsInU = (startEntry: GroundEntry): Set<string> => {
+        const found = new Set<string>();
+        const seen = new Set<string>();
+        const stack: string[] = [];
+        if (startEntry.provenance.kind === "derived") {
+          for (const d of startEntry.provenance.depEntryIds) {
+            stack.push(d);
+          }
+        }
+        while (stack.length > 0) {
+          const curId = stack.pop();
+          if (curId === undefined || seen.has(curId)) {
+            continue;
+          }
+          seen.add(curId);
+          const anc = entryMap.get(curId);
+          if (anc === undefined) {
+            continue;
+          }
+          const ancSlot = `${anc.boundary}\0${anc.key}`;
+          if (unresolved.has(ancSlot)) {
+            found.add(ancSlot);
+          }
+          if (anc.provenance.kind === "derived") {
+            for (const nextId of anc.provenance.depEntryIds) {
+              stack.push(nextId);
+            }
+          }
+        }
+        return found;
+      };
+
+      for (const e of mayPass.entries) {
+        const s = `${e.boundary}\0${e.key}`;
+        if (!unresolved.has(s)) {
+          continue;
+        }
+        for (const u of collectAncestorSlotsInU(e)) {
+          if (u !== s) {
+            adj.get(u)?.add(s);
+          }
+        }
+      }
+
+      for (const s of unresolved) {
+        if (mayPass.collisions.has(s)) {
+          continue;
+        }
+        const sep = s.indexOf("\0");
+        const b = s.slice(0, sep);
+        const k = s.slice(sep + 1);
+        for (const sSub of unresolved) {
+          const subSep = sSub.indexOf("\0");
+          const bSub = sSub.slice(0, subSep);
+          const kSub = sSub.slice(subSep + 1);
+          if (kSub === k && bSub !== b && this.boundaries.refines(bSub, b)) {
+            adj.get(sSub)?.add(s);
+          }
+        }
+      }
+
+      const sccs = computeSourceSCCs(unresolved, adj);
+      let addedLock = false;
+      for (const sourceScc of sccs) {
+        for (const s of sourceScc) {
+          if (!extraBlocked.has(s)) {
+            extraBlocked.add(s);
+            addedLock = true;
+          }
+          for (const e of mayPass.entries) {
+            if (`${e.boundary}\0${e.key}` === s && e.provenance.kind === "derived") {
+              const lk = `${e.boundary}\0${e.polarity}\0${e.key}\0${e.provenance.baseLeaves.join(",")}`;
+              if (!lockedEntriesMap.has(lk)) {
+                lockedEntriesMap.set(lk, {
+                  boundary: e.boundary,
+                  polarity: e.polarity,
+                  item: e.item,
+                  rule: e.provenance.rule,
+                  baseLeaves: e.provenance.baseLeaves,
+                  ...(e.provenance.coverCells !== undefined
+                    ? { coverCells: e.provenance.coverCells }
+                    : {}),
+                });
+              }
+            }
+          }
+        }
+      }
+      if (!addedLock) {
+        break;
+      }
     }
+
     if (finalPass === undefined) {
-      finalPass = runClosure(defObstructed);
+      finalPass = runClosure(extraBlocked, [...lockedEntriesMap.values()]);
     }
 
     return new EvaluationSnapshot(
@@ -1250,6 +1437,90 @@ export class InquiryEngine {
 
 function slotKey(boundary: string, polarity: Polarity, key: string): string {
   return `${boundary}\0${polarity}\0${key}`;
+}
+
+/** Tarjan strongly connected components restricted to those with zero external incoming edges. */
+function computeSourceSCCs(
+  nodes: ReadonlySet<string>,
+  adj: ReadonlyMap<string, ReadonlySet<string>>,
+): readonly (readonly string[])[] {
+  let index = 0;
+  const indices = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const sccs: string[][] = [];
+
+  const strongConnect = (v: string): void => {
+    indices.set(v, index);
+    lowlink.set(v, index);
+    index += 1;
+    stack.push(v);
+    onStack.add(v);
+
+    for (const w of adj.get(v) ?? []) {
+      if (!nodes.has(w)) {
+        continue;
+      }
+      if (!indices.has(w)) {
+        strongConnect(w);
+        lowlink.set(v, Math.min(lowlink.get(v) ?? 0, lowlink.get(w) ?? 0));
+      } else if (onStack.has(w)) {
+        lowlink.set(v, Math.min(lowlink.get(v) ?? 0, indices.get(w) ?? 0));
+      }
+    }
+
+    if (lowlink.get(v) === indices.get(v)) {
+      const comp: string[] = [];
+      while (stack.length > 0) {
+        const w = stack.pop();
+        if (w === undefined) {
+          break;
+        }
+        onStack.delete(w);
+        comp.push(w);
+        if (w === v) {
+          break;
+        }
+      }
+      sccs.push(comp);
+    }
+  };
+
+  for (const n of nodes) {
+    if (!indices.has(n)) {
+      strongConnect(n);
+    }
+  }
+
+  const sccOf = new Map<string, number>();
+  for (let i = 0; i < sccs.length; i++) {
+    for (const n of sccs[i] ?? []) {
+      sccOf.set(n, i);
+    }
+  }
+  const hasExternalIncoming = new Array<boolean>(sccs.length).fill(false);
+  for (const [u, outs] of adj) {
+    const su = sccOf.get(u);
+    if (su === undefined) {
+      continue;
+    }
+    for (const v of outs) {
+      const sv = sccOf.get(v);
+      if (sv !== undefined && sv !== su) {
+        hasExternalIncoming[sv] = true;
+      }
+    }
+  }
+
+  const sources: (readonly string[])[] = [];
+  for (let i = 0; i < sccs.length; i++) {
+    const comp = sccs[i];
+    if (comp !== undefined && !hasExternalIncoming[i]) {
+      sources.push(comp);
+    }
+  }
+  return sources;
 }
 
 function directSubItems(item: Item): readonly Item[] {
