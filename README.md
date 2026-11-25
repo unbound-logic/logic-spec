@@ -1,13 +1,13 @@
 # `unbound-logic/logic-spec`
 
-Living specification for an end-to-end logic system (`UL-Core`) designed from first principles under a zetetic (inquiry-driven) perspective—defaulting neither to Platonism nor to pure formalism, and recovering minimal constructive, intuitionistic, and classical first-order logic as explicit boundary specializations.
+Living specification for an end-to-end logic system (`UL-Core`) designed from first principles under a zetetic (inquiry-driven) perspective—defaulting neither to Platonism nor to pure formalism, with minimal constructive, intuitionistic, and finite-domain classical specializations obtained as explicit boundary closures.
 
 ## Reading Map
 
-- **[AGENTS.md](AGENTS.md)** — Epistemic stance, five reasoning guardrails (Anti-Inertia Audit, Constructive Socratic Challenge, Terminology Hygiene, Anti-Triviality Test, Hypothesis vs. Consensus), language split, and workflow rules.
-- **[spec/core.md](spec/core.md)** — Normative formal specification of `UL-Core` (v0.2.0, `Consensus`): role-indexed content grammar (`G3`), boundary meet-semilattice & finitary covers, inquiry state transitions (`M1`, `M2`, `Retract`), dual-polarity provenance calculus, Quarantine, Curry Paradox firewall, and the four-tier specialization spectrum (`UL-Core` ⊃ `UL-Minimal` ⊃ `UL-Intuitionistic` ⊃ `UL-Classical`).
-- **[spec/worked-examples.md](spec/worked-examples.md)** — Step-by-step formal derivations and adversarial stress-tests (`Consensus`) validating `spec/core.md` across multi-regime collision/quarantine, `M1` & `M2` anti-immunization, Curry attacks, and classical recovery.
-- **[spec/metatheory.md](spec/metatheory.md)** — Active formal metatheory specification (`Consensus` across `MT-1`–`MT-9`: well-foundedness, Curry firewall, non-explosion & `⊥` safety, disjoint zero-leakage, cover stability, `Retract` purity, `M1(i)–(iii)` / `M2` anti-immunization + Formal Horizon Corollary, syntactic natural deduction, and classical `2`/`2^k` recovery).
+- **[AGENTS.md](AGENTS.md)** — Epistemic stance, five reasoning guardrails (Anti-Inertia Audit, Constructive Socratic Challenge, Terminology Hygiene, Anti-Triviality Test, Claim Status Ladder), language split, and workflow rules.
+- **[spec/core.md](spec/core.md)** — Normative formal specification of `UL-Core` (v0.2.0; each item labelled `Exploratory`, `Decided`, `Tested`, or `Proved`): role-indexed content grammar (`G3`), boundary meet-semilattice & finitary covers, inquiry state transitions (`M1`, `M2`, `Retract`), dual-polarity provenance calculus, Quarantine, Curry Paradox firewall, and the four-tier specialization spectrum (`UL-Core` ⊃ `UL-Minimal` ⊃ `UL-Intuitionistic` ⊃ `UL-Classical`, the last restricted to finite domains).
+- **[spec/worked-examples.md](spec/worked-examples.md)** — Step-by-step formal derivations and adversarial stress-tests exercising `spec/core.md` across multi-regime collision/quarantine, `M1` & `M2` anti-immunization, Curry attacks, and classical recovery.
+- **[spec/metatheory.md](spec/metatheory.md)** — Metatheory of `UL-Core` (`MT-1`–`MT-9`: well-foundedness, Curry firewall, non-explosion & `⊥` safety, disjoint zero-leakage, cover stability, `Retract` purity, `M1(i)–(iii)` / `M2` anti-immunization + Formal Horizon Corollary, the `NJ_min` / `NJ` rule sets of the proof checker, and finite-domain classical `2`/`2^k` valuation). No result is `Proved` yet; most are `Tested`, and the rest are `Decided` or `Exploratory` pending the fixes recorded in `docs/design-review.md` §7.
 - **[docs/design-review.md](docs/design-review.md)** — Decision ledger recording every foundational design choice, rejected alternatives, and falsifiable `Reopen if:` conditions.
 - **[docs/glossary.md](docs/glossary.md)** — Terminology registry separating quarantined classical terms from defined local primitives.
 
@@ -30,7 +30,7 @@ The executable TypeScript reference kernel (`src/`) and test suite (`test/`) run
 
 ## Verification
 
-This repository checks type safety, kernel behavior, cross-references, claim evidence bindings, mutation resistance, and orientation integrity (Node 22+):
+This repository checks type safety, kernel behavior, cross-references, claim evidence bindings, and orientation integrity (Node 22+):
 
 ```bash
 npm ci
@@ -43,5 +43,7 @@ npm run verify
 2. `npm test` — Node test runner executing all seven adversarial suites in `test/`.
 3. `npm run spec-graph` — Verifies specification graph links, `README.md` orientation paths/commands, and `docs/design-review.md` registers.
 4. `npm run spec-guard` — Runs all `@assert-count` assertions binding `spec/core.md`, `spec/worked-examples.md`, and `spec/metatheory.md` to executable tests.
-5. `npm run spec-guard:prove` — Mutation/fault-injection proof verifying every `@assert-count` rule catches failing implementations.
-6. `npm run spec-guard:claims` — Audits `Consensus` vs. `Exploratory` claim evidence across `spec/`.
+5. `npm run spec-guard:prove` — Shows that each `@assert-count` rule fails when the text it counts is removed (in memory). It checks that the rules can fail; it does not mutate the kernel or check what a named test asserts.
+6. `npm run spec-guard:claims` — Checks that each claim in `spec/` has the evidence its label requires: `Tested` and `Proved` need an `@assert-count` naming a test, and `Proved` also needs `Proof:` in the claim's own text.
+
+Continuous integration runs `npm run verify` on every push and pull request ([`.github/workflows/verify.yml`](.github/workflows/verify.yml)). Long fuzzing runs are started by hand on GitHub-hosted runners ([`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml)).
