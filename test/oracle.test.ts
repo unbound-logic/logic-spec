@@ -1,14 +1,14 @@
 /**
  * Hand-computed cases for the clean-room Π(Σ) oracle in test/oracle/pi-sigma.ts
- * (spec/core.md §5 item 14). Every expectation is derived by hand from item 14's program,
- * rule table and Reporting section; readings of ambiguous text follow
+ * (spec/core.md §5 item 14, as amended in main commit 7b36043). Every expectation is derived
+ * by hand from item 14's program, rule table and Reporting section (G4b); readings follow
  * test/oracle/AMBIGUITIES.md.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { BoundarySystem, TOP_BOUNDARY, type HandleSpec } from "../src/boundary.ts";
+import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY, type HandleSpec } from "../src/boundary.ts";
 import { and, atom, bottom, equiv, exists, flip, forall, implies, itemKey, or, type Item } from "../src/syntax.ts";
 import {
   evaluatePi,
@@ -282,7 +282,9 @@ function test_oracle_symmetric_incompatibility_conflict(): void {
   });
 
   // live(B,+,A) ← not obs(B,A) ← coll(B,A) ← rec(B,-,A) ← live(B,+,C) ← not obs(B,C) ← … :
-  // an even loop through negation, so the well-founded model leaves it undefined.
+  // an even loop through negation, so the well-founded model leaves it undefined. Under G4b
+  // the undefined exclusion record is possible but not present, so it has no authority; the
+  // undefined coll still reports Collision, and each side's observed record is Undetermined.
   for (const item of [A, C]) {
     expectRow(m, "B", item, {
       rec: ["true", "undefined"],
@@ -290,7 +292,7 @@ function test_oracle_symmetric_incompatibility_conflict(): void {
       coll: "undefined",
       obs: "undefined",
       status: "Collision",
-      authority: ["Undetermined", "Undetermined"],
+      authority: ["Undetermined", null],
       rev: true,
     });
     expectRow(m, TOP_BOUNDARY, item, { ...OPEN, obs: "undefined" });
@@ -520,8 +522,10 @@ function test_oracle_structural_collapse(): void {
 }
 test("test_oracle_structural_collapse", test_oracle_structural_collapse);
 
-function test_oracle_polarity_flip_enters_only_when_tracked_or_queried(): void {
-  const bs = (): BoundarySystem => {
+function test_oracle_nested_polarity_flips_belong_to_universe(): void {
+  // A3 as amended by item 14: a flip belongs to U(Σ, Q) whenever it arises as a sub-item or a
+  // quantifier instance; U(Σ, Q) is only not closed under prefixing `~`.
+  const singleBoundary = (): BoundarySystem => {
     const system = new BoundarySystem();
     system.defineBoundary("B");
     return system;
@@ -530,21 +534,130 @@ function test_oracle_polarity_flip_enters_only_when_tracked_or_queried(): void {
     { boundary: "B", polarity: "-" as const, item: P },
     { boundary: "B", polarity: "+" as const, item: Q },
   ];
-  const conjunction = and(Q, flip(P));
 
-  const queried = evaluatePi({ boundaries: bs(), observations, queries: [flip(P)] });
+  const queried = evaluatePi({ boundaries: singleBoundary(), observations, queries: [flip(P)] });
   expectRow(queried, "B", flip(P), GROUNDED_LIVE);
 
-  // A3: ~P nested inside a queried item is not itself queried, so it is outside U(Σ, Q)
-  // and the conjunction has no +~P premise.
-  const nested = evaluatePi({ boundaries: bs(), observations, queries: [conjunction] });
-  assert.throws(() => nested.at("B", flip(P)), /outside/);
-  expectRow(nested, "B", conjunction, OPEN);
+  // ~P nested in a queried conjunction belongs to U(Σ, Q): +~P from the record -P, then ∧I.
+  const conjunction = and(Q, flip(P));
+  const nested = evaluatePi({ boundaries: singleBoundary(), observations, queries: [conjunction] });
+  expectRow(nested, "B", flip(P), GROUNDED_LIVE);
+  expectRow(nested, "B", conjunction, GROUNDED_LIVE);
 
-  const both = evaluatePi({ boundaries: bs(), observations, queries: [conjunction, flip(P)] });
-  expectRow(both, "B", conjunction, GROUNDED_LIVE);
+  // No flip is prefixed to tracked items: without a query, ~P and ~Q are not in U(Σ, Q).
+  const plain = evaluatePi({ boundaries: singleBoundary(), observations });
+  assert.deepEqual(plain.universe.map(itemKey).sort(), [itemKey(P), itemKey(Q)].sort());
+  assert.throws(() => plain.at("B", flip(P)), /outside/);
+
+  // Flipped quantifier instances ~P(a), ~P(b) belong to U(Σ, Q), so ∀ generic can use them.
+  const bs = new BoundarySystem();
+  bs.defineBoundary("D", { handles: [handle("a"), handle("b")] });
+  const universal = forall("x", "D", flip(unary("P", "x")));
+  const instances = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "D", polarity: "-", item: unary("P", "a") },
+      { boundary: "D", polarity: "-", item: unary("P", "b") },
+    ],
+    closedDomains: ["D"],
+    queries: [universal],
+  });
+  expectRow(instances, "D", flip(unary("P", "a")), GROUNDED_LIVE);
+  expectRow(instances, "D", universal, GROUNDED_LIVE);
 }
 test(
-  "test_oracle_polarity_flip_enters_only_when_tracked_or_queried",
-  test_oracle_polarity_flip_enters_only_when_tracked_or_queried,
+  "test_oracle_nested_polarity_flips_belong_to_universe",
+  test_oracle_nested_polarity_flips_belong_to_universe,
+);
+
+function test_oracle_undefined_record_is_possible_but_not_present(): void {
+  // G4b: the symmetric conflict A ⊥_B C leaves live(B,+,C) undefined, so the exclusion of G
+  // inferred from it through C ⊥_B G is undefined. With no positive record, coll(B, G) is
+  // false, and the merely possible exclusion supports no status.
+  const bs = new BoundarySystem();
+  bs.defineBoundary("B");
+  const G = atom("G");
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "B", polarity: "+", item: A },
+      { boundary: "B", polarity: "+", item: C },
+    ],
+    incompatibilities: [
+      { boundary: "B", left: A, right: C },
+      { boundary: "B", left: C, right: G },
+    ],
+  });
+
+  expectRow(m, "B", G, {
+    rec: ["false", "undefined"],
+    live: ["false", "undefined"],
+    coll: "false",
+    obs: "false",
+    status: "Open",
+    authority: [null, null],
+    rev: false,
+  });
+  expectRow(m, "B", C, { status: "Collision", authority: ["Undetermined", null], rev: true });
+}
+test(
+  "test_oracle_undefined_record_is_possible_but_not_present",
+  test_oracle_undefined_record_is_possible_but_not_present,
+);
+
+function test_oracle_congruence_rewrites_one_occurrence_at_a_time(): void {
+  // A6 as amended by item 14: from R(a, a) and a ≈_D b, congruence rewrites one occurrence,
+  // giving R(a, b) and R(b, a); rewriting again gives R(b, b).
+  const bs = new BoundarySystem();
+  bs.defineBoundary("D", { handles: [handle("a"), handle("b")], nativeRelations: ["R"] });
+  const binary = (first: string, second: string): Item =>
+    atom("R", [
+      { role: "first", handle: first },
+      { role: "second", handle: second },
+    ]);
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "D", polarity: "+", item: equiv("D", "a", "b") },
+      { boundary: "D", polarity: "+", item: binary("a", "a") },
+    ],
+  });
+
+  expectRow(m, "D", binary("a", "b"), GROUNDED_LIVE);
+  expectRow(m, "D", binary("b", "a"), GROUNDED_LIVE);
+  expectRow(m, "D", binary("b", "b"), GROUNDED_LIVE);
+  expectRow(m, TOP_BOUNDARY, binary("a", "b"), OPEN);
+}
+test(
+  "test_oracle_congruence_rewrites_one_occurrence_at_a_time",
+  test_oracle_congruence_rewrites_one_occurrence_at_a_time,
+);
+
+function test_oracle_vacuous_grounding_requires_non_bottom_domain(): void {
+  // A13 as amended by item 14: ∀ generic and the ∃ exclusion need CloseDomain(D) and D ≠ ⊥_B.
+  const bs = new BoundarySystem();
+  bs.defineBoundary("E0", { handles: [] });
+  const emptyUniversal = forall("x", "E0", unary("P", "x"));
+  const emptyExistential = exists("x", "E0", unary("P", "x"));
+  const bottomUniversal = forall("x", BOT_BOUNDARY, unary("P", "x"));
+  const bottomExistential = exists("x", BOT_BOUNDARY, unary("P", "x"));
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [],
+    closedDomains: ["E0", BOT_BOUNDARY],
+    queries: [emptyUniversal, emptyExistential, bottomUniversal, bottomExistential],
+  });
+
+  for (const b of [TOP_BOUNDARY, "E0"]) {
+    // A closed, empty, non-bottom domain: vacuous truth grounded by the closure alone.
+    expectRow(m, b, emptyUniversal, GROUNDED_LIVE);
+    expectRow(m, b, emptyExistential, EXCLUDED_LIVE);
+    // A closure listed for ⊥_B grounds nothing.
+    expectRow(m, b, bottomUniversal, OPEN);
+    expectRow(m, b, bottomExistential, OPEN);
+  }
+}
+test(
+  "test_oracle_vacuous_grounding_requires_non_bottom_domain",
+  test_oracle_vacuous_grounding_requires_non_bottom_domain,
 );

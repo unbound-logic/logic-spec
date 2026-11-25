@@ -15,8 +15,10 @@
  *     structural value; they take part only in the rules that apply to every item
  *     (Base, downward heredity, Cover-Gluing, and as components of compounds) (A15).
  *
- * Where item 14 is ambiguous or underspecified, the reading closest to its text is chosen
- * and recorded in test/oracle/AMBIGUITIES.md; comments below cite those entries as "A<n>".
+ * The readings this oracle chose where item 14 was ambiguous are recorded in
+ * test/oracle/AMBIGUITIES.md; comments below cite those entries as "A<n>". The maintainer
+ * ratified them, amending A3, A6 and A13 and the reporting rule (G4b), in the item 14 of
+ * main commit 7b36043, which this oracle follows.
  */
 
 import { BOT_BOUNDARY, type BoundarySystem } from "../../src/boundary.ts";
@@ -82,7 +84,7 @@ export type PiRow = {
   readonly live: PolarityPair<Truth>;
   readonly coll: Truth;
   readonly obs: Truth;
-  /** A record is present when rec is true or undefined. */
+  /** A record is present when rec is true (G4b); an undefined record is possible only. */
   readonly present: PolarityPair<boolean>;
   readonly localStatus: LocalStatus;
   /** Authority of each present record; null when the record is absent. */
@@ -113,8 +115,9 @@ function opposite(p: Polarity): Polarity {
 
 /**
  * U(Σ, Q): the tracked and queried items, closed under direct sub-items, quantifier
- * instances A(w) and δ(w) for w ∈ Dom(D), and congruence rewrites of atoms by the handles of
- * the boundaries in 𝔅(Σ); a polarity flip enters only when it is itself tracked or queried.
+ * instances A(w) and δ(w) for w ∈ Dom(D), and congruence rewrites at one position by the
+ * handles of the boundaries in 𝔅(Σ). A polarity flip belongs to U(Σ, Q) whenever it arises
+ * this way (A3, as amended by item 14); U(Σ, Q) is never closed under prefixing `~`.
  */
 export function buildUniverse(
   bs: BoundarySystem,
@@ -122,8 +125,6 @@ export function buildUniverse(
   tracked: readonly Item[],
   queries: readonly Item[],
 ): Item[] {
-  // A3: "tracked or queried" means occurring as a whole item of Σ or Q, not nested inside one.
-  const explicit = new Set([...tracked, ...queries].map(itemKey));
   // A5: rewrites use the handles of every boundary in 𝔅(Σ).
   const handles = [
     ...new Set(boundaries.flatMap((b) => bs.handlesOf(b).map((h) => h.id))),
@@ -135,9 +136,6 @@ export function buildUniverse(
   const add = (item: Item): void => {
     const key = itemKey(item);
     if (seen.has(key)) {
-      return;
-    }
-    if (item.kind === "flip" && !explicit.has(key)) {
       return;
     }
     seen.add(key);
@@ -548,7 +546,8 @@ export function evaluatePi(state: PiState): PiModel {
               ? idx(substituteHandle(constraint, item.variable, h.id))
               : undefined,
         }));
-        const closed = closedDomains.has(item.domain);
+        // A13 as amended: enumeration needs CloseDomain(D) and D ≠ ⊥_B.
+        const closed = closedDomains.has(item.domain) && item.domain !== BOT_BOUNDARY;
         for (const b of allB) {
           const plusDelta = (delta: number | undefined): Prem[] =>
             constraint !== undefined ? [L(b, "+", delta)] : [];
@@ -559,7 +558,7 @@ export function evaluatePi(state: PiState): PiModel {
               // ∀ counterexample
               emit(b, "-", a, each(R(b, "-", body), ...plusDelta(delta)));
             }
-            // ∀ generic (A13): needs CloseDomain(D); vacuous on an empty Dom(D).
+            // ∀ generic (A13): vacuous on an empty Dom(D) of a closed D ≠ ⊥_B.
             if (closed) {
               emit(
                 b,
@@ -640,8 +639,8 @@ export function evaluatePi(state: PiState): PiModel {
         emit(b, "+", target, each(L(b, "+", a), L(b, "+", next.a)));
       }
     }
-    // Congruence: (B, p, R[u/t]) from Live (B, +, t ≈_D u), Live (B, p, R), R native to D,
-    // B ⊑ D (A6, A7).
+    // Congruence: (B, p, R') from Live (B, +, t ≈_D u), Live (B, p, R), where R' replaces one
+    // occurrence of t in R by u, R a relational atom native to D, B ⊑ D (A6 as amended, A7).
     if (item.left === item.right) {
       continue;
     }
@@ -650,12 +649,24 @@ export function evaluatePi(state: PiState): PiModel {
       if (!r.handles.has(item.left) || !bs.hasNativeRelation(d, r.item.relation)) {
         continue;
       }
-      const target = idx(substituteHandle(r.item, item.left, item.right));
-      for (const b of subs) {
-        for (const p of POLARITIES) {
-          emit(b, p, target, each(L(b, "+", a), L(b, p, r.a)));
+      r.item.roles.forEach((role, position) => {
+        if (role.handle !== item.left) {
+          return;
         }
-      }
+        const target = idx(
+          atom(
+            r.item.relation,
+            r.item.roles.map((other, j) =>
+              j === position ? { role: other.role, handle: item.right } : other,
+            ),
+          ),
+        );
+        for (const b of subs) {
+          for (const p of POLARITIES) {
+            emit(b, p, target, each(L(b, "+", a), L(b, p, r.a)));
+          }
+        }
+      });
     }
   }
 
@@ -795,9 +806,11 @@ export function evaluatePi(state: PiState): PiModel {
         "-": truthOf(under.truth, over.truth, liveAtom("-", s)),
       };
       const coll = truthOf(under.coll, over.coll, s);
-      const present = { "+": rec["+"] !== "false", "-": rec["-"] !== "false" };
+      // G4b: a record is present only when its atom is true, while Collision is reported
+      // whenever coll is true or undefined.
+      const present = { "+": rec["+"] === "true", "-": rec["-"] === "true" };
       const localStatus: LocalStatus =
-        present["+"] && present["-"]
+        coll !== "false"
           ? "Collision"
           : present["+"]
             ? "Grounded"
