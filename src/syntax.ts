@@ -349,6 +349,21 @@ export function collectAllIdentifiers(item: Item): Set<string> {
   return out;
 }
 
+/** Collect all boundary identifiers referenced anywhere inside an item. */
+export function collectBoundaryRefs(item: Item): Set<string> {
+  const out = new Set<string>();
+  walkItem(item, (node) => {
+    if (node.kind === "equiv") {
+      out.add(node.boundary);
+    } else if (node.kind === "forall" || node.kind === "exists") {
+      out.add(node.domain);
+    } else if (node.kind === "refl") {
+      out.add(node.targetBoundary);
+    }
+  });
+  return out;
+}
+
 /** Collect all relation symbol names occurring anywhere inside an item. */
 export function collectRelations(item: Item): Set<string> {
   const out = new Set<string>();

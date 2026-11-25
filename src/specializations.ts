@@ -275,9 +275,6 @@ export function evaluateClassicalSpecialization(
     for (const cell of atomicCover) {
       cellPolarities.set(cell, evalOnAtomicCell(cell, q));
     }
-    if (conflictReason !== undefined) {
-      return { ok: false, reason: conflictReason };
-    }
     const values = [...cellPolarities.values()];
     const pol: GlobalCoverStatus = values.every((p) => p === "+")
       ? "+"
@@ -290,6 +287,9 @@ export function evaluateClassicalSpecialization(
       const pImposs = evalOnAtomicCell(cell, { kind: "implies", antecedent: q, consequent: bottom() });
       return pFlip === pImposs;
     });
+    if (conflictReason !== undefined) {
+      return { ok: false, reason: conflictReason };
+    }
     results.set(itemKey(q), {
       bivalent: true,
       polarity: pol,

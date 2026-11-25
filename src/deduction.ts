@@ -99,8 +99,15 @@ export type ProofNode =
       readonly eigenvar: string;
       readonly templateBody: Item;
       readonly body: ProofNode;
+      readonly domainConstraint?: Item;
+      readonly constraintAssumpId?: string;
     }
-  | { readonly kind: "forall-elim"; readonly universal: ProofNode; readonly term: string }
+  | {
+      readonly kind: "forall-elim";
+      readonly universal: ProofNode;
+      readonly term: string;
+      readonly constraintProof?: ProofNode;
+    }
   | {
       readonly kind: "exists-intro";
       readonly witnessTerm: string;
@@ -108,6 +115,8 @@ export type ProofNode =
       readonly domain: string;
       readonly templateBody: Item;
       readonly witnessProof: ProofNode;
+      readonly domainConstraint?: Item;
+      readonly constraintProof?: ProofNode;
     }
   | {
       readonly kind: "exists-elim";
@@ -115,6 +124,7 @@ export type ProofNode =
       readonly witnessVar: string;
       readonly assumptionId: string;
       readonly body: ProofNode;
+      readonly constraintAssumpId?: string;
     }
   | { readonly kind: "flip-intro"; readonly inner: ProofNode }
   | { readonly kind: "flip-elim"; readonly inner: ProofNode }
@@ -665,7 +675,23 @@ function verifyRoot(
             reason: `forall-intro requires defined non-empty boundary "${node.boundary}" and domain "${node.domain}".`,
           };
         }
-        const qItem = forall(node.variable, node.domain, node.templateBody);
+        const hasCons = node.domainConstraint !== undefined;
+        const hasAssump = node.constraintAssumpId !== undefined;
+        if (hasCons !== hasAssump) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "forall-intro must pair domainConstraint with constraintAssumpId.",
+          };
+        }
+        if (node.constraintAssumpId !== undefined && assumptions.has(node.constraintAssumpId)) {
+          return {
+            ok: false,
+            violation: "shadowed-assumption",
+            reason: `Constraint assumption identifier "${node.constraintAssumpId}" shadows an active outer assumption.`,
+          };
+        }
+        const qItem = forall(node.variable, node.domain, node.templateBody, node.domainConstraint);
         if (
           eigenScope.has(node.eigenvar) ||
           stateHandles.has(node.eigenvar) ||
@@ -680,7 +706,14 @@ function verifyRoot(
         }
         const nextEigen = new Map(eigenScope);
         nextEigen.set(node.eigenvar, node.domain);
-        const bRes = verifyNode(node.body, assumptions, nextEigen);
+        const nextAssumptions = new Map(assumptions);
+        if (node.domainConstraint !== undefined && node.constraintAssumpId !== undefined) {
+          nextAssumptions.set(node.constraintAssumpId, {
+            boundary: node.boundary,
+            item: substituteHandle(node.domainConstraint, node.variable, node.eigenvar),
+          });
+        }
+        const bRes = verifyNode(node.body, nextAssumptions, nextEigen);
         if (!bRes.ok) {
           return bRes;
         }
@@ -725,6 +758,50 @@ function verifyRoot(
             reason: `Term "${node.term}" is neither a scoped eigenvariable nor an admissible handle in "${uRes.item.domain}".`,
           };
         }
+        if (uRes.item.domainConstraint !== undefined) {
+          if (node.constraintProof === undefined) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `forall-elim on constrained universal "${itemKey(uRes.item)}" requires constraintProof.`,
+            };
+          }
+          const expectedCons = substituteHandle(
+            uRes.item.domainConstraint,
+            uRes.item.variable,
+            node.term,
+          );
+          const cRes = verifyNode(node.constraintProof, assumptions, eigenScope);
+          if (!cRes.ok) {
+            return cRes;
+          }
+          if (
+            cRes.polarity !== "+" ||
+            cRes.boundary !== uRes.boundary ||
+            itemKey(cRes.item) !== itemKey(expectedCons)
+          ) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `forall-elim constraintProof must derive (${uRes.boundary} ⊩+ ${itemKey(expectedCons)}).`,
+            };
+          }
+          return {
+            ok: true,
+            boundary: uRes.boundary,
+            polarity: "+",
+            item: substituteHandle(uRes.item.body, uRes.item.variable, node.term),
+            requiredBaseIds: mergeSorted(uRes.requiredBaseIds, cRes.requiredBaseIds),
+            requiredGrounds: mergeGroundDeps(uRes.requiredGrounds, cRes.requiredGrounds),
+          };
+        }
+        if (node.constraintProof !== undefined) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "forall-elim received constraintProof for an unconstrained universal.",
+          };
+        }
         return {
           ok: true,
           boundary: uRes.boundary,
@@ -741,6 +818,15 @@ function verifyRoot(
             ok: false,
             violation: "invalid-boundary",
             reason: `Existential domain "${node.domain}" must be defined and non-empty.`,
+          };
+        }
+        const hasCons = node.domainConstraint !== undefined;
+        const hasProof = node.constraintProof !== undefined;
+        if (hasCons !== hasProof) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: "exists-intro must pair domainConstraint with constraintProof.",
           };
         }
         if (!isAdmissibleTerm(boundaries, node.witnessTerm, node.domain, eigenScope)) {
@@ -760,6 +846,36 @@ function verifyRoot(
             ok: false,
             violation: "type-mismatch",
             reason: `exists-intro witness proof must derive +(${itemKey(expected)}).`,
+          };
+        }
+        if (node.domainConstraint !== undefined && node.constraintProof !== undefined) {
+          const cRes = verifyNode(node.constraintProof, assumptions, eigenScope);
+          if (!cRes.ok) {
+            return cRes;
+          }
+          const expectedCons = substituteHandle(
+            node.domainConstraint,
+            node.variable,
+            node.witnessTerm,
+          );
+          if (
+            cRes.polarity !== "+" ||
+            cRes.boundary !== wRes.boundary ||
+            itemKey(cRes.item) !== itemKey(expectedCons)
+          ) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: `exists-intro constraintProof must derive (${wRes.boundary} ⊩+ ${itemKey(expectedCons)}).`,
+            };
+          }
+          return {
+            ok: true,
+            boundary: wRes.boundary,
+            polarity: "+",
+            item: exists(node.variable, node.domain, node.templateBody, node.domainConstraint),
+            requiredBaseIds: mergeSorted(wRes.requiredBaseIds, cRes.requiredBaseIds),
+            requiredGrounds: mergeGroundDeps(wRes.requiredGrounds, cRes.requiredGrounds),
           };
         }
         return {
@@ -803,6 +919,25 @@ function verifyRoot(
             reason: `Assumption identifier "${node.assumptionId}" shadows an active outer assumption.`,
           };
         }
+        if (node.constraintAssumpId !== undefined) {
+          if (eRes.item.domainConstraint === undefined) {
+            return {
+              ok: false,
+              violation: "type-mismatch",
+              reason: "exists-elim cannot bind constraintAssumpId when existential has no domainConstraint.",
+            };
+          }
+          if (
+            assumptions.has(node.constraintAssumpId) ||
+            node.constraintAssumpId === node.assumptionId
+          ) {
+            return {
+              ok: false,
+              violation: "shadowed-assumption",
+              reason: `Constraint assumption identifier "${node.constraintAssumpId}" shadows an active or peer assumption.`,
+            };
+          }
+        }
         const nextEigen = new Map(eigenScope);
         nextEigen.set(node.witnessVar, eRes.item.domain);
         const nextAssumptions = new Map(assumptions);
@@ -810,6 +945,16 @@ function verifyRoot(
           boundary: eRes.boundary,
           item: substituteHandle(eRes.item.body, eRes.item.variable, node.witnessVar),
         });
+        if (node.constraintAssumpId !== undefined && eRes.item.domainConstraint !== undefined) {
+          nextAssumptions.set(node.constraintAssumpId, {
+            boundary: eRes.boundary,
+            item: substituteHandle(
+              eRes.item.domainConstraint,
+              eRes.item.variable,
+              node.witnessVar,
+            ),
+          });
+        }
         const bRes = verifyNode(node.body, nextAssumptions, nextEigen);
         if (!bRes.ok) {
           return bRes;
@@ -991,11 +1136,11 @@ function verifyRoot(
             reason: `Reflection level ${reflectedLevel} cannot reflect item requiring level ${requiredLevel}.`,
           };
         }
-        if (!isDefinedNonEmptyBoundary(boundaries, targetBoundary)) {
+        if (!engine.isReflectionWellScopedAtStage(targetStage, targetBoundary, targetItem)) {
           return {
             ok: false,
             violation: "invalid-boundary",
-            reason: `Reflected target boundary "${targetBoundary}" must be defined and non-empty.`,
+            reason: `Reflected target boundary "${targetBoundary}" or inner boundary reference was not defined and non-empty at stage Σ_${targetStage}.`,
           };
         }
         const priorSnap = engine.evaluateAtStage(targetStage, [targetItem]);
@@ -1094,9 +1239,15 @@ function collectLiveGroundItems(node: ProofNode): readonly Item[] {
         return;
       case "forall-elim":
         visit(n.universal);
+        if (n.constraintProof !== undefined) {
+          visit(n.constraintProof);
+        }
         return;
       case "exists-intro":
         visit(n.witnessProof);
+        if (n.constraintProof !== undefined) {
+          visit(n.constraintProof);
+        }
         return;
       case "exists-elim":
         visit(n.existential);

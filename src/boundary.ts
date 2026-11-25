@@ -157,28 +157,7 @@ export class BoundarySystem {
   declareDisjoint(a: string, b: string): void {
     this.#assertDefined(a);
     this.#assertDefined(b);
-    if (a === b && a !== BOT_BOUNDARY) {
-      throw new Error(`Non-empty boundary "${a}" cannot be disjoint from itself.`);
-    }
-    if (a !== BOT_BOUNDARY && b !== BOT_BOUNDARY) {
-      if (this.refines(a, b) || this.refines(b, a)) {
-        throw new Error(`Cannot declare "${a}" and "${b}" disjoint because one refines the other.`);
-      }
-      const explicitMeet = this.#explicitMeets.get(pairKey(a, b));
-      if (explicitMeet !== undefined && explicitMeet !== BOT_BOUNDARY) {
-        throw new Error(
-          `Cannot declare "${a}" and "${b}" disjoint: explicit non-empty meet "${explicitMeet}" is registered.`,
-        );
-      }
-      const common = [...this.#defined].filter(
-        (c) => c !== BOT_BOUNDARY && this.refines(c, a) && this.refines(c, b),
-      );
-      if (common.length > 0) {
-        throw new Error(
-          `Cannot declare "${a}" and "${b}" disjoint: common non-empty sub-boundaries [${common.join(", ")}] exist.`,
-        );
-      }
-    }
+    this.#assertCanBeDisjoint(a, b);
     this.#disjointPairs.add(pairKey(a, b));
   }
 
@@ -190,12 +169,40 @@ export class BoundarySystem {
     if (!this.refines(meetId, a) || !this.refines(meetId, b)) {
       throw new Error(`Meet "${meetId}" must refine both "${a}" and "${b}".`);
     }
-    if (meetId !== BOT_BOUNDARY && this.#hasDisjointAncestors(a, b)) {
+    if (meetId === BOT_BOUNDARY) {
+      this.#assertCanBeDisjoint(a, b);
+    } else if (this.#hasDisjointAncestors(a, b)) {
       throw new Error(
         `Cannot register non-empty meet "${meetId}" for disjoint boundaries "${a}" and "${b}".`,
       );
     }
     this.#explicitMeets.set(pairKey(a, b), meetId);
+  }
+
+  #assertCanBeDisjoint(a: string, b: string): void {
+    if (a === b && a !== BOT_BOUNDARY) {
+      throw new Error(`Non-empty boundary "${a}" cannot be disjoint from itself.`);
+    }
+    if (a === BOT_BOUNDARY || b === BOT_BOUNDARY) {
+      return;
+    }
+    if (this.refines(a, b) || this.refines(b, a)) {
+      throw new Error(`Cannot declare "${a}" and "${b}" disjoint because one refines the other.`);
+    }
+    const explicitMeet = this.#explicitMeets.get(pairKey(a, b));
+    if (explicitMeet !== undefined && explicitMeet !== BOT_BOUNDARY) {
+      throw new Error(
+        `Cannot declare "${a}" and "${b}" disjoint: explicit non-empty meet "${explicitMeet}" is registered.`,
+      );
+    }
+    const common = [...this.#defined].filter(
+      (c) => c !== BOT_BOUNDARY && this.refines(c, a) && this.refines(c, b),
+    );
+    if (common.length > 0) {
+      throw new Error(
+        `Cannot declare "${a}" and "${b}" disjoint: common non-empty sub-boundaries [${common.join(", ")}] exist.`,
+      );
+    }
   }
 
   /** Test refinement partial order: sub ⊑ sup. */

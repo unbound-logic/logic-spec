@@ -10,6 +10,7 @@ import { BOT_BOUNDARY, BoundarySystem } from "./boundary.ts";
 import {
   and,
   bottom,
+  collectBoundaryRefs,
   collectHandles,
   collectRelations,
   computeItemLevel,
@@ -450,6 +451,39 @@ export class InquiryEngine {
     this.#captureStage();
   }
 
+  /** Register a witnessed finite exhaustive cover {B_i} ▷ B as an ordered inquiry transition. */
+  witnessCover(target: string, cells: readonly string[]): void {
+    this.boundaries.registerCover(target, cells);
+    this.#stage += 1;
+    this.#history.push(`Σ${this.#stage}:WitnessCover({${cells.join(", ")}} ▷ ${target})`);
+    this.#captureStage();
+  }
+
+  /** Verify that targetBoundary and all boundaries referenced inside targetItem existed as non-empty at `stage`. */
+  isReflectionWellScopedAtStage(
+    stage: number,
+    targetBoundary: string,
+    targetItem: Item,
+  ): boolean {
+    if (!Number.isInteger(stage) || stage < 0 || stage > this.#stage) {
+      return false;
+    }
+    const priorRecord = this.#stageArchive.get(stage);
+    if (priorRecord === undefined) {
+      return false;
+    }
+    const priorBounds = priorRecord.boundarySnapshot;
+    if (!this.#isDefinedNonEmptyBoundary(priorBounds, targetBoundary)) {
+      return false;
+    }
+    for (const bRef of collectBoundaryRefs(targetItem)) {
+      if (!this.#isDefinedNonEmptyBoundary(priorBounds, bRef)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * Attempt RefineBoundary(fromBoundary -> toBoundary) obeying M1 + M2.
    * Rejects circular predicates (M1(i)) and bare contingent handle excisions (M1(ii)),
@@ -635,7 +669,7 @@ export class InquiryEngine {
       if (!Number.isInteger(it.reflectedLevel) || it.reflectedLevel < computeItemLevel(it.targetItem)) {
         continue;
       }
-      if (!this.#isDefinedNonEmptyBoundary(bounds, it.targetBoundary)) {
+      if (!this.isReflectionWellScopedAtStage(it.targetStage, it.targetBoundary, it.targetItem)) {
         continue;
       }
       const priorRecord = this.#stageArchive.get(it.targetStage);
@@ -918,7 +952,7 @@ export class InquiryEngine {
             if (it.kind === "implies") {
               const antK = itemKey(it.antecedent);
               const conK = itemKey(it.consequent);
-              const posAnt = entriesByBPolKey.get(slotKey(b, "+", antK)) ?? [];
+              const posAnt = liveByBPolKey.get(slotKey(b, "+", antK)) ?? [];
               const negCon = entriesByBPolKey.get(slotKey(b, "-", conK)) ?? [];
               for (const pa of posAnt) {
                 for (const nc of negCon) {
@@ -1423,6 +1457,9 @@ export class InquiryEngine {
           if (anc === undefined) {
             continue;
           }
+          if (anc.provenance.kind === "structural" && anc.provenance.rule === "bottom-excl") {
+            continue;
+          }
           const ancSlot = `${anc.boundary}\0${anc.key}`;
           if (unresolved.has(ancSlot)) {
             found.add(ancSlot);
@@ -1436,14 +1473,43 @@ export class InquiryEngine {
         return found;
       };
 
+      type SlotEntryAncestors = { readonly entry: GroundEntry; readonly anc: Set<string> };
+      const bySlotPolarity = new Map<string, SlotEntryAncestors[]>();
       for (const e of mayPass.entries) {
         const s = `${e.boundary}\0${e.key}`;
         if (!unresolved.has(s)) {
           continue;
         }
-        for (const u of collectAncestorSlotsInU(e)) {
-          if (u !== s) {
-            adj.get(u)?.add(s);
+        const spk = `${s}\0${e.polarity}`;
+        const list = bySlotPolarity.get(spk) ?? [];
+        list.push({ entry: e, anc: collectAncestorSlotsInU(e) });
+        bySlotPolarity.set(spk, list);
+      }
+
+      const isStrictSubset = (a: ReadonlySet<string>, b: ReadonlySet<string>): boolean => {
+        if (a.size >= b.size) {
+          return false;
+        }
+        for (const item of a) {
+          if (!b.has(item)) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      for (const [spk, items] of bySlotPolarity) {
+        const s = spk.slice(0, spk.lastIndexOf("\0"));
+        const hasNonSelf = items.some((x) => !x.anc.has(s));
+        const afterSelf = hasNonSelf ? items.filter((x) => !x.anc.has(s)) : items;
+        const minimal = afterSelf.filter(
+          (x) => !afterSelf.some((y) => y !== x && isStrictSubset(y.anc, x.anc)),
+        );
+        for (const x of minimal) {
+          for (const u of x.anc) {
+            if (u !== s) {
+              adj.get(u)?.add(s);
+            }
           }
         }
       }
@@ -1468,26 +1534,32 @@ export class InquiryEngine {
       const sccs = computeSourceSCCs(unresolved, adj);
       let addedLock = false;
       for (const sourceScc of sccs) {
+        const sccSet = new Set(sourceScc);
         for (const s of sourceScc) {
           if (!extraBlocked.has(s)) {
             extraBlocked.add(s);
             addedLock = true;
           }
           for (const e of mayPass.entries) {
-            if (`${e.boundary}\0${e.key}` === s && e.provenance.kind === "derived") {
-              const lk = `${e.boundary}\0${e.polarity}\0${e.key}\0${e.provenance.baseLeaves.join(",")}`;
-              if (!lockedEntriesMap.has(lk)) {
-                lockedEntriesMap.set(lk, {
-                  boundary: e.boundary,
-                  polarity: e.polarity,
-                  item: e.item,
-                  rule: e.provenance.rule,
-                  baseLeaves: e.provenance.baseLeaves,
-                  ...(e.provenance.coverCells !== undefined
-                    ? { coverCells: e.provenance.coverCells }
-                    : {}),
-                });
-              }
+            if (`${e.boundary}\0${e.key}` !== s || e.provenance.kind !== "derived") {
+              continue;
+            }
+            const anc = collectAncestorSlotsInU(e);
+            if (![...anc].every((u) => sccSet.has(u))) {
+              continue;
+            }
+            const lk = `${e.boundary}\0${e.polarity}\0${e.key}\0${e.provenance.baseLeaves.join(",")}`;
+            if (!lockedEntriesMap.has(lk)) {
+              lockedEntriesMap.set(lk, {
+                boundary: e.boundary,
+                polarity: e.polarity,
+                item: e.item,
+                rule: e.provenance.rule,
+                baseLeaves: e.provenance.baseLeaves,
+                ...(e.provenance.coverCells !== undefined
+                  ? { coverCells: e.provenance.coverCells }
+                  : {}),
+              });
             }
           }
         }
