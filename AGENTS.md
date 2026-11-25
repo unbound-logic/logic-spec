@@ -1,8 +1,10 @@
 # AGENTS.md — `unbound-logic/logic-spec`
 
-This repository is the living specification (`logic-spec`) under the `unbound-logic` organization for designing an end-to-end logic system from first principles. This file is the tool-agnostic Single Source of Truth for epistemic stance, reasoning guardrails, and repository workflow.
+This repository is the living specification (`logic-spec`) under the `unbound-logic` organization for designing an end-to-end logic system from first principles. This file is the tool-agnostic Single Source of Truth for this repository's epistemic stance, reasoning guardrails, and workflow, within the organization charter cited in §1.
 
 ## 1. Epistemic Stance
+
+- **Organization Charter**: The design principles shared across `unbound-logic` are recorded in the [`unbound-logic` charter](https://github.com/unbound-logic/.github/blob/main/CHARTER.md). Apply them as tie-breakers and audits, not as a procedure that derives decisions. Where this file and the charter seem to conflict, record the tension in `docs/design-review.md` instead of resolving it silently.
 
 - **Zetetic (Truth-Seeking) Perspective**: Approach the design purely as an inquiry into what holds under scrutiny—neither defaulting to pure formalism (treating logic merely as arbitrary symbol manipulation) nor Platonism (presupposing a static, mind-independent realm of abstract objects).
 - **Non-Superiority & Non-Temporal Framing**: Do not frame classical or modern mathematical logics as "inferior" or "defective" within their valid domains, and do not brand this specification as "new" or "final." Future systems may follow; this is one foundational specification among possible others.
