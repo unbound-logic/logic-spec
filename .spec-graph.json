@@ -4,8 +4,10 @@
   "claims": {
     "files": ["spec/**/*.md"],
     "labels": {
-      "Consensus": "done",
-      "Exploratory": "open"
+      "Exploratory": "open",
+      "Decided": "open",
+      "Tested": "done",
+      "Proved": "done"
     }
   },
   "registers": {

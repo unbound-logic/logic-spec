@@ -4,8 +4,10 @@
   "claims": {
     "files": ["spec/*.md"],
     "labels": {
-      "Consensus": { "evidence": "test" },
-      "Exploratory": {}
+      "Exploratory": {},
+      "Decided": {},
+      "Tested": { "evidence": "test" },
+      "Proved": { "evidence": "test", "criterion": "Proof:" }
     },
     "testPrefixes": ["function test_"]
   }

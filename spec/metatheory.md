@@ -7,15 +7,16 @@ date: 2026-11-25
 
 # Formal Metatheory & Open Proof-Theoretic Boundaries (`UL-Core`)
 
-This document formalizes the metatheoretic invariants of [core.md](core.md) (`v0.2.0`) and [worked-examples.md](worked-examples.md), separating ratified invariants (`Consensus`, backed by executable reference-kernel verification) from open proof-theoretic and semantic boundaries (`Exploratory`).
+This document formalizes the metatheoretic invariants of [core.md](core.md) (`v0.2.0`) and [worked-examples.md](worked-examples.md), and labels each result on the claim status ladder of [AGENTS.md](../AGENTS.md) §2 item 5: a `Tested` result is exercised by bound tests but not proved, a `Decided` result is ratified but not yet met by the reference kernel, and an `Exploratory` result is open.
 
-Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-1`–`MT-9`) carry `Consensus` status anchored to executable tests via `spec-guard`.
+No result below is `Proved` yet. MT-9 carries a written proof that awaits maintainer review; the proof sketches elsewhere are sketches, not proofs.
 
 ---
 
 ## 1. Well-Foundedness & Fixed-Point Semantics
 
-1. `Consensus` **MT-1: Acyclic Grounding, Least-Fixpoint `Live` Authority & Stratified Quarantine** ([core.md](core.md) §3 items 8, 10; [`layer3-structural-rules-and-cut`](../docs/design-review.md#layer3-structural-rules-and-cut)):
+1. `Exploratory` **MT-1: Acyclic Grounding, Least-Fixpoint `Live` Authority & Stratified Quarantine** ([core.md](core.md) §3 items 8, 10; [`layer3-structural-rules-and-cut`](../docs/design-review.md#layer3-structural-rules-and-cut)):
+   - **Audit status**: the operator `F_Σ` below treats `Entries(Σ)` and `obstructed_Σ` as fixed inputs, which is not the semantics of [core.md](core.md) §3 item 10; MT-1 will be restated for the evaluation program ratified in [`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling).
    - **Statement**: Let `Entries(Σ)` be the finite set of derived and base ground entries generated in an inquiry state `Σ` over a finite signature and boundary system. Define `Live(Σ) ⊆ Entries(Σ)` as the least fixpoint `μL. F_Σ(L)` of the operator:
      ```text
      F_Σ(L) := { e ∈ Entries(Σ) | ¬obstructed_Σ(e) ∧ (base(e) ∨ structural(e) ∨ ∀d ∈ deps(e). d ∈ L) }
@@ -33,7 +34,7 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
 
 ## 2. Self-Reference & Triviality Resistance
 
-2. `Consensus` **MT-2: Curry Firewall Soundness (Level Stratification & Mutual Strict Positivity)** ([core.md](core.md) §1 item 3; [worked-examples.md](worked-examples.md) §3; [`layer4-implication-and-curry-barrier`](../docs/design-review.md#layer4-implication-and-curry-barrier)):
+2. `Tested` **MT-2: Curry Firewall Soundness (Level Stratification & Mutual Strict Positivity)** ([core.md](core.md) §1 item 3; [worked-examples.md](worked-examples.md) §3; [`layer4-implication-and-curry-barrier`](../docs/design-review.md#layer4-implication-and-curry-barrier)):
    - **Statement**: Suppose every recursive item/boundary definition system `{X_i := F_i(X⃗)}` obeys:
      1. **Level Stratification**: Every reflection item `Refl_k(J)` occurring inside a level-`n` definition satisfies `level(J) ≤ k < n`; and
      2. **Mutual Strict Positivity**: In the directed dependency graph over `{X_i}`, no directed cycle traverses a **contravariant edge**—namely, passing to the left of `→`, inside an unguarded strong polarity flip `~` (that feeds a conditional or negative position), or inside a boundary promotion `[δ]` / quantifier domain constraint `D`.
@@ -50,7 +51,7 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
    <!-- @assert-count target="test/reflection.test.ts" symbol="function test_stage_archive_isolates_historical_boundary_and_cover_mutations" min="1" reason="Stage archive snapshots isolate historical evaluation and reflection from later boundary and cover mutations" -->
    <!-- @assert-count target="test/reflection.test.ts" symbol="function test_cross_stage_reflection_rejects_post_stage_boundaries" min="1" reason="Cross-stage reflection validates targetBoundary and inner domain references against prior stage snapshot without crashing or hallucinating" -->
 
-3. `Consensus` **MT-3: Non-Explosion & Non-Witnessing of `⊥` on Non-Empty Boundaries** ([core.md](core.md) §1 item 1, §2 item 4, §3 items 10–12; [`layer1-collision-quarantine`](../docs/design-review.md#layer1-collision-quarantine)):
+3. `Tested` **MT-3: Non-Explosion & Non-Witnessing of `⊥` on Non-Empty Boundaries** ([core.md](core.md) §1 item 1, §2 item 4, §3 items 10–12; [`layer1-collision-quarantine`](../docs/design-review.md#layer1-collision-quarantine)):
    - **Statement**:
      1. **Global Non-Explosion**: If `(B, A)` enters `Collision` in state `Σ`, arbitrary unrelated items `Z` are **not** derivable (`B ⊩⁺ Z` does not follow from `Collision` on `(B, A)` alone).
      2. **Non-Witnessing of `⊥` (`Live` Safety)**: Under base admissibility (`⊥ ∉ G⁺`), no non-empty boundary `B ≠ ⊥_B` ever holds a `Live` positive witness `Σ ; B ⊩⁺ ⊥ [π]`.
@@ -66,7 +67,8 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
 
 ## 3. Boundary Algebra, Disjoint Isolation & Cover Stability
 
-4. `Consensus` **MT-4: Disjoint Regime Zero-Leakage & Selective Quarantine Survival** ([core.md](core.md) §2 item 4, §3 items 9–10; [worked-examples.md](worked-examples.md) §1):
+4. `Decided` **MT-4: Disjoint Regime Zero-Leakage & Selective Quarantine Survival** ([core.md](core.md) §2 item 4, §3 items 9–10; [worked-examples.md](worked-examples.md) §1):
+   - **Audit status**: the disjointness premise can currently hold by omission; under [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world) it requires declared disjointness.
    - **Statement**: Suppose `B₁, B₂ ≠ ⊥_B` are disjoint (`B₁ ⊓ B₂ = ⊥_B`). Suppose further that `Σ₁` extends `Σ₀` solely by adding a counterexample `Observe⁻(B₂, A, w)` (or derived exclusions native to `B₂`). Then:
      1. **Zero Negative Leakage**: For every non-empty sub-boundary `B' ⊑ B₁`, the exclusion `B₂ ⊩⁻ A` cannot inherit onto `B'`.
      2. **Local Non-Obstruction**: `(B₁, A)` itself is not obstructed by `Collision` on `(B₂, A)`.
@@ -78,7 +80,8 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_symmetric_downward_heredity_and_disjoint_zero_leakage" min="1" reason="Disjoint regime zero negative leakage is verified" -->
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Upstream obstruction and selective quarantine survival are verified" -->
 
-5. `Consensus` **MT-5: Meet-Stability of Cover-Witnessed Disjunction (`D2`) & Soundness of `∨E` Gluing** ([core.md](core.md) §2 item 5, §3 item 12; [`layer4-conjunction-disjunction-and-covers`](../docs/design-review.md#layer4-conjunction-disjunction-and-covers)):
+5. `Decided` **MT-5: Meet-Stability of Cover-Witnessed Disjunction (`D2`) & Soundness of `∨E` Gluing** ([core.md](core.md) §2 item 5, §3 item 12; [`layer4-conjunction-disjunction-and-covers`](../docs/design-review.md#layer4-conjunction-disjunction-and-covers)):
+   - **Audit status**: the proof sketch relies on Non-Vacuity, which the reference kernel does not maintain as boundaries are added; see [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift).
    - **Statement**:
      1. **Downward Heredity of `D2` Disjunction**: If `Σ ; B ⊩⁺ (A ∨ C) [π]` is grounded by a witnessed exhaustive cover `{B₁, ..., B_k} ▷ B`, then for every non-empty sub-boundary `B' ⊑ B`, `{B_i ⊓ B' | B_i ⊓ B' ≠ ⊥_B} ▷ B'` witnesses `Σ ; B' ⊩⁺ (A ∨ C)`.
      2. **Soundness of Cover Gluing (`∨E`)**: From `Live` `B ⊩⁺ (A ∨ C)` (via `{B_i} ▷ B`), `Live` `B ⊩⁺ (A → E)`, and `Live` `B ⊩⁺ (C → E)`, every cell `B_i` acquires a `Live` witness `B_i ⊩⁺ E`, justifying `B ⊩⁺ E`.
@@ -94,7 +97,7 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
 
 ## 4. Inquiry Dynamics & Anti-Immunization
 
-6. `Consensus` **MT-6: Polarity Purity of `Retract`, Reinstatement & Vertical Non-Commutativity** ([core.md](core.md) §2 item 7; [`layer4-negation-vs-exclusion`](../docs/design-review.md#layer4-negation-vs-exclusion)):
+6. `Tested` **MT-6: Polarity Purity of `Retract`, Reinstatement & Vertical Non-Commutativity** ([core.md](core.md) §2 item 7; [`layer4-negation-vs-exclusion`](../docs/design-review.md#layer4-negation-vs-exclusion)):
    - **Statement**:
      1. **Pure Cancellation (Sanskrit *prasajya-pratiṣedha*)**: Applying `Retract(g)` strictly deletes `g` from `G⁺ ∪ G⁻` without adding any element to either `G⁺` or `G⁻`. In particular, if `(B, A)` was `Grounded` (resp. `Excluded`) in `Σ` solely via a unique base leaf `g`, then in `Retract(g)(Σ)` the status of `(B, A)` becomes `Open`, never `Excluded` (resp. `Grounded`).
      2. **Quarantine Reinstatement**: If `(B, A)` was in `Collision` between `+A [g⁺]` and `-A [g⁻]`, then `Retract(g⁻)` removes the collision and restores `Live` authority to `+A [g⁺]` and any downstream derivations depending solely on `g⁺` and other `Live` leaves (without adding new positive leaves).
@@ -102,7 +105,8 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
    - **Proof Sketch**: Immediate from the state transition definition (`§2 item 7`): `Retract(g)` modifies `Σ = (G⁺, G⁻, C_B, O_rev)` solely by set difference on `G⁺ ∪ G⁻` and re-evaluation of derived provenance. Since every derived entry for `±A` requires at least one base leaf in `G⁺ ∪ G⁻` (or structural `C_B`) by MT-1, deleting the sole base leaf eliminates all derived entries on that polarity without constructing an opposite-polarity leaf. Counterexample for (3): starting from `Open` `(B, A)` with `w ∉ G⁺`, `Observe⁺(B, A, w); Retract(w)` ends in `Open`, whereas `Retract(w); Observe⁺(B, A, w)` leaves `(B, A)` `Grounded`.
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_inquiry_updates_retract_non_commutativity_and_m1_m2" min="1" reason="Pure Retract, vertical non-commutativity, and Quarantine reinstatement are verified" -->
 
-7. `Consensus` **MT-7: `M1` + `M2` Anti-Immunization Guarantees & Formal Horizon Corollary** ([core.md](core.md) §2 item 7; [worked-examples.md](worked-examples.md) §2; [`zetetic-friction-source`](../docs/design-review.md#zetetic-friction-source), [`layer3-boundary-composition`](../docs/design-review.md#layer3-boundary-composition), [`layer5-content-and-coreference`](../docs/design-review.md#layer5-content-and-coreference)):
+7. `Decided` **MT-7: `M1` + `M2` Anti-Immunization Guarantees & Formal Horizon Corollary** ([core.md](core.md) §2 item 7; [worked-examples.md](worked-examples.md) §2; [`zetetic-friction-source`](../docs/design-review.md#zetetic-friction-source), [`layer3-boundary-composition`](../docs/design-review.md#layer3-boundary-composition), [`layer5-content-and-coreference`](../docs/design-review.md#layer5-content-and-coreference)):
+   - **Audit status**: the reference kernel admits criteria that the excised handle satisfies; see [`audit-m1-criterion-decoupling`](../docs/design-review.md#audit-m1-criterion-decoupling).
    - **Statement**: Let `Σ` contain counterexample `B ⊩⁻ A(w)` (`w ∈ Dom(B)` verified under `I_B`), putting `(B, ∀(x : B) A(x))` into `Excluded` or `Collision`. Then any transition `RefineBoundary(B → B' = B ⊓ [δ])` admitted by `M1 + M2` guarantees:
      1. **Non-Erasure (`M2`)**: `(B, ∀(x : B) A(x))` remains `Excluded` in every downstream state unless `w` itself is explicitly withdrawn via `Retract`.
      2. **Non-Circularity (`M1(i)`)**: `δ` introduces zero direct or indirect dependence on the target relation of `A`, eliminating tautological immunizations such as `δ(x) := A(x)`.
@@ -114,16 +118,17 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
 
 ---
 
-## 5. Four-Tier Specialization & Classical Recovery
+## 5. Four-Tier Specialization & Finite-Domain Classical Valuation
 
-8. `Consensus` **MT-8: Soundness & Syntactic Completeness of `UL-Minimal` and `UL-Intuitionistic` (`⊥ → C`)** ([core.md](core.md) §4 item 13; [`layer2-classical-boundary-recovery`](../docs/design-review.md#layer2-classical-boundary-recovery)):
+8. `Tested` **MT-8a: Constructive Specializations — No Quarantine Under `No-Gluts` and the Rule Sets of `NJ_min` and `NJ`** ([core.md](core.md) §3 item 12, §4 item 13; [`layer2-classical-boundary-recovery`](../docs/design-review.md#layer2-classical-boundary-recovery); [`audit-metatheorem-overclaim`](../docs/design-review.md#audit-metatheorem-overclaim)):
    - **Statement**:
-     1. **`UL-Minimal` Specialization**: Under monotone `Σ` (forbidding `Retract`) and `No-Gluts` (zero collisions across `(B, X)`), every grounded derivation in `UL-Core` satisfies `Live(Σ)`, Quarantine never triggers, `Scoped Cut` equals unrestricted `Cut`, and the positive fragment over `{∧, ∨, →, ∀, ∃, ⊥, ~}` validates **Minimal Constructive Logic** (`NJ_min`) augmented with Nelson-style strong negation `~A` (`(A → ⊥) → ⊥ ⊬ A` and `⊬ A ∨ ~A`).
-     2. **Conservative `UL-Intuitionistic` Extension**: Adding the boundary axiom `B ⊩⁺ (⊥ → C)` for every item `C` preserves soundness (`No-Gluts`) and yields **Heyting Intuitionistic First-Order Logic** (`NJ`) under finitary Beth-cover semantics ([core.md](core.md) §2 item 5, §3 item 12).
+     1. **`UL-Minimal`**: Under monotone `Σ` (forbidding `Retract`) and `No-Gluts` (no `(B, X)` in `Collision`), no ground is obstructed, so Quarantine never triggers, every well-founded ground is `Live`, and `Scoped Cut` acts as unrestricted `Cut`. The natural-deduction checker implements the rule schemas of [core.md](core.md) §3 item 12, which over `{∧, ∨, →, ∀, ∃, ⊥}` are those of minimal natural deduction `NJ_min`, with Nelson-style strong negation `~A` alongside `A → ⊥`, and it rejects derivations of `A ∨ ~A` and of `A` from `(A → ⊥) → ⊥`.
+     2. **`UL-Intuitionistic`**: Adding `⊥E` (the boundary axiom `⊥ → C`) keeps `No-Gluts` intact, since no non-empty boundary holds `+⊥` (MT-3), and turns the checker's rule set into that of intuitionistic natural deduction `NJ`; the two systems are separated by `⊥E`.
    - **Proof Sketch**:
-     - Under `No-Gluts`, `collisions = ∅`, so `obstructed_Σ(e)` is identically false; by MT-1, every well-founded entry in `Entries(Σ)` lies in `Live(Σ)`. Consequently `Scoped Cut` applies unconditionally across overlapping boundaries. Since `∨` requires a witnessed cover (`D2`) and structural impossibility (`A → ⊥`) induces only `-A` without double-negation elimination, neither `A ∨ ~A` nor `(A → ⊥) → ⊥ ⊢ A` is derivable on an `Open` item.
-     - Under `UL-Intuitionistic`, `B ⊩⁻ ⊥` holds structurally for all `B ≠ ⊥_B` (`MT-3`), so `No-Gluts` implies no ground `B ⊩⁺ ⊥` exists on any non-empty `B`. Therefore Modus Ponens with `⊥ → C` can never fire to manufacture `B ⊩⁺ C` or create a new collision.
-   - **Syntactic Natural Deduction & Completeness Status**: Ratified in [core.md](core.md) §3 item 12 and implemented in `src/deduction.ts` (`capture-avoiding substituteHandle` with bound-variable freshness checks on `∀I`/`∃E`, `→I` lexically scoped hypothetical discharge, `→E`, `∧I`/`∧E`, `∨I`/`∨E`, open-domain schematic `∀I`, `∀E`, `∃I`, `∃E` non-escape, standalone `Cover-Gluing`, `≈_B`, and `UL-Intuitionistic`-gated `⊥E`), together with intermediate-node `GroundDependency` anchoring and `@incompat:` provenance preservation in `src/engine.ts`, recovering syntactic `UL-Minimal` (`NJ_min`) and `UL-Intuitionistic` (`NJ`) proof systems alongside Beth-cover semantics while blocking Glivenko LEM inversion.
+     - Under `No-Gluts` no collision exists, so `obstructed_Σ(e)` is false for every entry and every well-founded entry is `Live`; hence `Scoped Cut` applies across all overlapping boundaries.
+     - Under `UL-Intuitionistic`, `B ⊩⁻ ⊥` holds structurally for all `B ≠ ⊥_B` (MT-3), so `No-Gluts` implies no ground `B ⊩⁺ ⊥` exists on any non-empty `B`. Therefore Modus Ponens with `⊥ → C` can never fire to manufacture `B ⊩⁺ C` or create a new collision.
+     - The rejection of `A ∨ ~A` and of Double Negation Elimination is exercised by the bound tests, not proved: non-derivability in the full rule set would need a normalization or semantic argument.
+   - **Implementation**: `src/deduction.ts` implements these rules (capture-avoiding `substituteHandle` with bound-variable freshness checks on `∀I`/`∃E`, `→I` lexically scoped hypothetical discharge, `→E`, `∧I`/`∧E`, `∨I`/`∨E`, open-domain schematic `∀I`, `∀E`, `∃I`, `∃E` non-escape, standalone `Cover-Gluing`, `≈_B`, and `UL-Intuitionistic`-gated `⊥E`), together with intermediate-node `GroundDependency` anchoring and `@incompat:` provenance preservation in `src/engine.ts`.
    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_natural_deduction_implies_intro_and_anti_vacuity_quarantine" min="1" reason="Hypothetical implies-intro discharge, anti-vacuity, and Quarantine bridge are verified" -->
    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_schematic_forall_intro_eigenvariable_soundness_on_open_domains" min="1" reason="Open-domain schematic forall-intro and exists-elim eigenvariable rules are verified" -->
    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation" min="1" reason="Proof-theoretic separation between UL-Minimal and UL-Intuitionistic is verified" -->
@@ -132,28 +137,34 @@ Per [AGENTS.md](../AGENTS.md) §2.5 & §4, all nine metatheoretic theorems (`MT-
    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_glivenko_double_imposs_does_not_derive_lem_or_dne" min="1" reason="Glivenko double impossibility remains strictly below LEM and DNE in UL-Minimal" -->
    <!-- @assert-count target="test/deduction.test.ts" symbol="function test_deduction_quantifier_domain_constraint_enforcement" min="1" reason="Natural deduction quantifier rules enforce domainConstraint proofs, constraint assumptions, shadowed-assumption checks, and eigenvar freshness" -->
 
-9. `Consensus` **MT-9: `UL-Classical` Bivalent Recovery (`2` on Atomic `B*` and `2^k` on Atomic Covers)** ([core.md](core.md) §4 item 13; [worked-examples.md](worked-examples.md) §4; [`scope-anchor-unified-core`](../docs/design-review.md#scope-anchor-unified-core)):
-   - **Statement**: Freeze `Σ`, restrict to object level `n = 0`, fix finest congruence `≈_{B*}`, and assume `No-Gluts` (`⊩⁺` and `⊩⁻` are disjoint) and `No-Gaps` (every base atom/congruence on every atomic cell `B* ≠ ⊥_B` is either `Grounded` or `Excluded`).
-     1. **Atomic Cell Recovery (`2`)**: On a single non-empty atomic cell `B*`, the status map `v_{B*}(A) := 1` iff `B* ⊩⁺ A` (and `0` iff `B* ⊩⁻ A`) extends uniquely by structural induction over all level-`0` closed items `A` to a **Tarskian classical first-order valuation**:
-        - **Bivalence**: Every `A` is strictly `Grounded (+)` or `Excluded (-)`; no item is `Open` or `Collision`.
-        - **Negation Collapse**: `~A` and `A → ⊥` take identical truth values (`¬v_{B*}(A)`), yielding Double Negation Elimination.
-        - **Safe Material Implication**: `v_{B*}(A → C) = max(1 - v_{B*}(A), v_{B*}(C))`, while `No-Gluts` prevents `MP` from firing when `v_{B*}(A) = 0`.
-        - **Excluded Middle, Quantifiers & Equality**: `v_{B*}(A ∨ ~A) = 1`, `∀`/`∃` obey classical duality over `Dom(D)`, and `≈_{B*}` satisfies Leibnizian substitutivity over all native relations.
-        - **Vacuous Explosion**: `{ A, ~A } ⊨_{B*} C` holds vacuously because no `UL-Classical` state satisfies both `+A` and `-A` (`No-Gluts`).
-     2. **Finite Cover Recovery (`2^k`)**: On a non-atomic boundary `B` partitioned by a witnessed finite atomic cover `{B*₁, ..., B*_k} ▷ B`, `UL-Core` with `D2` disjunction recovers the **finite Boolean product algebra `2^k`**: an item `A` holds globally on `B` (`B ⊩⁺ A`) iff `v_{B*_i}(A) = 1` for all `i ∈ {1, ..., k}`, and every classical tautology (e.g., `B ⊩⁺ (A ∨ ~A)`) holds globally via `D2` even when `A` splits across atomic cells ([worked-examples.md](worked-examples.md) Derivation 4A).
-   - **Proof Sketch**: Structural induction on `A` on atomic `B*`:
-     - *Base*: `atom` and `equiv` satisfy `No-Gaps` and `No-Gluts` by assumption; `bottom` satisfies `B* ⊩⁻ ⊥` and (by MT-3 + `No-Gluts`) never `B* ⊩⁺ ⊥`, hence `v_{B*}(⊥) = 0`.
-     - *Inductive Step*:
-       - `~A`: [core.md](core.md) §3 item 12 gives `+(~A) ⟺ -A` and `-(~A) ⟺ +A`, flipping `{1, 0}` identically.
-       - `A ∧ C` and `A ∨ C`: On atomic `B*`, the sole non-vacuous witnessed cover is `{B*}` itself (`Axiom 1 & 2 & 5`), so `D2` collapses to `v_{B*}(A ∨ C) = max(v_{B*}(A), v_{B*}(C))`, while `∧` gives `min`.
-       - `A → C`: Under atomic-generated `UL-Classical` closure (`No-Gaps` + `No-Gluts` over atomic/congruence grounds), [core.md](core.md) §3 item 12 introduces `B* ⊩⁻ (A → C)` whenever `B* ⊩⁺ A ∧ B* ⊩⁻ C` (i.e., `(1, 0)`), and no unanalyzed exclusion is injected on `(0,0), (0,1), (1,1)`; hence `No-Gaps` closes `(B*, A → C)` to `+(A → C)` iff `v_{B*}(A) = 0 ∨ v_{B*}(C) = 1`. Crucially, when `v_{B*}(A) = 0`, `No-Gluts` blocks `B* ⊩⁺ A`, so `MP` never fires.
-       - `A → ⊥`: Specializing `C = ⊥` (`v_{B*}(⊥) = 0`) under atomic-generated `UL-Classical` closure aligns `-(A → ⊥)` extensionally with `+A` and closes absent `+A` to `+(A → ⊥)`, so `+(A → ⊥) ⟺ -A ⟺ +(~A)`.
-       - `∀(x : D) A(x)` / `∃(x : D) A(x)` over closed `Dom(D)`: By IH on every `w ∈ Dom(D)`, `v_{B*}(A(w)) ∈ {0, 1}`, yielding classical universal/existential clauses and De Morgan duality.
-     - *Multi-Cell Cover `2^k`*: Since `{B*₁, ..., B*_k} ▷ B` is a cover of atomic cells, any classical tautology `T` evaluates to `1` on every `B*_i`; for disjunctions such as `A ∨ ~A`, each cell `B*_i` holds either `+A` or `+(~A)`, directly witnessing `D2` disjunction `B ⊩⁺ (A ∨ ~A)` (`2^k` global truth).
-   - **Specification & Kernel Status**: Ratified in [core.md](core.md) §4 item 13 and implemented in `src/specializations.ts`, which enforces `monotoneOnly: true`, validates `No-Gaps` across every reachable atom and congruence in `atoms ∪ queryItems` (never silently coercing `Open` atoms to `-`), evaluates `domainConstraint` `[δ]` on quantifiers, checks full valuation consistency against existing `Live` compound exclusions in `Σ`, and reports `GlobalCoverStatus` (`"+" | "-" | "split"`) alongside per-cell `cellPolarities` in `ClassicalValuation` (`2^k`).
-   <!-- @assert-count target="test/specializations.test.ts" symbol="function test_four_tier_deductive_spectrum_and_classical_recovery" min="1" reason="UL-Classical atomic bivalence, negation collapse, and safe material implication are verified" -->
-   <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_atomic_cover_2k_boolean_algebra_reporting" min="1" reason="Multi-cell 2^k Boolean product algebra reporting is verified" -->
-   <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen" min="1" reason="UL-Classical precondition enforcement against non-monotone engines, Open query atoms, and conflicting compound exclusions is verified" -->
+9. `Exploratory` **MT-8b: Soundness of Recorded Theorems With Respect to Engine Evaluation** ([core.md](core.md) §3 items 10 and 12; [`audit-metatheorem-overclaim`](../docs/design-review.md#audit-metatheorem-overclaim)):
+   - **Statement (open)**: Every derivation the checker accepts, once recorded into `Σ` with its base and intermediate ground dependencies, yields only grounds that evaluation of `Σ` licenses on every boundary where those dependencies are `Live`.
+   - **Status**: unproved; its exact form depends on the evaluation program ratified in [`audit-spec-kernel-coupling`](../docs/design-review.md#audit-spec-kernel-coupling).
+   - **Withdrawn completeness claim**: v0.2.0 stated that `UL-Intuitionistic` "yields Heyting Intuitionistic First-Order Logic (`NJ`) under finitary Beth-cover semantics". No completeness argument was given, and intuitionistic first-order logic is not complete for Kripke or Beth models on finite frames: the double-negation shift `∀x ¬¬A(x) → ¬¬∀x A(x)` holds in every such model yet is not derivable in `NJ`. A future completeness result must name its semantics, including whether it admits infinite structures.
+
+10. `Tested` **MT-9: `UL-Classical` Finite-Domain Bivalent Valuation (`2` on an Atomic Cell, `2^k` on a Finite Atomic Cover)** ([core.md](core.md) §4 item 13; [worked-examples.md](worked-examples.md) §4; [`scope-anchor-unified-core`](../docs/design-review.md#scope-anchor-unified-core); [`audit-metatheorem-overclaim`](../docs/design-review.md#audit-metatheorem-overclaim)). Proof: the written proof below, awaiting maintainer review.
+    - **Statement**: Assume the `UL-Classical` closure conditions (C1)–(C7) of [core.md](core.md) §4 item 13.
+      1. **Atomic cell (`2`)**: On a non-empty atomic cell `B*`, setting `v(A) := 1` when `B* ⊩⁺ A` and `v(A) := 0` when `B* ⊩⁻ A` defines a total function on closed level-`0` items. It satisfies `v(⊥) = 0`, `v(~A) = 1 − v(A)`, `v(A ∧ C) = min(v(A), v(C))`, `v(A ∨ C) = max(v(A), v(C))`, `v(A → C) = max(1 − v(A), v(C))`, `v(∀(x : D) A(x)) = min_{w ∈ Dom(D)} v(A(w))` and `v(∃(x : D) A(x)) = max_{w ∈ Dom(D)} v(A(w))`, and whenever `v(t ≈_{B*} u) = 1`, `v(R(…, r: t, …)) = v(R(…, r: u, …))` for every relation `R` native to `B*`. It is the only function with these clauses that agrees with the atoms and congruence items. Consequently `~A` and `A → ⊥` take the same value, `v(A ∨ ~A) = 1`, and no state satisfies both `+A` and `-A`, so `A, ~A ⊨_{B*} C` holds vacuously.
+      2. **Finite atomic cover (`2^k`)**: If `{B*₁, …, B*_k} ▷ B` is a witnessed cover by atomic cells, each satisfying (C3)–(C7), with valuations `v₁, …, v_k`, then `B ⊩⁺ A` iff `vᵢ(A) = 1` for every `i`, `B ⊩⁻ A` iff `vᵢ(A) = 0` for every `i`, and `A` is `split` otherwise; every classical tautology holds globally on `B` ([worked-examples.md](worked-examples.md) Derivation 4A).
+      3. **Scope**: these are the classical valuations of finite structures. Validity over finite structures differs from first-order validity (Trakhtenbrot's theorem), so MT-9 shows that (C6) and (C7) are consistent with [core.md](core.md) §3 and determine a classical valuation; it does not derive classical first-order consequence from `UL-Core` alone.
+    - **Proof:** (written for v0.3.0 and awaiting maintainer review; MT-9 becomes `Proved` once the review is recorded.)
+      - *Authority*: By (C4) no `(B, X)` is in `Collision` on any boundary, so no ground is obstructed and every ground in `Σ` is `Live`; the `Live` side conditions of [core.md](core.md) §3 item 12 are therefore met below.
+      - *Bivalence and clauses*, by structural induction on a closed level-`0` item `A` on `B*`. At most one polarity holds by (C4), so it suffices to show that at least one holds and that it is the one the clause predicts.
+        - Atoms and congruence items: (C5).
+        - `⊥`: `B* ⊩⁻ ⊥` holds structurally ([core.md](core.md) §3 item 12), so `v(⊥) = 0`.
+        - `~A`: `+(~A) ⟺ -A` and `-(~A) ⟺ +A` (§3 item 12); with the induction hypothesis, `v(~A) = 1 − v(A)`.
+        - `A ∧ C`: `+(A ∧ C) ⟺ +A ∧ +C` and `-(A ∧ C) ⟺ -A ∨ -C`; by bivalence of `A` and `C` exactly one side holds, giving `min`.
+        - `A ∨ C`: every non-empty cell of a witnessed cover of `B*` refines `B*` (Axiom 1), and `B*` is atomic, so that cell is `B*` itself; at least one cell exists (Axiom 5), and `{B*} ▷ B*` (Axiom 2). Hence `+(A ∨ C) ⟺ +A ∨ +C`, and with `-(A ∨ C) ⟺ -A ∧ -C` this gives `max`.
+        - `A → C`: (C6) fixes the polarity, `-` exactly when `v(A) = 1` and `v(C) = 0` and `+` otherwise, giving `max(1 − v(A), v(C))`.
+        - `∀(x : D) A(x)` and `∃(x : D) A(x)`: `Dom(D)` is finite and closed (C3), and by the induction hypothesis every instance `A(w)` is bivalent, so exactly one side of each clause of (C7) holds, giving `min` and `max` over `Dom(D)` (an empty domain gives `1` and `0`).
+        - Congruence: if `v(t ≈_{B*} u) = 1`, substitutivity ([core.md](core.md) §2 item 6) carries each polarity of `R(…, r: t, …)` to `R(…, r: u, …)` and back, so the values agree.
+      - *Uniqueness*: two functions that satisfy the clauses and agree on atoms and congruence items agree on every item, by the same induction.
+      - *Consequences*: `v(~A) = v(A → ⊥) = 1 − v(A)` because `v(⊥) = 0`; `v(A ∨ ~A) = max(v(A), 1 − v(A)) = 1`; vacuous explosion follows from (C4).
+      - *Cover*: if `B ⊩⁺ A`, downward heredity ([core.md](core.md) §3 item 9) gives `B*ᵢ ⊩⁺ A` on every cell, so `vᵢ(A) = 1` by (C4). Conversely, if `vᵢ(A) = 1` for every `i`, every cell holds a `Live` `+A`, and Standalone Cover-Gluing (§3 item 12) gives `B ⊩⁺ A`. The negative case is symmetric. If the cell values are mixed, heredity rules out both global polarities, so `A` is `split`. A classical tautology `T` has `vᵢ(T) = 1` on every cell, since each `vᵢ` is a classical valuation by part 1, so `B ⊩⁺ T`. ∎
+    - **Implementation**: [core.md](core.md) §4 item 13 is implemented in `src/specializations.ts`, which enforces `monotoneOnly: true`, validates `No-Gaps` across every reachable atom and congruence in `atoms ∪ queryItems` (never silently coercing `Open` atoms to `-`), evaluates `domainConstraint` `[δ]` on quantifiers, checks full valuation consistency against existing `Live` compound exclusions in `Σ`, and reports `GlobalCoverStatus` (`"+" | "-" | "split"`) alongside per-cell `cellPolarities` in `ClassicalValuation` (`2^k`).
+    <!-- @assert-count target="test/specializations.test.ts" symbol="function test_four_tier_deductive_spectrum_and_classical_recovery" min="1" reason="UL-Classical atomic bivalence, negation collapse, and safe material implication are verified" -->
+    <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_atomic_cover_2k_boolean_algebra_reporting" min="1" reason="Multi-cell 2^k Boolean product algebra reporting is verified" -->
+    <!-- @assert-count target="test/specializations.test.ts" symbol="function test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen" min="1" reason="UL-Classical precondition enforcement against non-monotone engines, Open query atoms, and conflicting compound exclusions is verified" -->
 
 ---
 

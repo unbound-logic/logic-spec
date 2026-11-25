@@ -16,7 +16,13 @@ This repository is the living specification (`logic-spec`) under the `unbound-lo
    - What does it permit?
    - What does it exclude?
    - Can the system still distinguish valid moves from arbitrary noise (including under self-reference and Curry-style collapse)?
-5. **Hypothesis vs. Consensus**: Explicitly distinguish **`[Exploratory]`** ideas (tentative hypotheses under debate) from **`[Consensus]`** decisions (ratified by the maintainer for the specification). Never silently treat an exploratory remark as a settled axiom or specification rule.
+5. **Claim Status Ladder**: Mark every specification claim with exactly one label from the ladder below. Each label implies the one before it, and no label may claim more evidence than exists:
+   - **`[Exploratory]`** — a tentative hypothesis under debate.
+   - **`[Decided]`** — ratified by the maintainer for the specification.
+   - **`[Tested]`** — decided and exercised by a behavioral test bound to the claim.
+   - **`[Proved]`** — tested and backed by a written proof that the maintainer has reviewed, cited by `Proof:` in the claim's own text (not in a nested item, which counts as a separate claim).
+
+   Definitions top out at `[Tested]`, since a definition has nothing to prove. Never silently treat an exploratory remark as a settled axiom or specification rule, and never present a named test as a proof.
 
 ## 3. Language Split
 
@@ -27,12 +33,12 @@ This repository is the living specification (`logic-spec`) under the `unbound-lo
 ## 4. Workflow & Build-from-Zero Policy
 
 - **Explicit Confirmation Gate**: Do not create files, scaffold empty directories, record formal axioms into the repository, modify ratified specification files, commit, or push without explicit maintainer confirmation.
-- **Demand-Driven Repository Structure**: Grow the repository strictly as `[Consensus]` decisions require; do not pre-create speculative folders. Expected evolution as consensus accumulates:
+- **Demand-Driven Repository Structure**: Grow the repository strictly as `[Decided]` (or stronger) decisions require; do not pre-create speculative folders. Expected evolution as consensus accumulates:
   - `AGENTS.md` — guardrails, stance, and workflow (Single Source of Truth).
   - `README.md` — concise charter and reading map (added once the charter is ratified).
   - `docs/` — foundational records as needed (e.g., `assumptions-audit.md`, `glossary.md`, and `decisions/` ADRs capturing ratified choices and excluded alternatives).
-  - `spec/` — formal specification documents, created only after core primitives and architecture reach `[Consensus]`.
-- **In-File Status Clarity**: If a repository document contains non-ratified material, clearly mark `[Exploratory]` vs. `[Consensus]` sections so readers never mistake tentative hypotheses for settled specification.
+  - `spec/` — formal specification documents, created only after core primitives and architecture reach `[Decided]`.
+- **In-File Status Clarity**: Label every claim in a repository document with its ladder status (§2 item 5) so readers never mistake tentative hypotheses for settled specification, or tested behavior for proved results.
 
 ## 5. Git & Commit Conventions
 
