@@ -25,6 +25,9 @@ function pairKey(a: string, b: string): string {
   return a < b ? `${a}\0${b}` : `${b}\0${a}`;
 }
 
+/** Largest cover the transitivity closure of witnessedCoversOf enumerates. */
+const MAX_COVER_CELLS = 16;
+
 function coverSignature(cells: readonly string[]): string {
   return [...cells].sort().join("\0");
 }
@@ -118,9 +121,6 @@ export class BoundarySystem {
       }
     }
 
-    this.#defined.add(id);
-    this.#parents.set(id, new Set(parentList));
-
     const rels = new Set<string>(config.nativeRelations ?? []);
     for (const p of parentList) {
       const parentRels = this.#nativeRelations.get(p);
@@ -130,7 +130,6 @@ export class BoundarySystem {
         }
       }
     }
-    this.#nativeRelations.set(id, rels);
 
     const handleMap = new Map<string, HandleSpec>();
     if (config.handles !== undefined) {
@@ -150,6 +149,26 @@ export class BoundarySystem {
         }
       }
     }
+
+    // Domain monotonicity: Dom(D') ⊆ Dom(D) whenever D' ⊑ D (`audit-universal-existential-import`).
+    // ⊤_B carries no handle registry, so only declared parents constrain the sub-boundary.
+    for (const p of parentList) {
+      if (p === TOP_BOUNDARY) {
+        continue;
+      }
+      const parentHandles = this.#handles.get(p);
+      for (const hid of handleMap.keys()) {
+        if (parentHandles?.has(hid) !== true) {
+          throw new Error(
+            `Domain monotonicity violation: handle "${hid}" of "${id}" is not in Dom("${p}"); a sub-boundary's handles must be a subset of every parent's handles.`,
+          );
+        }
+      }
+    }
+
+    this.#defined.add(id);
+    this.#parents.set(id, new Set(parentList));
+    this.#nativeRelations.set(id, rels);
     this.#handles.set(id, handleMap);
   }
 
@@ -367,9 +386,11 @@ export class BoundarySystem {
       }
     }
 
-    // Close under finite Transitivity (Axiom 4) up to a bounded iteration depth.
+    // Close under finite Transitivity (Axiom 4). The pass bound and the cell cap are resource
+    // limits, not semantics: where either would cut the closure short, report it (item 14, G6).
     const maxPasses = this.#defined.size + 1;
-    for (let pass = 0; pass < maxPasses; pass++) {
+    let converged = false;
+    for (let pass = 0; pass <= maxPasses; pass++) {
       let changed = false;
       for (const b of this.nonEmptyBoundaries()) {
         const bCovers = baseCovers.get(b);
@@ -390,21 +411,33 @@ export class BoundarySystem {
               const expanded = [
                 ...new Set([...cover.slice(0, idx), ...subCover, ...cover.slice(idx + 1)]),
               ];
-              if (expanded.length === 0 || expanded.length > 16) {
+              if (expanded.length === 0) {
                 continue;
               }
               const sig = coverSignature(expanded);
-              if (!bCovers.has(sig)) {
-                bCovers.set(sig, expanded);
-                changed = true;
+              if (bCovers.has(sig)) {
+                continue;
               }
+              if (expanded.length > MAX_COVER_CELLS) {
+                throw new Error(
+                  `Cover closure for "${b}" needs a cover of ${expanded.length} cells, above the limit of ${MAX_COVER_CELLS}; refusing to truncate the witnessed covers.`,
+                );
+              }
+              bCovers.set(sig, expanded);
+              changed = true;
             }
           }
         }
       }
       if (!changed) {
+        converged = true;
         break;
       }
+    }
+    if (!converged) {
+      throw new Error(
+        `Cover closure did not converge within ${maxPasses + 1} passes; refusing to truncate the witnessed covers.`,
+      );
     }
 
     return [...(baseCovers.get(target)?.values() ?? [])];
