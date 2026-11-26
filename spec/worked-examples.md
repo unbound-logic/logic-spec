@@ -13,8 +13,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 1. Multi-Regime Collision, Quarantine & `M2` Non-Erasure
 
-1. `Decided` **Boiling Point Under `1 atm` vs. `2 atm`** ([`core.md`](core.md) §2 items 4, 7; §3 items 8–12):
-   - **Audit status**: the `RefineBoundary` step lacks the separating evidence that [`audit-m1-criterion-decoupling`](../docs/design-review.md#audit-m1-criterion-decoupling) requires.
+1. `Tested` **Boiling Point Under `1 atm` vs. `2 atm`** ([`core.md`](core.md) §2 items 4, 7; §3 items 8–12):
    - **Signature & Boundaries**:
      - `B_1atm ⊑ B_all`, `B_2atm ⊑ B_all`, with `B_1atm ⊓ B_2atm = ⊥_B` (disjoint regimes).
      - Items: regime-scoped `Heat100 := Heat100(substance: h2o)`, `Boils := Boils(substance: h2o)`, `Cook := CooksAt100C(item: pasta)`, `Rule_broad := Heat100 → Boils`, `Rule_cook := Boils → Cook`; paired with parameter-indexed schema `HeatedAt(p) := HeatedAt(pressure: p)`, `BoilsAt(p) := BoilsAt(pressure: p)`, and `Gen_all := ∀(p : B_all) (HeatedAt(p) → BoilsAt(p))`.
@@ -49,11 +48,12 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      ```text
      Retract(w₁)
      Retract(w₄)
+     Observe⁻(B_all, Pressure(2atm, 1atm), w_p2)   // separating evidence for M1(iv)
      RefineBoundary(B_all → B_1atm = B_all ⊓ [Pressure(p, 1atm)])
      Observe⁺(B_1atm, Rule_broad, w₁')
      Observe⁺(B_1atm, ∀(p : B_1atm) (HeatedAt(p) → BoilsAt(p)), w₄')
      ```
-     - **M1 Check**: `δ(p) := Pressure(p, 1atm)` is non-circular (does not mention `BoilsAt`) and structurally definable (physical regime parameter). Admissible.
+     - **M1 Check**: `δ(p) := Pressure(p, 1atm)` is non-circular (does not mention `BoilsAt`) and structurally definable (physical regime parameter); by domain binding (M1(iv)) the excised handle `2atm` carries `Live -Pressure(2atm, 1atm)` from `w_p2`, while `1atm` is kept. Admissible.
      - **M2 Check**: `(B_all, Gen_all)` stays recorded as **`Excluded (-)`** (never erased), while `∀(p : B_1atm) (HeatedAt(p) → BoilsAt(p))` is **`Grounded (+)`** with explicit narrowing provenance, discharging `O_rev`.
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Boiling-point multi-regime collision, selective quarantine, and M2 non-erasure are verified" -->
 
@@ -61,8 +61,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 2. `M1` Anti-Immunization & Anti-Equivocation (`ℝ \ {0}` vs. Swan `#402`)
 
-2. `Decided` **Admissible Algebraic Singularity (`ℝ \ {0}`) vs. Refused Contingent Excision (`swan_402`)** ([`core.md`](core.md) §2 items 6–7):
-   - **Audit status**: the `swan_402` excision is admitted without evidence that `swan_402` fails `δ`; see [`audit-m1-criterion-decoupling`](../docs/design-review.md#audit-m1-criterion-decoupling).
+2. `Tested` **Admissible Algebraic Singularity (`ℝ \ {0}`) vs. Refused Contingent Excision (`swan_402`)** ([`core.md`](core.md) §2 items 6–7):
    - **Case 2A — Admissible Refinement (`ℝ \ {0}`)**:
      - Boundary `ℝ` carries field operations `+, ×` and the structurally defined relation `AddId(x) := ∀(y : ℝ) (y + x ≈_ℝ y)`.
      - Claim: `Gen_ℝ := ∀(x : ℝ) Invertible(x)` where `Invertible(x) := ∃(y : ℝ) (x × y ≈_ℝ 1)`.
@@ -70,18 +69,21 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
      - Proposed refinement `RefineBoundary(ℝ → ℝ* = ℝ ⊓ [~AddId(x)])`:
        - **M1(i) Non-Circularity**: `~AddId(x)` does not reference `Invertible(x)` → **Pass**.
        - **M1(ii) Structural Definability**: `AddId(x)` is defined by `ℝ`'s algebraic structure rather than a contingent handle tag → **Pass**.
+       - **M1(iv) Domain Binding**: `Observe⁺(ℝ, AddId(0))` gives `Live -~AddId(0)`, so the excised `0` fails `δ`, while `2` keeps an `Open` `δ` and stays in `ℝ*` → **Pass**.
        - **M2 Non-Erasure**: `(ℝ, Gen_ℝ)` remains `Excluded (-)`, while `(ℝ*, ∀(x : ℝ*) Invertible(x))` is `Grounded (+)`.
    - **Case 2B — Refused Ad-Hoc Immunizing Stratagems (`swan_402`)**:
      - Boundary `Swan`, claim `Gen_Swan := ∀(x : Swan) White(x)`, refuted by `Observe⁻(Swan, White(swan_402), obs_tue)` with `I_Swan(swan_402)` verified.
      - Attempt 1: `δ₁(x) := White(x)` → **Refused by M1(i)** (circular reference to `White`).
      - Attempt 2: `δ₂(x) := ~(x ≈_Swan swan_402)` → **Refused by M1(ii)** (bare excision of contingent empirical handle `swan_402`).
      - Attempt 2b (Disguised Contingent Proxy): `δ_proxy(x) := ~(FoundInLake7(x) ∧ TaggedOnTuesday(x))` → **Refused by M1(iii)** (no independent `Live +δ` witness on a non-refuted surviving handle such as `swan_101`, blocking disguised proxy, `-δ` pseudo-witnesses, or vacuous sub-boundary excision; see [metatheory.md](metatheory.md) `MT-7` for the Honest-Proxy Symbol-Isomorphism Horizon).
-     - Attempt 3 (Admissible): `δ₃(x) := ~Habitat(x, Australia)` backed by independent `Live +δ₃` witness `obs_eu_habitat` on `swan_101` (with no surviving handle witnessing `-δ₃`) → **Admitted by M1** (non-circular, independently testable across fresh handles `u ≉_Swan swan_402`), while **M2** preserves `(Swan, Gen_Swan)` as `Excluded (-)`.
+     - Attempt 2c (Decorative Criterion): `δ_dec(x) := Feathered(x)` with `Feathered(swan_402)` and `Feathered(swan_101)` both observed → **Refused by M1(iv)** (the excised counterexample satisfies `δ_dec`, so `δ_dec` separates nothing).
+     - Attempt 3 (Admissible): `δ₃(x) := ~Habitat(x, Australia)` backed by independent `Live +δ₃` witness `obs_eu_habitat` on `swan_101` (with no surviving handle witnessing `-δ₃`) and by separating evidence `Observe⁺(Swan, Habitat(swan_402, Australia))`, which gives `Live -δ₃(swan_402)` (M1(iv)) → **Admitted by M1** (non-circular, independently testable across fresh handles `u ≉_Swan swan_402`), while **M2** preserves `(Swan, Gen_Swan)` as `Excluded (-)`.
    - **Case 2C — Anti-Equivocation Guard (§2 item 6)**:
      - An observation `Observe⁻(Swan, White(bird_99), obs_wed)` where `bird_99` fails `I_Swan` (e.g., a painted goose) cannot witness `bird_99 ∈ Dom(Swan)` and therefore **cannot** collide with `Gen_Swan`.
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_inquiry_updates_retract_non_commutativity_and_m1_m2" min="1" reason="R \\ {0} and swan #402 M1/M2 scenarios are verified" -->
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities" min="1" reason="M1(iii) disguised proxy refusal, vacuous/collided witness rejection, and structural singularity preservation are verified" -->
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_coreference_multi_granularity_and_anti_equivocation" min="1" reason="Anti-equivocation guard for bird_99 is verified" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles" min="1" reason="M1 domain binding refuses decorative and untested criteria and kept excluded handles" -->
 
 ---
 
