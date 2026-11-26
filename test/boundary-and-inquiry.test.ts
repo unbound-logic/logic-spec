@@ -66,6 +66,21 @@ function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): voi
   b.declareDisjoint("EvenZero", "EvenNonZero");
   b.registerCover("Even", ["EvenZero", "EvenNonZero"]);
   assert.equal(b.isWitnessedCover("Z", ["EvenZero", "EvenNonZero", "Odd"]), true);
+
+  // Axiom 3 across an unknown overlap: Odd may hold part of X, so {Even, Odd} ▷ Z has no base change to X.
+  const u = new BoundarySystem();
+  u.defineBoundary("Z");
+  u.defineBoundary("Even", { parents: ["Z"] });
+  u.defineBoundary("Odd", { parents: ["Z"] });
+  u.declareDisjoint("Even", "Odd");
+  u.defineBoundary("X", { parents: ["Z"] });
+  u.defineBoundary("EvenX", { parents: ["Even", "X"] });
+  u.registerCover("Z", ["Even", "Odd"]);
+  assert.deepEqual(u.meetStatus("Odd", "X"), { kind: "unknown" });
+  assert.equal(u.isWitnessedCover("X", ["EvenX"]), false);
+  // Declaring Odd and X disjoint settles the overlap, and the base change {EvenX} ▷ X follows.
+  u.declareDisjoint("Odd", "X");
+  assert.equal(u.isWitnessedCover("X", ["EvenX"]), true);
 }
 
 function test_coreference_multi_granularity_and_anti_equivocation(): void {

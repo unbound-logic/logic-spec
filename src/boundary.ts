@@ -319,17 +319,22 @@ export class BoundarySystem {
   }
 
   /**
-   * Greatest lower bound a ⊓ b: the known meet, or ⊥_B when the boundaries are disjoint or their
-   * overlap is unknown. Callers that must tell disjointness from an unknown overlap use meetStatus.
+   * Greatest lower bound a ⊓ b: the known meet, or ⊥_B when the boundaries are disjoint. An unknown
+   * overlap has no meet to return and throws; callers that can meet one use meetStatus.
    */
   meet(a: string, b: string): string {
     const status = this.meetStatus(a, b);
+    if (status.kind === "unknown") {
+      throw new Error(
+        `Unknown meet for "${a}" and "${b}": nothing registered settles their overlap; call defineMeet() or declareDisjoint().`,
+      );
+    }
     return status.kind === "overlap" ? status.meet : BOT_BOUNDARY;
   }
 
-  /** Return true iff a ⊓ b ≠ ⊥_B. */
+  /** True iff a and b are known to overlap (a ⊓ b is a known non-empty boundary). */
   overlaps(a: string, b: string): boolean {
-    return this.meet(a, b) !== BOT_BOUNDARY;
+    return this.meetStatus(a, b).kind === "overlap";
   }
 
   /** All defined non-empty boundaries refined by b (including b itself when b ≠ ⊥_B). */
@@ -400,8 +405,14 @@ export class BoundarySystem {
           continue;
         }
         for (const sub of this.nonEmptySubBoundaries(sup)) {
+          // A cell whose overlap with sub is unknown may cover part of sub, so no cover of sub is
+          // derived from this one.
+          const statuses = cells.map((c) => this.meetStatus(c, sub));
+          if (statuses.some((st) => st.kind === "unknown")) {
+            continue;
+          }
           const pulled = [
-            ...new Set(cells.map((c) => this.meet(c, sub)).filter((m) => m !== BOT_BOUNDARY)),
+            ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
           ];
           if (pulled.length > 0) {
             baseCovers.get(sub)?.set(coverSignature(pulled), pulled);

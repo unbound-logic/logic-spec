@@ -235,15 +235,24 @@ function test_fuzz_semilattice_and_finitary_covers(): void {
         if (x !== y && bs.refines(x, y)) {
           assert.equal(bs.refines(y, x), false, `${ctx} antisymmetry ${x}, ${y}`);
         }
-        const mxy = bs.meet(x, y);
-        const myx = bs.meet(y, x);
-        assert.equal(mxy, myx, `${ctx} commutativity ${x}, ${y}`);
-        assert.equal(bs.refines(mxy, x), true, `${ctx} meet <= left`);
-        assert.equal(bs.refines(mxy, y), true, `${ctx} meet <= right`);
+        const sxy = bs.meetStatus(x, y);
+        assert.deepEqual(bs.meetStatus(y, x), sxy, `${ctx} commutativity ${x}, ${y}`);
         for (const z of allBounds) {
           if (bs.refines(x, y) && bs.refines(y, z)) {
             assert.equal(bs.refines(x, z), true, `${ctx} transitivity ${x} <= ${y} <= ${z}`);
           }
+        }
+        if (sxy.kind === "unknown") {
+          // Open world: nothing registered settles the overlap, so there is no meet to check.
+          assert.throws(() => bs.meet(x, y), /Unknown meet/, `${ctx} unknown meet ${x}, ${y}`);
+          assert.equal(bs.overlaps(x, y), false, `${ctx} unknown overlap is not a known overlap`);
+          assert.equal(commonNonEmptySubs(bs, nodes, x, y).length, 0, `${ctx} unknown means no common sub`);
+          continue;
+        }
+        const mxy = bs.meet(x, y);
+        assert.equal(bs.refines(mxy, x), true, `${ctx} meet <= left`);
+        assert.equal(bs.refines(mxy, y), true, `${ctx} meet <= right`);
+        for (const z of allBounds) {
           if (bs.refines(z, x) && bs.refines(z, y)) {
             assert.equal(bs.refines(z, mxy), true, `${ctx} GLB ${z} <= meet(${x},${y})=${mxy}`);
           }
@@ -258,12 +267,12 @@ function test_fuzz_semilattice_and_finitary_covers(): void {
         if (u === undefined || v === undefined) {
           continue;
         }
-        if (bs.meet(u, v) === BOT_BOUNDARY) {
+        if (bs.meetStatus(u, v).kind === "disjoint") {
           for (const u1 of bs.nonEmptySubBoundaries(u)) {
             for (const v1 of bs.nonEmptySubBoundaries(v)) {
               assert.equal(
-                bs.meet(u1, v1),
-                BOT_BOUNDARY,
+                bs.meetStatus(u1, v1).kind,
+                "disjoint",
                 `${ctx} disjoint monotonicity violated on (${u1}, ${v1})`,
               );
               assert.equal(bs.overlaps(u1, v1), false, `${ctx} overlaps must be false`);
@@ -324,12 +333,13 @@ function test_fuzz_semilattice_and_finitary_covers(): void {
     );
 
     for (const sub of bs.nonEmptySubBoundaries(target)) {
+      const statuses = [cLeft, cRight].map((cell) => bs.meetStatus(cell, sub));
+      if (statuses.some((st) => st.kind === "unknown")) {
+        // A cell of unknown overlap with sub may cover part of it: no cover of sub is derived.
+        continue;
+      }
       const pulled = [
-        ...new Set(
-          [cLeft, cRight]
-            .map((cell) => bs.meet(cell, sub))
-            .filter((m) => m !== BOT_BOUNDARY),
-        ),
+        ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
       ];
       if (pulled.length > 0) {
         assert.equal(
