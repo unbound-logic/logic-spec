@@ -11,7 +11,7 @@
  * model; they explain records and never decide them.
  */
 
-import { BOT_BOUNDARY, BoundarySystem } from "./boundary.ts";
+import { BOT_BOUNDARY, BoundarySystem, type MeetStatus } from "./boundary.ts";
 import {
   and,
   atom,
@@ -94,6 +94,16 @@ export type M1Result =
         | "M2-not-refuted";
       readonly reason: string;
     };
+
+/**
+ * OverlapUnknown(B₁, B₂, A) (core.md §5 item 14): `A` has a present `+` record on one of two boundaries
+ * and a present `-` record on the other, and nothing registered settles whether they overlap.
+ */
+export type OverlapObligation = {
+  readonly left: string;
+  readonly right: string;
+  readonly itemKey: string;
+};
 
 /** An admitted RefineBoundary transition, kept in Σ so later evidence can be checked against it. */
 export type RecordedRefinement = {
@@ -208,9 +218,15 @@ export class EvaluationSnapshot {
   readonly #bySlot = new Map<number, GroundEntry[]>();
   readonly #liveIds: ReadonlySet<string>;
   readonly #refinementObligations: readonly RefinementObligation[];
+  readonly #overlapObligations: readonly OverlapObligation[];
 
-  constructor(report: PiReport, refinementObligations: readonly RefinementObligation[] = []) {
+  constructor(
+    report: PiReport,
+    refinementObligations: readonly RefinementObligation[] = [],
+    overlapObligations: readonly OverlapObligation[] = [],
+  ) {
     this.#refinementObligations = refinementObligations;
+    this.#overlapObligations = overlapObligations;
     this.#boundaries = report.boundaries;
     this.#boundaryIndex = new Map(report.boundaries.map((b, i) => [b, i] as const));
     this.#universe = report.universe;
@@ -346,6 +362,20 @@ export class EvaluationSnapshot {
    */
   refinementObligations(): readonly RefinementObligation[] {
     return this.#refinementObligations;
+  }
+
+  /**
+   * OverlapUnknown obligations (core.md §5 item 14): opposite present records of an item on two
+   * boundaries whose overlap is unknown.
+   */
+  overlapObligations(): readonly OverlapObligation[] {
+    return this.#overlapObligations;
+  }
+
+  /** True iff a record of (boundary, polarity, item) is present: its rec atom is true. */
+  hasRecord(boundary: string, polarity: Polarity, item: Item): boolean {
+    const s = this.#slot(boundary, item);
+    return s !== undefined && this.#rec[polIndex(polarity)][s] === TRUE;
   }
 
   /** True iff No-Gluts holds: no (B, A) is in Collision. */
@@ -893,7 +923,25 @@ export class InquiryEngine {
         }
       }
     }
-    return new EvaluationSnapshot(report, refinementObligations);
+    const overlapObligations: OverlapObligation[] = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      for (let j = i + 1; j < boundaries.length; j++) {
+        const left = boundaries[i] as string;
+        const right = boundaries[j] as string;
+        if (bounds.meetStatus(left, right).kind !== "unknown") {
+          continue;
+        }
+        for (const item of universe) {
+          const crossed =
+            (probe.hasRecord(left, "+", item) && probe.hasRecord(right, "-", item)) ||
+            (probe.hasRecord(left, "-", item) && probe.hasRecord(right, "+", item));
+          if (crossed) {
+            overlapObligations.push({ left, right, itemKey: itemKey(item) });
+          }
+        }
+      }
+    }
+    return new EvaluationSnapshot(report, refinementObligations, overlapObligations);
   }
 
   /**
@@ -1197,15 +1245,17 @@ function evaluatePi(input: PiInput): PiReport {
 
   const MEET_BOTTOM = -1;
   const MEET_AMBIGUOUS = -2;
+  // An unknown overlap (core.md §2 item 4) licenses no Scoped Cut.
+  const MEET_UNKNOWN = -3;
   const meetTable = new Int32Array(nb * nb);
   const meetErrors = new Map<number, string>();
   for (let b1 = 0; b1 < nb; b1++) {
     for (let b2 = 0; b2 < nb; b2++) {
       const n1 = boundaries[b1] ?? BOT_BOUNDARY;
       const n2 = boundaries[b2] ?? BOT_BOUNDARY;
-      let m: string;
+      let status: MeetStatus;
       try {
-        m = bounds.meet(n1, n2);
+        status = bounds.meetStatus(n1, n2);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.startsWith("Ambiguous meet")) {
@@ -1215,7 +1265,12 @@ function evaluatePi(input: PiInput): PiReport {
         meetErrors.set(b1 * nb + b2, message);
         continue;
       }
-      meetTable[b1 * nb + b2] = m === BOT_BOUNDARY ? MEET_BOTTOM : (bIndex.get(m) ?? MEET_BOTTOM);
+      meetTable[b1 * nb + b2] =
+        status.kind === "overlap"
+          ? (bIndex.get(status.meet) ?? MEET_BOTTOM)
+          : status.kind === "unknown"
+            ? MEET_UNKNOWN
+            : MEET_BOTTOM;
     }
   }
 
@@ -1468,7 +1523,7 @@ function evaluatePi(input: PiInput): PiReport {
         for (const b1 of allB) {
           for (const b2 of allB) {
             const m = meetTable[b1 * nb + b2] ?? MEET_BOTTOM;
-            if (m === MEET_BOTTOM) {
+            if (m === MEET_BOTTOM || m === MEET_UNKNOWN) {
               continue;
             }
             if (m === MEET_AMBIGUOUS) {

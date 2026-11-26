@@ -905,6 +905,65 @@ function test_m1_survivor_exclusion_records_refinement_obligation(): void {
   assert.deepEqual(e.evaluateAtStage(e.stage - 1).refinementObligations(), []);
 }
 
+function test_meet_status_is_three_valued(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("World");
+  b.defineBoundary("Lab", { parents: ["World"] });
+  b.defineBoundary("Field", { parents: ["World"] });
+  b.defineBoundary("Sea");
+  b.defineBoundary("Shore", { parents: ["Sea"] });
+  b.defineBoundary("Deep", { parents: ["Sea"] });
+  b.defineBoundary("Moon");
+  b.defineBoundary("Crater", { parents: ["Moon"] });
+  b.declareDisjoint("Sea", "Moon");
+
+  // Overlap: refinement, a registered meet, or a unique maximal common sub-boundary.
+  assert.deepEqual(b.meetStatus("Lab", "World"), { kind: "overlap", meet: "Lab" });
+  b.defineBoundary("Tidal", { parents: ["Shore", "Deep"] });
+  assert.deepEqual(b.meetStatus("Shore", "Deep"), { kind: "overlap", meet: "Tidal" });
+  // Disjoint: declared, inherited from declared ancestors, or ⊥_B.
+  assert.deepEqual(b.meetStatus("Sea", "Moon"), { kind: "disjoint" });
+  assert.deepEqual(b.meetStatus("Shore", "Crater"), { kind: "disjoint" });
+  assert.deepEqual(b.meetStatus("Lab", BOT_BOUNDARY), { kind: "disjoint" });
+  // Unknown: nothing registered settles it, and it is not read as disjointness.
+  assert.deepEqual(b.meetStatus("Lab", "Field"), { kind: "unknown" });
+  assert.deepEqual(b.meetStatus("World", "Sea"), { kind: "unknown" });
+  // Several maximal common sub-boundaries still require defineMeet.
+  b.defineBoundary("Bench", { parents: ["Lab", "Field"] });
+  b.defineBoundary("Plot", { parents: ["Lab", "Field"] });
+  assert.throws(() => b.meetStatus("Lab", "Field"), /Ambiguous meet/);
+}
+
+function test_overlap_unknown_records_obligation_without_collision(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("Lab");
+  b.defineBoundary("Field");
+  const e = new InquiryEngine(b);
+  const p = atom("P");
+  e.observePositive("Lab", p, "lab");
+  e.observeNegative("Field", p, "field");
+
+  // An unknown overlap produces no Collision, but the possible conflict is recorded.
+  let snap = e.evaluate();
+  assert.equal(snap.isCollisionFree(), true);
+  assert.deepEqual(snap.overlapObligations(), [{ left: "Lab", right: "Field", itemKey: "P()" }]);
+
+  // Declared disjointness settles it: no obligation remains.
+  const bDisjoint = b.clone();
+  bDisjoint.declareDisjoint("Lab", "Field");
+  const eDisjoint = new InquiryEngine(bDisjoint);
+  eDisjoint.observePositive("Lab", p, "lab");
+  eDisjoint.observeNegative("Field", p, "field");
+  assert.deepEqual(eDisjoint.evaluate().overlapObligations(), []);
+  assert.equal(eDisjoint.evaluate().isCollisionFree(), true);
+
+  // A registered common sub-boundary settles the overlap the other way: the conflict collides there.
+  b.defineBoundary("LabField", { parents: ["Lab", "Field"] });
+  snap = e.evaluate();
+  assert.deepEqual(snap.overlapObligations(), []);
+  assert.equal(snap.statusOf("LabField", p), "Collision");
+}
+
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
@@ -919,3 +978,5 @@ test("CloseDomain gates enumerative quantifiers", test_close_domain_gates_enumer
 test("M1 binding rejects criteria not shown to exclude excised handles", test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles);
 test("M1 indirect reference through registered links", test_m1_indirect_reference_through_registered_links);
 test("M1 survivor exclusion records a refinement obligation", test_m1_survivor_exclusion_records_refinement_obligation);
+test("meet status is three-valued", test_meet_status_is_three_valued);
+test("overlap unknown records an obligation without collision", test_overlap_unknown_records_obligation_without_collision);

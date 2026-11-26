@@ -36,6 +36,7 @@ export type ProofViolation =
   | "shadowed-assumption"
   | "type-mismatch"
   | "disjoint-meet"
+  | "unknown-meet"
   | "unwitnessed-cover"
   | "eigenvariable-not-fresh"
   | "eigenvariable-escape"
@@ -391,7 +392,15 @@ function verifyRoot(
             reason: `implies-elim premise "${itemKey(pRes.item)}" does not match antecedent "${itemKey(cRes.item.antecedent)}".`,
           };
         }
-        const meetB = boundaries.meet(pRes.boundary, cRes.boundary);
+        const meetStatus = boundaries.meetStatus(pRes.boundary, cRes.boundary);
+        if (meetStatus.kind === "unknown") {
+          return {
+            ok: false,
+            violation: "unknown-meet",
+            reason: `The overlap of "${pRes.boundary}" and "${cRes.boundary}" is unknown; declare their meet or their disjointness.`,
+          };
+        }
+        const meetB = meetStatus.kind === "overlap" ? meetStatus.meet : BOT_BOUNDARY;
         if (meetB === BOT_BOUNDARY) {
           return {
             ok: false,
@@ -425,7 +434,15 @@ function verifyRoot(
             reason: "and-intro requires positive witnesses on both conjuncts.",
           };
         }
-        const meetB = boundaries.meet(lRes.boundary, rRes.boundary);
+        const meetStatus = boundaries.meetStatus(lRes.boundary, rRes.boundary);
+        if (meetStatus.kind === "unknown") {
+          return {
+            ok: false,
+            violation: "unknown-meet",
+            reason: `The overlap of "${lRes.boundary}" and "${rRes.boundary}" is unknown; declare their meet or their disjointness.`,
+          };
+        }
+        const meetB = meetStatus.kind === "overlap" ? meetStatus.meet : BOT_BOUNDARY;
         if (meetB === BOT_BOUNDARY) {
           return {
             ok: false,
@@ -1061,7 +1078,15 @@ function verifyRoot(
             reason: "equiv-subst requires positive (t1 ≈_B t2) and an atomic relational item.",
           };
         }
-        const meetB = boundaries.meet(eqRes.boundary, tRes.boundary);
+        const meetStatus = boundaries.meetStatus(eqRes.boundary, tRes.boundary);
+        if (meetStatus.kind === "unknown") {
+          return {
+            ok: false,
+            violation: "unknown-meet",
+            reason: `The overlap of "${eqRes.boundary}" and "${tRes.boundary}" is unknown; declare their meet or their disjointness.`,
+          };
+        }
+        const meetB = meetStatus.kind === "overlap" ? meetStatus.meet : BOT_BOUNDARY;
         if (meetB === BOT_BOUNDARY) {
           return {
             ok: false,

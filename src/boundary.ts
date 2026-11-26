@@ -8,6 +8,15 @@
 export const TOP_BOUNDARY = "⊤_B";
 export const BOT_BOUNDARY = "⊥_B";
 
+/**
+ * The meet of two boundaries in the open-world reading of the registry (core.md §2 item 4): known
+ * to be a non-empty boundary, known to be ⊥_B, or unknown because nothing registered settles it.
+ */
+export type MeetStatus =
+  | { readonly kind: "overlap"; readonly meet: string }
+  | { readonly kind: "disjoint" }
+  | { readonly kind: "unknown" };
+
 export type HandleSpec = {
   readonly id: string;
   readonly criterion: string;
@@ -259,30 +268,35 @@ export class BoundarySystem {
     return false;
   }
 
-  /** Compute greatest lower bound a ⊓ b in the boundary meet-semilattice. */
-  meet(a: string, b: string): string {
+  /**
+   * The meet of a and b in the open-world reading of the registry (core.md §2 item 4): an overlap
+   * when one refines the other, a meet is registered, or a unique maximal common sub-boundary is
+   * registered; disjoint when ⊥_B is involved or disjointness is declared for them or inherited
+   * from declared ancestors; unknown otherwise. Several maximal common sub-boundaries throw.
+   */
+  meetStatus(a: string, b: string): MeetStatus {
     this.#assertDefined(a);
     this.#assertDefined(b);
     if (a === BOT_BOUNDARY || b === BOT_BOUNDARY) {
-      return BOT_BOUNDARY;
+      return { kind: "disjoint" };
     }
     if (this.refines(a, b)) {
-      return a;
+      return { kind: "overlap", meet: a };
     }
     if (this.refines(b, a)) {
-      return b;
+      return { kind: "overlap", meet: b };
     }
 
     const explicit = this.#explicitMeets.get(pairKey(a, b));
     if (explicit !== undefined) {
-      return explicit;
+      return explicit === BOT_BOUNDARY ? { kind: "disjoint" } : { kind: "overlap", meet: explicit };
     }
 
     // Disjoint if either pair or any pair of ancestors is declared disjoint.
     for (const x of this.#ancestorsOf(a)) {
       for (const y of this.#ancestorsOf(b)) {
         if (this.#disjointPairs.has(pairKey(x, y))) {
-          return BOT_BOUNDARY;
+          return { kind: "disjoint" };
         }
       }
     }
@@ -291,17 +305,26 @@ export class BoundarySystem {
       (c) => c !== BOT_BOUNDARY && this.refines(c, a) && this.refines(c, b),
     );
     if (common.length === 0) {
-      return BOT_BOUNDARY;
+      return { kind: "unknown" };
     }
     const maximal = common.filter(
       (c) => !common.some((other) => other !== c && this.refines(c, other)),
     );
     if (maximal.length === 1 && maximal[0] !== undefined) {
-      return maximal[0];
+      return { kind: "overlap", meet: maximal[0] };
     }
     throw new Error(
       `Ambiguous meet for "${a}" and "${b}": candidates [${maximal.join(", ")}]; call defineMeet() or declareDisjoint().`,
     );
+  }
+
+  /**
+   * Greatest lower bound a ⊓ b: the known meet, or ⊥_B when the boundaries are disjoint or their
+   * overlap is unknown. Callers that must tell disjointness from an unknown overlap use meetStatus.
+   */
+  meet(a: string, b: string): string {
+    const status = this.meetStatus(a, b);
+    return status.kind === "overlap" ? status.meet : BOT_BOUNDARY;
   }
 
   /** Return true iff a ⊓ b ≠ ⊥_B. */
