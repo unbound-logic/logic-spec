@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY } from "../src/boundary.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { and, atom, equiv, exists, flip, forall, implies } from "../src/syntax.ts";
+import { and, atom, bottom, equiv, exists, flip, forall, implies, itemKey, or } from "../src/syntax.ts";
 
 function test_boundary_meet_semilattice_and_non_witnessing_bottom(): void {
   const b = new BoundarySystem();
@@ -979,6 +979,168 @@ function test_overlap_unknown_records_obligation_without_collision(): void {
   assert.equal(snap.localStatus("LabField", p), "Collision");
 }
 
+function test_cover_revalidation_marks_invalid_and_unverified_covers(): void {
+  const P = atom("P");
+  const Q = atom("Q");
+  const PQ = or(P, Q);
+  const build = (order: "cover-first" | "boundary-first") => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    b.defineBoundary("C1", { parents: ["B"] });
+    b.defineBoundary("C2", { parents: ["B"] });
+    b.declareDisjoint("C1", "C2");
+    const e = new InquiryEngine(b);
+    const addB3 = (): void => {
+      b.defineBoundary("B3", { parents: ["B"] });
+      b.declareDisjoint("B3", "C1");
+      b.declareDisjoint("B3", "C2");
+    };
+    if (order === "boundary-first") {
+      addB3();
+    }
+    const id = e.witnessCover("B", ["C1", "C2"], "cov");
+    if (order === "cover-first") {
+      addB3();
+    }
+    e.observePositive("C1", P, "p1");
+    e.observePositive("C2", Q, "q2");
+    return { b, e, id };
+  };
+
+  // Audit reproduction R2: B3 ⊑ B is disjoint from every cell, so the cover is invalid and
+  // witnesses nothing; the disjunction it grounded on B and B3 falls back to Open.
+  const { b, e, id } = build("cover-first");
+  assert.equal(id, "cov");
+  assert.deepEqual(b.coverValidity("cov"), { kind: "invalid", witnesses: ["B3"] });
+  assert.equal(b.isWitnessedCover("B", ["C1", "C2"]), false);
+  let snap = e.evaluate([PQ]);
+  assert.deepEqual(snap.coverObligations(), [
+    { coverId: "cov", target: "B", cells: ["C1", "C2"], validity: "invalid", witnesses: ["B3"] },
+  ]);
+  assert.equal(snap.localStatus("B", PQ), "Open");
+  assert.equal(snap.localStatus("B3", PQ), "Open");
+  // Excluding both disjuncts on B3 now excludes the disjunction there, and nothing collides.
+  e.observeNegative("B3", P, "np3");
+  e.observeNegative("B3", Q, "nq3");
+  snap = e.evaluate([PQ]);
+  assert.equal(snap.localStatus("B3", PQ), "Excluded");
+  assert.equal(snap.isCollisionFree(), true);
+
+  // Re-validation does not depend on whether the cover or the refuting boundary came first.
+  const other = build("boundary-first");
+  other.e.observeNegative("B3", P, "np3");
+  other.e.observeNegative("B3", Q, "nq3");
+  const otherSnap = other.e.evaluate([PQ]);
+  for (const bd of ["B", "C1", "C2", "B3"]) {
+    for (const it of [P, Q, PQ]) {
+      assert.equal(otherSnap.localStatus(bd, it), snap.localStatus(bd, it));
+    }
+  }
+  assert.deepEqual(otherSnap.coverObligations(), snap.coverObligations());
+
+  // Unverified: B4 ⊑ B has an unknown overlap with both cells. The cover still witnesses, owes an
+  // obligation, and is left out when only verified covers are asked for.
+  const u = new BoundarySystem();
+  u.defineBoundary("B");
+  u.defineBoundary("C1", { parents: ["B"] });
+  u.defineBoundary("C2", { parents: ["B"] });
+  u.declareDisjoint("C1", "C2");
+  const eu = new InquiryEngine(u);
+  eu.witnessCover("B", ["C1", "C2"], "cov");
+  u.defineBoundary("B4", { parents: ["B"] });
+  assert.deepEqual(u.coverValidity("cov"), { kind: "unverified", witnesses: ["B4"] });
+  assert.equal(u.isWitnessedCover("B", ["C1", "C2"]), true);
+  assert.equal(u.isWitnessedCover("B", ["C1", "C2"], { verifiedOnly: true }), false);
+  eu.observePositive("C1", P, "p1");
+  eu.observePositive("C2", Q, "q2");
+  snap = eu.evaluate([PQ]);
+  assert.equal(snap.localStatus("B", PQ), "Grounded");
+  assert.deepEqual(
+    snap.coverObligations().map((o) => [o.coverId, o.validity, o.witnesses]),
+    [["cov", "unverified", ["B4"]]],
+  );
+  // A registered common sub-boundary of B4 and C2 settles the overlap, and the cover is valid.
+  u.defineBoundary("B4C2", { parents: ["B4", "C2"] });
+  assert.deepEqual(u.coverValidity("cov"), { kind: "valid" });
+  assert.deepEqual(eu.evaluate([PQ]).coverObligations(), []);
+}
+
+function test_withdraw_cancels_constraints_purely(): void {
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("C1", { parents: ["B"] });
+  b.defineBoundary("C2", { parents: ["B"] });
+  b.declareDisjoint("C1", "C2");
+  b.defineBoundary("D", { nativeRelations: ["R"], handles: [h("t1")] });
+  const A = atom("A");
+  const C = atom("C");
+  const X = atom("X");
+  const P = atom("P");
+  const Q = atom("Q");
+  const PQ = or(P, Q);
+  const r = (x: string) => atom("R", [{ role: "arg", handle: x }]);
+  const allR = forall("x", "D", r("x"));
+
+  const e = new InquiryEngine(b);
+  e.observePositive("B", A, "wa");
+  e.observePositive("C1", P, "p1");
+  e.observePositive("C2", Q, "q2");
+  e.observePositive("D", r("t1"), "wr");
+  const inc = e.addIncompatibility("B", A, C);
+  const col = e.addStructuralCollapse("B", X, "collapse_x");
+  const cov = e.witnessCover("B", ["C1", "C2"]);
+  const clo = e.closeDomain("D");
+  assert.equal(col, "collapse_x");
+  assert.equal(new Set([inc, col, cov, clo]).size, 4);
+  assert.deepEqual(
+    [inc, col, cov, clo].map((id) => e.constraintKind(id)),
+    ["incompatibility", "collapse", "cover", "closure"],
+  );
+  const before = e.stage;
+  let snap = e.evaluate([PQ, allR]);
+  assert.equal(snap.localStatus("B", C), "Excluded");
+  assert.equal(snap.localStatus("B", X), "Excluded");
+  assert.equal(snap.localStatus("B", PQ), "Grounded");
+  assert.equal(snap.localStatus("D", allR), "Grounded");
+
+  // Each Withdraw removes its constraint from C_B and adds nothing: what it supported is Open.
+  for (const id of [inc, col, cov, clo]) {
+    assert.equal(e.withdraw(id), true);
+    assert.equal(e.transitionLog.at(-1), `Σ${e.stage}:Withdraw(${id})`);
+    assert.equal(e.constraintKind(id), undefined);
+  }
+  assert.equal(e.stage, before + 4);
+  snap = e.evaluate([PQ, allR]);
+  for (const [bd, it] of [["B", C], ["B", X], ["B", PQ], ["D", allR]] as const) {
+    assert.equal(snap.localStatus(bd, it), "Open");
+  }
+  assert.equal(snap.localStatus("B", A), "Grounded");
+  assert.equal(b.isWitnessedCover("B", ["C1", "C2"]), false);
+  assert.equal(e.isDomainClosed("D"), false);
+  // The items the withdrawn constraints named stay tracked.
+  const tracked = new Set(e.evaluate().universe().map(itemKey));
+  for (const it of [C, X, implies(X, bottom())]) {
+    assert.ok(tracked.has(itemKey(it)), `${itemKey(it)} stays tracked`);
+  }
+  // The archived stage before the withdrawals keeps every constraint in force.
+  const archived = e.evaluateAtStage(before, [PQ, allR]);
+  assert.equal(archived.localStatus("B", C), "Excluded");
+  assert.equal(archived.localStatus("B", X), "Excluded");
+  assert.equal(archived.localStatus("B", PQ), "Grounded");
+  assert.equal(archived.localStatus("D", allR), "Grounded");
+
+  // An unknown or already withdrawn identifier changes nothing, and identifiers are not reused.
+  assert.equal(e.withdraw(inc), false);
+  assert.equal(e.withdraw("nope"), false);
+  assert.equal(e.stage, before + 4);
+  assert.throws(() => e.addIncompatibility("B", A, C, inc), /already used/);
+  // Under monotone growth (item 13), Withdraw is forbidden as Retract is.
+  const mono = new InquiryEngine(b.clone(), { monotoneOnly: true });
+  const monoId = mono.addIncompatibility("B", A, C);
+  assert.throws(() => mono.withdraw(monoId), /Withdraw is forbidden/);
+}
+
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
@@ -995,3 +1157,5 @@ test("M1 indirect reference through registered links", test_m1_indirect_referenc
 test("M1 survivor exclusion records a refinement obligation", test_m1_survivor_exclusion_records_refinement_obligation);
 test("meet status is three-valued", test_meet_status_is_three_valued);
 test("overlap unknown records an obligation without collision", test_overlap_unknown_records_obligation_without_collision);
+test("cover revalidation marks invalid and unverified covers", test_cover_revalidation_marks_invalid_and_unverified_covers);
+test("withdraw cancels constraints purely", test_withdraw_cancels_constraints_purely);

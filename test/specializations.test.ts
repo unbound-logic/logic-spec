@@ -104,6 +104,41 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   assert.equal(clConflict.ok, false);
 }
 
+function test_classical_cover_requires_valid_cover_with_known_cell_overlaps(): void {
+  const aClaim = atom("A");
+  const run = (declareCells: boolean, addUnsettledSub: boolean) => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    b.defineBoundary("B1_star", { parents: ["B"] });
+    b.defineBoundary("B2_star", { parents: ["B"] });
+    if (declareCells) {
+      b.declareDisjoint("B1_star", "B2_star");
+    }
+    b.registerCover("B", ["B1_star", "B2_star"]);
+    if (addUnsettledSub) {
+      b.defineBoundary("B3", { parents: ["B"] });
+    }
+    const engine = new InquiryEngine(b, { monotoneOnly: true });
+    engine.observePositive("B1_star", aClaim, "w_b1_a");
+    engine.observeNegative("B2_star", aClaim, "w_b2_na");
+    return evaluateClassicalSpecialization(engine, "B", [aClaim], [aClaim]);
+  };
+  assert.equal(run(true, false).ok, true);
+
+  // (C3): cells whose overlap with one another is unknown do not form a classical cover.
+  const unknownCells = run(false, false);
+  assert.equal(unknownCells.ok, false);
+  if (!unknownCells.ok) {
+    assert.match(unknownCells.reason, /known overlaps/);
+  }
+  // (C3): a cover left unverified by B3 ⊑ B, whose overlap with both cells is unknown, is refused.
+  const unverified = run(true, true);
+  assert.equal(unverified.ok, false);
+  if (!unverified.ok) {
+    assert.match(unverified.reason, /unverified/);
+  }
+}
+
 function test_classical_atomic_cover_2k_boolean_algebra_reporting(): void {
   const bCov = new BoundarySystem();
   bCov.defineBoundary("B");
@@ -309,3 +344,4 @@ test(
   "classical specialization requires closed non-empty domains",
   test_classical_specialization_requires_closed_nonempty_domains,
 );
+test("classical cover requires a valid cover with known cell overlaps", test_classical_cover_requires_valid_cover_with_known_cell_overlaps);

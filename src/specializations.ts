@@ -167,11 +167,31 @@ export function evaluateClassicalSpecialization(
     return { ok: false, reason: "UL-Classical requires No-Gluts (zero collisions)." };
   }
 
-  const atomicCover = engine.boundaries
-    .witnessedCoversOf(boundary)
-    .find((cover) => cover.length > 0 && cover.every((c) => engine.boundaries.isAtomic(c)));
+  // (C3): an atomic cover that is valid (resting on no unverified cover, item 5) and whose cells
+  // have known overlaps with one another (item 4).
+  const bounds = engine.boundaries;
+  const atomicCovers = (verifiedOnly: boolean): readonly (readonly string[])[] =>
+    bounds
+      .witnessedCoversOf(boundary, { verifiedOnly })
+      .filter((cover) => cover.length > 0 && cover.every((c) => bounds.isAtomic(c)));
+  const settled = (cover: readonly string[]): boolean =>
+    cover.every((a, i) => cover.slice(i + 1).every((b) => bounds.meetStatus(a, b).kind !== "unknown"));
+  const verified = atomicCovers(true);
+  const atomicCover = verified.find(settled);
 
   if (atomicCover === undefined) {
+    if (verified.length > 0) {
+      return {
+        ok: false,
+        reason: `UL-Classical (C3) requires an atomic cover of "${boundary}" whose cells have known overlaps; register their disjointness.`,
+      };
+    }
+    if (atomicCovers(false).length > 0) {
+      return {
+        ok: false,
+        reason: `UL-Classical (C3) requires a valid cover; every atomic cover of "${boundary}" rests on an unverified cover.`,
+      };
+    }
     return {
       ok: false,
       reason: `Boundary "${boundary}" is neither atomic nor covered by a witnessed finite atomic partition.`,

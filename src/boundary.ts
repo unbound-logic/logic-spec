@@ -17,6 +17,29 @@ export type MeetStatus =
   | { readonly kind: "disjoint" }
   | { readonly kind: "unknown" };
 
+/** A cover registered by WitnessCover, with the identifier Withdraw names it by (core.md §2 item 7). */
+export type RegisteredCover = {
+  readonly id: string;
+  readonly target: string;
+  readonly cells: readonly string[];
+};
+
+/**
+ * Validity of a registered cover {B_i} ▷ B against the current boundary system (core.md §2 item 5):
+ * invalid when some non-empty B' ⊑ B is disjoint from every cell; unverified when no such B' exists
+ * but some non-empty B' ⊑ B is known to overlap no cell and has an unknown overlap with one. The
+ * witnesses are those sub-boundaries B'.
+ */
+export type CoverValidity =
+  | { readonly kind: "valid" }
+  | { readonly kind: "invalid"; readonly witnesses: readonly string[] }
+  | { readonly kind: "unverified"; readonly witnesses: readonly string[] };
+
+export type CoverOptions = {
+  /** Seed only valid registered covers, leaving out unverified ones as well as invalid ones. */
+  readonly verifiedOnly?: boolean;
+};
+
 export type HandleSpec = {
   readonly id: string;
   readonly criterion: string;
@@ -52,7 +75,8 @@ export class BoundarySystem {
   readonly #explicitMeets = new Map<string, string>();
   readonly #nativeRelations = new Map<string, Set<string>>();
   readonly #handles = new Map<string, Map<string, HandleSpec>>();
-  readonly #registeredCovers = new Map<string, string[][]>();
+  readonly #registeredCovers = new Map<string, RegisteredCover>();
+  #coverCounter = 0;
 
   constructor() {
     this.#parents.set(TOP_BOUNDARY, new Set());
@@ -91,12 +115,10 @@ export class BoundarySystem {
       copy.#handles.set(id, new Map(hm));
     }
     copy.#registeredCovers.clear();
-    for (const [target, coverList] of this.#registeredCovers) {
-      copy.#registeredCovers.set(
-        target,
-        coverList.map((cells) => [...cells]),
-      );
+    for (const [id, cover] of this.#registeredCovers) {
+      copy.#registeredCovers.set(id, { id, target: cover.target, cells: [...cover.cells] });
     }
+    copy.#coverCounter = this.#coverCounter;
     return copy;
   }
 
@@ -358,10 +380,11 @@ export class BoundarySystem {
   }
 
   /**
-   * Register a witnessed finite exhaustive cover {B_i} ▷ target.
-   * Enforces Axiom 1 (Refinement) and Axiom 5 (Non-Vacuity).
+   * Register a witnessed finite exhaustive cover {B_i} ▷ target under the identifier `id` (a fresh
+   * one when omitted) and return it. Enforces Axiom 1 (Refinement) and Axiom 5 (Non-Vacuity); a
+   * cover that later structure refutes stays registered, and coverValidity reports it.
    */
-  registerCover(target: string, cells: readonly string[]): void {
+  registerCover(target: string, cells: readonly string[], id?: string): string {
     this.#assertDefined(target);
     for (const c of cells) {
       this.#assertDefined(c);
@@ -375,16 +398,64 @@ export class BoundarySystem {
         `Cover Non-Vacuity violation: empty cover cannot cover non-empty boundary "${target}".`,
       );
     }
-    const existing = this.#registeredCovers.get(target) ?? [];
-    existing.push(nonEmptyCells);
-    this.#registeredCovers.set(target, existing);
+    let coverId = id;
+    if (coverId === undefined) {
+      do {
+        this.#coverCounter += 1;
+        coverId = `cover${this.#coverCounter}`;
+      } while (this.#registeredCovers.has(coverId));
+    } else if (this.#registeredCovers.has(coverId)) {
+      throw new Error(`Cover identifier "${coverId}" is already registered.`);
+    }
+    this.#registeredCovers.set(coverId, { id: coverId, target, cells: nonEmptyCells });
+    return coverId;
+  }
+
+  /** Withdraw(c) for a cover: remove the registered cover `id`; false when none is registered. */
+  withdrawCover(id: string): boolean {
+    return this.#registeredCovers.delete(id);
+  }
+
+  /** The covers registered by WitnessCover and not withdrawn, in registration order. */
+  registeredCovers(): readonly RegisteredCover[] {
+    return [...this.#registeredCovers.values()].map((c) => ({ ...c, cells: [...c.cells] }));
+  }
+
+  /** Validity of the registered cover `id` against the current boundary system (item 5). */
+  coverValidity(id: string): CoverValidity {
+    const cover = this.#registeredCovers.get(id);
+    if (cover === undefined) {
+      throw new Error(`No registered cover "${id}".`);
+    }
+    return this.#assessCover(cover.target, cover.cells);
+  }
+
+  #assessCover(target: string, cells: readonly string[]): CoverValidity {
+    if (target === BOT_BOUNDARY) {
+      return { kind: "valid" };
+    }
+    const invalid: string[] = [];
+    const unverified: string[] = [];
+    for (const sub of this.nonEmptySubBoundaries(target)) {
+      const statuses = cells.map((c) => this.meetStatus(c, sub));
+      if (statuses.some((st) => st.kind === "overlap")) {
+        continue;
+      }
+      (statuses.every((st) => st.kind === "disjoint") ? invalid : unverified).push(sub);
+    }
+    if (invalid.length > 0) {
+      return { kind: "invalid", witnesses: invalid };
+    }
+    return unverified.length > 0 ? { kind: "unverified", witnesses: unverified } : { kind: "valid" };
   }
 
   /**
    * Enumerate all finitary witnessed covers {B_i} ▷ target generated by the
-   * 5 coverage axioms (Refinement, Identity, Meet-Stability, Transitivity, Non-Vacuity).
+   * 5 coverage axioms (Refinement, Identity, Meet-Stability, Transitivity, Non-Vacuity)
+   * from the registered covers that are not invalid (item 5); with `verifiedOnly`, from the
+   * valid ones alone.
    */
-  witnessedCoversOf(target: string): readonly (readonly string[])[] {
+  witnessedCoversOf(target: string, options: CoverOptions = {}): readonly (readonly string[])[] {
     this.#assertDefined(target);
     if (target === BOT_BOUNDARY) {
       return [[]];
@@ -398,25 +469,28 @@ export class BoundarySystem {
       baseCovers.set(b, m);
     }
 
-    // Seed registered covers and their Meet-Stability pullbacks (Axioms 1, 2, 3, 5).
-    for (const [sup, coverList] of this.#registeredCovers) {
-      for (const cells of coverList) {
-        if (sup === BOT_BOUNDARY) {
+    // Seed registered covers and their Meet-Stability pullbacks (Axioms 1, 2, 3, 5). An invalid
+    // cover witnesses nothing; an unverified one still witnesses unless verifiedOnly is set.
+    for (const { target: sup, cells } of this.#registeredCovers.values()) {
+      if (sup === BOT_BOUNDARY) {
+        continue;
+      }
+      const validity = this.#assessCover(sup, cells).kind;
+      if (validity === "invalid" || (validity === "unverified" && options.verifiedOnly === true)) {
+        continue;
+      }
+      for (const sub of this.nonEmptySubBoundaries(sup)) {
+        // A cell whose overlap with sub is unknown may cover part of sub, so no cover of sub is
+        // derived from this one.
+        const statuses = cells.map((c) => this.meetStatus(c, sub));
+        if (statuses.some((st) => st.kind === "unknown")) {
           continue;
         }
-        for (const sub of this.nonEmptySubBoundaries(sup)) {
-          // A cell whose overlap with sub is unknown may cover part of sub, so no cover of sub is
-          // derived from this one.
-          const statuses = cells.map((c) => this.meetStatus(c, sub));
-          if (statuses.some((st) => st.kind === "unknown")) {
-            continue;
-          }
-          const pulled = [
-            ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
-          ];
-          if (pulled.length > 0) {
-            baseCovers.get(sub)?.set(coverSignature(pulled), pulled);
-          }
+        const pulled = [
+          ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
+        ];
+        if (pulled.length > 0) {
+          baseCovers.get(sub)?.set(coverSignature(pulled), pulled);
         }
       }
     }
@@ -479,7 +553,7 @@ export class BoundarySystem {
   }
 
   /** Check whether `cells` constitutes a witnessed exhaustive cover of `target`. */
-  isWitnessedCover(target: string, cells: readonly string[]): boolean {
+  isWitnessedCover(target: string, cells: readonly string[], options: CoverOptions = {}): boolean {
     this.#assertDefined(target);
     for (const c of cells) {
       this.#assertDefined(c);
@@ -492,7 +566,7 @@ export class BoundarySystem {
       return false;
     }
     const sig = coverSignature(normalized);
-    return this.witnessedCoversOf(target).some((c) => coverSignature(c) === sig);
+    return this.witnessedCoversOf(target, options).some((c) => coverSignature(c) === sig);
   }
 
   /** Return all handles in Dom(boundary). */

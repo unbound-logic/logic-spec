@@ -61,7 +61,9 @@ export type HandleAuth = {
   readonly criterion: string;
 };
 
+/** A registered incompatibility A ⊥_B C, with the identifier Withdraw names it by. */
 export type IncompatibilityConstraint = {
+  readonly id: string;
   readonly boundary: string;
   readonly left: Item;
   readonly right: Item;
@@ -103,6 +105,29 @@ export type OverlapObligation = {
   readonly left: string;
   readonly right: string;
   readonly itemKey: string;
+};
+
+/** The kinds of constraint in C_B that Withdraw removes (core.md §2 item 7). */
+export type ConstraintKind = "incompatibility" | "collapse" | "cover" | "closure";
+
+/**
+ * A revision obligation against a registered cover that is not valid (core.md §2 item 5): invalid
+ * when some witness B' ⊑ B is disjoint from every cell, unverified when a witness is known to
+ * overlap no cell and has an unknown overlap with some cell.
+ */
+export type CoverObligation = {
+  readonly coverId: string;
+  readonly target: string;
+  readonly cells: readonly string[];
+  readonly validity: "invalid" | "unverified";
+  readonly witnesses: readonly string[];
+};
+
+/** The obligations an evaluation reports besides Rev(B, A). */
+type SnapshotObligations = {
+  readonly refinement?: readonly RefinementObligation[];
+  readonly overlap?: readonly OverlapObligation[];
+  readonly cover?: readonly CoverObligation[];
 };
 
 /** An admitted RefineBoundary transition, kept in Σ so later evidence can be checked against it. */
@@ -219,14 +244,12 @@ export class EvaluationSnapshot {
   readonly #liveIds: ReadonlySet<string>;
   readonly #refinementObligations: readonly RefinementObligation[];
   readonly #overlapObligations: readonly OverlapObligation[];
+  readonly #coverObligations: readonly CoverObligation[];
 
-  constructor(
-    report: PiReport,
-    refinementObligations: readonly RefinementObligation[] = [],
-    overlapObligations: readonly OverlapObligation[] = [],
-  ) {
-    this.#refinementObligations = refinementObligations;
-    this.#overlapObligations = overlapObligations;
+  constructor(report: PiReport, obligations: SnapshotObligations = {}) {
+    this.#refinementObligations = obligations.refinement ?? [];
+    this.#overlapObligations = obligations.overlap ?? [];
+    this.#coverObligations = obligations.cover ?? [];
     this.#boundaries = report.boundaries;
     this.#boundaryIndex = new Map(report.boundaries.map((b, i) => [b, i] as const));
     this.#universe = report.universe;
@@ -372,6 +395,11 @@ export class EvaluationSnapshot {
     return this.#overlapObligations;
   }
 
+  /** Revision obligations against registered covers that are invalid or unverified (item 5). */
+  coverObligations(): readonly CoverObligation[] {
+    return this.#coverObligations;
+  }
+
   /** True iff a record of (boundary, polarity, item) is present: its rec atom is true. */
   hasRecord(boundary: string, polarity: Polarity, item: Item): boolean {
     const s = this.#slot(boundary, item);
@@ -406,7 +434,7 @@ type RecordedTheorem = {
   readonly requiredGrounds: readonly GroundDependency[];
 };
 
-type StructuralCollapse = { readonly boundary: string; readonly item: Item };
+type StructuralCollapse = { readonly id: string; readonly boundary: string; readonly item: Item };
 
 type StageRecord = {
   readonly stage: number;
@@ -432,7 +460,13 @@ export class InquiryEngine {
   readonly #theorems = new Map<string, RecordedTheorem>();
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: StructuralCollapse[] = [];
-  readonly #closedDomains = new Set<string>();
+  /** CloseDomain closures in force: constraint identifier to domain. */
+  readonly #closures = new Map<string, string>();
+  /** Every constraint of C_B in force, by identifier. */
+  readonly #constraintKinds = new Map<string, ConstraintKind>();
+  /** Identifiers ever given to a constraint; Withdraw does not free them for reuse. */
+  readonly #usedConstraintIds = new Set<string>();
+  #constraintCounter = 0;
   readonly #refinements: RecordedRefinement[] = [];
   readonly #trackedItems = new Map<string, Item>();
   readonly #stageArchive = new Map<number, StageRecord>();
@@ -580,40 +614,57 @@ export class InquiryEngine {
     return deleted;
   }
 
-  /** Register material incompatibility constraint A ⊥_B C in C_B. */
-  addIncompatibility(boundary: string, left: Item, right: Item): void {
+  /**
+   * Register material incompatibility constraint A ⊥_B C in C_B under `constraintId` (a fresh one
+   * when omitted), and return the identifier.
+   */
+  addIncompatibility(boundary: string, left: Item, right: Item, constraintId?: string): string {
     if (boundary === BOT_BOUNDARY) {
       throw new Error(`Cannot add material incompatibility on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    const id = this.#claimConstraintId(constraintId, "incompatibility");
     this.#track(left);
     this.#track(right);
-    this.#incompatibilities.push({ boundary, left, right });
+    this.#incompatibilities.push({ id, boundary, left, right });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Constrain(${itemKey(left)} ⊥_${boundary} ${itemKey(right)})`);
     this.#captureStage();
+    return id;
   }
 
-  /** Register structural boundary collapse B ⊓ [A] = ⊥_B, inducing +(A → ⊥) and -A. */
-  addStructuralCollapse(boundary: string, item: Item): void {
+  /**
+   * Register structural boundary collapse B ⊓ [A] = ⊥_B, inducing +(A → ⊥) and -A, under
+   * `constraintId` (a fresh one when omitted), and return the identifier.
+   */
+  addStructuralCollapse(boundary: string, item: Item, constraintId?: string): string {
     if (boundary === BOT_BOUNDARY) {
       throw new Error(`Cannot add structural collapse on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    const id = this.#claimConstraintId(constraintId, "collapse");
     this.#track(item);
     this.#track(implies(item, bottom()));
-    this.#structuralCollapses.push({ boundary, item });
+    this.#structuralCollapses.push({ id, boundary, item });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Collapse(${boundary} ⊓ [${itemKey(item)}] = ⊥_B)`);
     this.#captureStage();
+    return id;
   }
 
-  /** Register a witnessed finite exhaustive cover {B_i} ▷ B as an ordered inquiry transition. */
-  witnessCover(target: string, cells: readonly string[]): void {
-    this.boundaries.registerCover(target, cells);
+  /**
+   * Register a witnessed finite exhaustive cover {B_i} ▷ B as an ordered inquiry transition under
+   * `constraintId` (a fresh one when omitted), and return the identifier. Later boundary changes
+   * may make the cover invalid or unverified (core.md §2 item 5); coverObligations reports it.
+   */
+  witnessCover(target: string, cells: readonly string[], constraintId?: string): string {
+    const id = this.#nextConstraintId(constraintId);
+    this.boundaries.registerCover(target, cells, id);
+    this.#recordConstraintId(id, "cover");
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:WitnessCover({${cells.join(", ")}} ▷ ${target})`);
     this.#captureStage();
+    return id;
   }
 
   /**
@@ -622,20 +673,92 @@ export class InquiryEngine {
    * generic and `∃` exclusion of item 14; the closure applies to D itself, never to its
    * sub-boundaries.
    */
-  closeDomain(domain: string): void {
+  closeDomain(domain: string, constraintId?: string): string {
     if (domain === BOT_BOUNDARY) {
       throw new Error(`CloseDomain requires a boundary D ≠ "${BOT_BOUNDARY}".`);
     }
     this.boundaries.handlesOf(domain);
-    this.#closedDomains.add(domain);
+    const id = this.#claimConstraintId(constraintId, "closure");
+    this.#closures.set(id, domain);
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:CloseDomain(${domain})`);
     this.#captureStage();
+    return id;
   }
 
   /** True iff CloseDomain(domain) is registered in C_B at the current stage. */
   isDomainClosed(domain: string): boolean {
-    return this.#closedDomains.has(domain);
+    return [...this.#closures.values()].includes(domain);
+  }
+
+  /** The kind of the constraint `constraintId` in force in C_B, or undefined. */
+  constraintKind(constraintId: string): ConstraintKind | undefined {
+    return this.#constraintKinds.get(constraintId);
+  }
+
+  /**
+   * Withdraw(c) (Pure Cancellation, core.md §2 item 7): remove the constraint `constraintId` (an
+   * incompatibility, structural collapse, cover or closure) from C_B without adding anything to
+   * Σ. The items it named stay tracked. Returns false when no such constraint is in force.
+   */
+  withdraw(constraintId: string): boolean {
+    if (this.monotoneOnly) {
+      throw new Error("Withdraw is forbidden when monotoneOnly is enabled.");
+    }
+    const kind = this.#constraintKinds.get(constraintId);
+    if (kind === undefined) {
+      return false;
+    }
+    switch (kind) {
+      case "incompatibility": {
+        const i = this.#incompatibilities.findIndex((c) => c.id === constraintId);
+        this.#incompatibilities.splice(i, 1);
+        break;
+      }
+      case "collapse": {
+        const i = this.#structuralCollapses.findIndex((c) => c.id === constraintId);
+        this.#structuralCollapses.splice(i, 1);
+        break;
+      }
+      case "closure":
+        this.#closures.delete(constraintId);
+        break;
+      case "cover":
+        this.boundaries.withdrawCover(constraintId);
+        break;
+    }
+    this.#constraintKinds.delete(constraintId);
+    this.#stage += 1;
+    this.#history.push(`Σ${this.#stage}:Withdraw(${constraintId})`);
+    this.#captureStage();
+    return true;
+  }
+
+  /** The identifier for a new constraint: `requested`, refused if ever used, or a fresh one. */
+  #nextConstraintId(requested: string | undefined): string {
+    if (requested !== undefined) {
+      if (this.#usedConstraintIds.has(requested)) {
+        throw new Error(`Constraint identifier "${requested}" is already used in this inquiry.`);
+      }
+      return requested;
+    }
+    let id: string;
+    do {
+      this.#constraintCounter += 1;
+      id = `c${this.#constraintCounter}`;
+    } while (this.#usedConstraintIds.has(id));
+    return id;
+  }
+
+  #recordConstraintId(id: string, kind: ConstraintKind): void {
+    this.#usedConstraintIds.add(id);
+    this.#constraintKinds.set(id, kind);
+  }
+
+  #claimConstraintId(requested: string | undefined, kind: ConstraintKind): string {
+    const id = this.#nextConstraintId(requested);
+    this.#recordConstraintId(id, kind);
+    return id;
   }
 
   /** Verify that targetBoundary and all boundaries referenced inside targetItem existed as non-empty at `stage`. */
@@ -941,7 +1064,24 @@ export class InquiryEngine {
         }
       }
     }
-    return new EvaluationSnapshot(report, refinementObligations, overlapObligations);
+    const coverObligations: CoverObligation[] = [];
+    for (const c of bounds.registeredCovers()) {
+      const validity = bounds.coverValidity(c.id);
+      if (validity.kind !== "valid") {
+        coverObligations.push({
+          coverId: c.id,
+          target: c.target,
+          cells: c.cells,
+          validity: validity.kind,
+          witnesses: validity.witnesses,
+        });
+      }
+    }
+    return new EvaluationSnapshot(report, {
+      refinement: refinementObligations,
+      overlap: overlapObligations,
+      cover: coverObligations,
+    });
   }
 
   /**
@@ -1041,7 +1181,7 @@ export class InquiryEngine {
       theorems: new Map(this.#theorems),
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
-      closedDomains: new Set(this.#closedDomains),
+      closedDomains: new Set(this.#closures.values()),
       refinements: [...this.#refinements],
       trackedItems: new Map(this.#trackedItems),
       boundarySnapshot: this.boundaries.clone(),
