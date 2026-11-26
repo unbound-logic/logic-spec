@@ -13,8 +13,9 @@
  * are not generated, since the oracle omits those two rows (AMBIGUITIES.md A15).
  *
  * Item 14 tracks ⊥ and every item named by a past transition, retracted observations included.
- * Until the oracle takes those items as an input, they are passed to it as queries: U(Σ, Q) closes
- * tracked and queried items alike, so the universe and every atom are the same.
+ * The kernel keeps those items itself; the oracle receives the items of retracted observations
+ * through PiState.historyItems (AMBIGUITIES.md A23) and tracks ⊥ on its own (A22), so both are
+ * compared on the same universe.
  *
  * UL_FUZZ_MULTIPLIER scales the number of states; UL_FUZZ_SEED replays a single state.
  */
@@ -119,11 +120,13 @@ type Profile = {
   readonly quantifier: number;
   /** Probability of a domain sweep: one polarity observed for every handle of a domain. */
   readonly sweep: number;
+  /** Probability that a state retracts one or two of its observations. */
+  readonly retraction: number;
 };
 
-const GENERAL: Profile = { conditional: 0.3, incompatibilities: [0, 2], closure: 0.4, quantifier: 0.3, sweep: 0.2 };
-const CONFLICTS: Profile = { conditional: 0.5, incompatibilities: [1, 3], closure: 0.3, quantifier: 0.15, sweep: 0.1 };
-const QUANTIFIERS: Profile = { conditional: 0.2, incompatibilities: [0, 1], closure: 0.6, quantifier: 0.7, sweep: 0.6 };
+const GENERAL: Profile = { conditional: 0.3, incompatibilities: [0, 2], closure: 0.4, quantifier: 0.3, sweep: 0.2, retraction: 0.4 };
+const CONFLICTS: Profile = { conditional: 0.5, incompatibilities: [1, 3], closure: 0.3, quantifier: 0.15, sweep: 0.1, retraction: 0.4 };
+const QUANTIFIERS: Profile = { conditional: 0.2, incompatibilities: [0, 1], closure: 0.6, quantifier: 0.7, sweep: 0.6, retraction: 0.3 };
 
 type RandomState = {
   readonly boundaries: BoundarySystem;
@@ -133,7 +136,7 @@ type RandomState = {
   readonly collapses: PiCollapse[];
   readonly closedDomains: string[];
   readonly queries: Item[];
-  /** Items tracked by the kernel's history but absent from the oracle's state: ⊥ and retracted items. */
+  /** Items of past transitions no longer in force: the items of retracted observations. */
   readonly historyItems: Item[];
 };
 
@@ -258,8 +261,8 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   }
 
   // Retract: the record goes, the item stays tracked (item 14).
-  const historyItems: Item[] = [bottom()];
-  const retractCount = rng.bool(0.3) ? rng.int(1, 2) : 0;
+  const historyItems: Item[] = [];
+  const retractCount = rng.bool(profile.retraction) ? rng.int(1, 2) : 0;
   for (let i = 0; i < retractCount && observed.length > 0; i++) {
     const [gone] = observed.splice(rng.int(0, observed.length - 1), 1);
     if (gone !== undefined) {
@@ -312,6 +315,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
 
 type Coverage = {
   states: number;
+  retractions: number;
   undetermined: number;
   quarantined: number;
   collisions: number;
@@ -328,8 +332,18 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
     incompatibilities: state.incompatibilities,
     collapses: state.collapses,
     closedDomains: state.closedDomains,
-    queries: [...state.queries, ...state.historyItems],
+    queries: state.queries,
+    historyItems: state.historyItems,
   });
+
+  // A retracted observation supplies no record but keeps its item in U(Σ, Q).
+  const kernelKeys = new Set(snap.universe().map(itemKey));
+  for (const item of state.historyItems) {
+    assert.ok(kernelKeys.has(itemKey(item)), `${ctx} retracted item ${itemKey(item)} stays tracked`);
+  }
+  if (state.historyItems.length > 0) {
+    coverage.retractions += 1;
+  }
 
   const kernelUniverse = snap.universe().map(itemKey).sort();
   const oracleUniverse = model.universe.map(itemKey).sort();
@@ -376,6 +390,7 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
 function runSuite(suiteId: number, name: string, defaultCount: number, profile: Profile): Coverage {
   const coverage: Coverage = {
     states: 0,
+    retractions: 0,
     undetermined: 0,
     quarantined: 0,
     collisions: 0,
@@ -398,6 +413,7 @@ function test_differential_general_states(): void {
   if (coverage.states > 1) {
     assert.ok(coverage.collisions > 0, "[suite=general] some state reaches Collision");
     assert.ok(coverage.quarantined > 0, "[suite=general] some record is Quarantined");
+    assert.ok(coverage.retractions > 0, "[suite=general] some state retracts an observation");
   }
 }
 
@@ -406,6 +422,7 @@ function test_differential_conflict_heavy_states(): void {
   if (coverage.states > 1) {
     assert.ok(coverage.undetermined > 0, "[suite=conflicts] some authority is Undetermined");
     assert.ok(coverage.collisions > 0, "[suite=conflicts] some state reaches Collision");
+    assert.ok(coverage.retractions > 0, "[suite=conflicts] some state retracts an observation");
   }
 }
 
