@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY } from "../src/boundary.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { and, atom, equiv, exists, flip, forall } from "../src/syntax.ts";
+import { and, atom, equiv, exists, flip, forall, implies } from "../src/syntax.ts";
 
 function test_boundary_meet_semilattice_and_non_witnessing_bottom(): void {
   const b = new BoundarySystem();
@@ -179,6 +179,8 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     atom("Invertible", [{ role: "el", handle: "0" }]),
     "zero_no_inv",
   );
+  // Separating evidence for M1's domain binding: the excised handle 0 is the additive identity.
+  eMath.observePositive("R", atom("AddId", [{ role: "el", handle: "0" }]), "zero_is_add_id");
   const resR = eMath.refineBoundary({
     fromBoundary: "R",
     toBoundary: "R_star",
@@ -252,6 +254,16 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
 
   // Attempt 3: δ₃(x) := ~Habitat(x, Australia) -> admitted via independent witness swan_101; M2 preserves (Swan, Gen_Swan) Excluded
   eBio.retract("w_gen_swan");
+  // Separating evidence for M1's domain binding: the excised swan_402 lives in Australia.
+  eBio.observePositive(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_402" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_402_au_habitat",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
   const att3 = eBio.refineBoundary({
     fromBoundary: "Swan",
     toBoundary: "Swan_NonAU",
@@ -382,6 +394,16 @@ function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_struc
 
   // Retracting conflicting observation restores Live witness on swan_101 -> M1(iii) admits + M2 preserves Excluded
   assert.equal(eProxy.retract("obs_au_conflict"), true);
+  // Separating evidence for M1's domain binding: the excised swan_402 lives in Australia.
+  eProxy.observePositive(
+    "Swan",
+    atom("Habitat", [
+      { role: "subject", handle: "swan_402" },
+      { role: "region", handle: "Australia" },
+    ]),
+    "obs_402_au_habitat",
+    { handle: "swan_402", criterion: "I_Swan(cygnus)" },
+  );
   const resAdmitted = eProxy.refineBoundary({
     fromBoundary: "Swan",
     toBoundary: "Swan_NonAU",
@@ -409,6 +431,7 @@ function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_struc
   const invX = atom("Invertible", [{ role: "el", handle: "x" }]);
   const genR = forall("x", "R", invX);
   eMath.observeNegative("R", atom("Invertible", [{ role: "el", handle: "0" }]), "zero_no_inv");
+  eMath.observePositive("R", atom("AddId", [{ role: "el", handle: "0" }]), "zero_is_add_id");
   const resMath = eMath.refineBoundary({
     fromBoundary: "R",
     toBoundary: "R_star",
@@ -719,6 +742,169 @@ function test_close_domain_gates_enumerative_quantifiers(): void {
   assert.equal(e.evaluate([allBot]).statusOf("D", allBot), "Open");
 }
 
+function test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("Swan", {
+    nativeRelations: ["White", "Feathered", "Habitat"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+    ],
+  });
+  b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+  const rel = (name: string, handle: string) => atom(name, [{ role: "subject", handle }]);
+  const auth = (handle: string) => ({ handle, criterion: "I_Swan" });
+  const gen = forall("x", "Swan", rel("White", "x"));
+  const request = (criterionItem: ReturnType<typeof rel>) => ({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_Rest",
+    originalUniversal: gen,
+    targetRelation: "White",
+    criterionItem,
+  });
+
+  // A decorative criterion: the excised counterexample satisfies δ := Feathered(x).
+  const e = new InquiryEngine(b);
+  e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+  e.observePositive("Swan", rel("Feathered", "swan_101"), "f101", auth("swan_101"));
+  e.observePositive("Swan", rel("Feathered", "swan_402"), "f402", auth("swan_402"));
+  const decorative = e.refineBoundary(request(rel("Feathered", "x")));
+  assert.equal(decorative.ok, false);
+  if (!decorative.ok) {
+    assert.equal(decorative.violation, "M1-unbound-criterion");
+  }
+
+  // A criterion never tested against the excised handle (δ(swan_402) Open) is refused too ...
+  const e2 = new InquiryEngine(b);
+  e2.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+  e2.observePositive("Swan", rel("Habitat", "swan_101"), "h101", auth("swan_101"));
+  const untested = e2.refineBoundary(request(rel("Habitat", "x")));
+  assert.equal(untested.ok, false);
+  if (!untested.ok) {
+    assert.equal(untested.violation, "M1-unbound-criterion");
+  }
+  // ... and admitted once separating evidence shows that swan_402 fails δ.
+  e2.observeNegative("Swan", rel("Habitat", "swan_402"), "h402", auth("swan_402"));
+  assert.equal(e2.refineBoundary(request(rel("Habitat", "x"))).ok, true);
+
+  // A kept handle whose δ is Live excluded breaks Dom(B') = {h ∈ Dom(B) : ¬Live -δ(h)}.
+  const r = new BoundarySystem();
+  r.defineBoundary("R", {
+    nativeRelations: ["Invertible", "AddId"],
+    handles: [
+      { id: "0", criterion: "I_R(0)", kind: "structural" },
+      { id: "2", criterion: "I_R(2)", kind: "structural" },
+      { id: "3", criterion: "I_R(3)", kind: "structural" },
+    ],
+  });
+  r.defineBoundary("R_star", { parents: ["R"], handleFilter: (h) => h.id !== "0" });
+  const el = (name: string, handle: string) => atom(name, [{ role: "el", handle }]);
+  const er = new InquiryEngine(r);
+  er.observeNegative("R", el("Invertible", "0"), "zero_no_inv");
+  er.observePositive("R", el("AddId", "0"), "zero_add_id");
+  er.observePositive("R", el("AddId", "3"), "three_add_id");
+  const kept = er.refineBoundary({
+    fromBoundary: "R",
+    toBoundary: "R_star",
+    originalUniversal: forall("x", "R", el("Invertible", "x")),
+    targetRelation: "Invertible",
+    criterionItem: flip(el("AddId", "x")),
+  });
+  assert.equal(kept.ok, false);
+  if (!kept.ok) {
+    assert.equal(kept.violation, "M1-unbound-criterion");
+  }
+}
+
+function test_m1_indirect_reference_through_registered_links(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("Swan", {
+    nativeRelations: ["White", "Pale"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+    ],
+  });
+  b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+  const rel = (name: string, handle: string) => atom(name, [{ role: "subject", handle }]);
+  const auth = (handle: string) => ({ handle, criterion: "I_Swan" });
+  const gen = forall("x", "Swan", rel("White", "x"));
+  const base = (): InquiryEngine => {
+    const e = new InquiryEngine(b);
+    e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+    e.observePositive("Swan", rel("Pale", "swan_101"), "pale101", auth("swan_101"));
+    e.observeNegative("Swan", rel("Pale", "swan_402"), "pale402", auth("swan_402"));
+    return e;
+  };
+  const request = {
+    fromBoundary: "Swan",
+    toBoundary: "Swan_Rest",
+    originalUniversal: gen,
+    targetRelation: "White",
+    criterionItem: rel("Pale", "x"),
+  };
+
+  // Without a registered link the split is admitted.
+  assert.equal(base().refineBoundary(request).ok, true);
+
+  // A registered incompatibility ties Pale to White.
+  const viaIncompat = base();
+  viaIncompat.addIncompatibility("Swan", rel("Pale", "swan_101"), rel("White", "swan_101"));
+  const r1 = viaIncompat.refineBoundary(request);
+  assert.equal(r1.ok, false);
+  if (!r1.ok) {
+    assert.equal(r1.violation, "M1-circular");
+  }
+
+  // So does a Live conditional between them.
+  const viaConditional = base();
+  viaConditional.observePositive("Swan", implies(rel("Pale", "swan_101"), rel("White", "swan_101")), "pale_white");
+  const r2 = viaConditional.refineBoundary(request);
+  assert.equal(r2.ok, false);
+  if (!r2.ok) {
+    assert.equal(r2.violation, "M1-circular");
+  }
+}
+
+function test_m1_survivor_exclusion_records_refinement_obligation(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("Swan", {
+    nativeRelations: ["White", "Lake"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+      { id: "swan_777", criterion: "I_Swan", kind: "contingent" },
+    ],
+  });
+  b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+  const rel = (name: string, handle: string) => atom(name, [{ role: "subject", handle }]);
+  const auth = (handle: string) => ({ handle, criterion: "I_Swan" });
+  const e = new InquiryEngine(b);
+  e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+  e.observePositive("Swan", rel("Lake", "swan_101"), "lake101", auth("swan_101"));
+  e.observeNegative("Swan", rel("Lake", "swan_402"), "lake402", auth("swan_402"));
+  // swan_777's δ is Open, so it stays in Swan_Rest.
+  const res = e.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: "Swan_Rest",
+    originalUniversal: forall("x", "Swan", rel("White", "x")),
+    targetRelation: "White",
+    criterionItem: rel("Lake", "x"),
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(e.evaluate().refinementObligations(), []);
+
+  // Later evidence excludes δ(swan_777): the refinement now owes a revision.
+  e.observeNegative("Swan", rel("Lake", "swan_777"), "lake777", auth("swan_777"));
+  const obligations = e.evaluate().refinementObligations();
+  assert.deepEqual(
+    obligations.map((o) => [o.fromBoundary, o.toBoundary, o.handle]),
+    [["Swan", "Swan_Rest", "swan_777"]],
+  );
+  // The archived stage before that evidence still owes nothing.
+  assert.deepEqual(e.evaluateAtStage(e.stage - 1).refinementObligations(), []);
+}
+
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
@@ -730,3 +916,6 @@ test(
 );
 test("domain monotonicity rejects sub-boundary handles", test_domain_monotonicity_rejects_sub_boundary_handles);
 test("CloseDomain gates enumerative quantifiers", test_close_domain_gates_enumerative_quantifiers);
+test("M1 binding rejects criteria not shown to exclude excised handles", test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles);
+test("M1 indirect reference through registered links", test_m1_indirect_reference_through_registered_links);
+test("M1 survivor exclusion records a refinement obligation", test_m1_survivor_exclusion_records_refinement_obligation);

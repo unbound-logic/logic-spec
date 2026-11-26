@@ -148,6 +148,15 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
   // Stage Σ2: Retract overbroad rules + RefineBoundary obeying M1 & M2
   engine.retract("w1");
   engine.retract("w4");
+  // Separating evidence for M1's domain binding: the excised 2 atm regime is not at 1 atm.
+  engine.observeNegative(
+    "B_all",
+    atom("Pressure", [
+      { role: "target", handle: "2atm" },
+      { role: "value", handle: "1atm" },
+    ]),
+    "w_p2",
+  );
   const refine = engine.refineBoundary({
     fromBoundary: "B_all",
     toBoundary: "B_1atm",

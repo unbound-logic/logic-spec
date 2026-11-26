@@ -2006,6 +2006,7 @@ function test_fuzz_m1_m2_anti_immunization_refine_boundary(): void {
       handle: excisedStruct.id,
       criterion: excisedStruct.criterion,
     });
+    eStruct.observePositive("B", singAtom(excisedStruct.id), "w_sing_excised");
     const structOk = eStruct.refineBoundary({
       fromBoundary: "B",
       toBoundary: "B_no_struct",
@@ -2025,6 +2026,7 @@ function test_fuzz_m1_m2_anti_immunization_refine_boundary(): void {
       handle: survivingCont.id,
       criterion: survivingCont.criterion,
     });
+    eGood.observeNegative("B", splitAtom(excisedCont.id), "w_split_excised");
     const goodRes = eGood.refineBoundary({
       fromBoundary: "B",
       toBoundary: "B_no_cont",

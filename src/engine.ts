@@ -90,9 +90,29 @@ export type M1Result =
         | "M1-circular"
         | "M1-contingent-excision"
         | "M1-unwitnessed-proxy"
+        | "M1-unbound-criterion"
         | "M2-not-refuted";
       readonly reason: string;
     };
+
+/** An admitted RefineBoundary transition, kept in Σ so later evidence can be checked against it. */
+export type RecordedRefinement = {
+  readonly fromBoundary: string;
+  readonly toBoundary: string;
+  readonly criterionItem: Item;
+  readonly criterionVariable: string;
+};
+
+/**
+ * A revision obligation against an admitted refinement (core.md §2 item 7, M1): a handle kept in
+ * the refined boundary now carries `Live -δ(handle)` on the original boundary.
+ */
+export type RefinementObligation = {
+  readonly fromBoundary: string;
+  readonly toBoundary: string;
+  readonly handle: string;
+  readonly criterionKey: string;
+};
 
 export type GroundDependency = {
   readonly boundary: string;
@@ -187,8 +207,10 @@ export class EvaluationSnapshot {
   readonly #entriesById = new Map<string, GroundEntry>();
   readonly #bySlot = new Map<number, GroundEntry[]>();
   readonly #liveIds: ReadonlySet<string>;
+  readonly #refinementObligations: readonly RefinementObligation[];
 
-  constructor(report: PiReport) {
+  constructor(report: PiReport, refinementObligations: readonly RefinementObligation[] = []) {
+    this.#refinementObligations = refinementObligations;
     this.#boundaries = report.boundaries;
     this.#boundaryIndex = new Map(report.boundaries.map((b, i) => [b, i] as const));
     this.#universe = report.universe;
@@ -318,6 +340,14 @@ export class EvaluationSnapshot {
     return out;
   }
 
+  /**
+   * Revision obligations against admitted refinements: each handle kept in a refined boundary
+   * that now carries `Live -δ(handle)` on the original boundary (core.md §2 item 7, M1).
+   */
+  refinementObligations(): readonly RefinementObligation[] {
+    return this.#refinementObligations;
+  }
+
   /** True iff No-Gluts holds: no (B, A) is in Collision. */
   isCollisionFree(): boolean {
     return this.#coll.every((c) => c === FALSE);
@@ -355,6 +385,7 @@ type StageRecord = {
   readonly incompatibilities: readonly IncompatibilityConstraint[];
   readonly structuralCollapses: readonly StructuralCollapse[];
   readonly closedDomains: ReadonlySet<string>;
+  readonly refinements: readonly RecordedRefinement[];
   /** The items tracked by Σ: ⊥ and every item named by a transition so far, retracted ones included. */
   readonly trackedItems: ReadonlyMap<string, Item>;
   readonly boundarySnapshot: BoundarySystem;
@@ -372,6 +403,7 @@ export class InquiryEngine {
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: StructuralCollapse[] = [];
   readonly #closedDomains = new Set<string>();
+  readonly #refinements: RecordedRefinement[] = [];
   readonly #trackedItems = new Map<string, Item>();
   readonly #stageArchive = new Map<number, StageRecord>();
   readonly #history: string[] = [];
@@ -636,6 +668,18 @@ export class InquiryEngine {
       };
     }
 
+    // M1(i), indirect reference: δ's relations must not reach the target relation through the
+    // relation-dependency graph of C_B (incompatibilities, structural collapses) and the Live
+    // conditionals of Σ.
+    const link = this.#indirectLink(criterionRels, req.targetRelation, beforeSnap);
+    if (link !== undefined) {
+      return {
+        ok: false,
+        violation: "M1-circular",
+        reason: `M1(i) Non-Circularity violation: splitting criterion relation "${link}" is linked to target relation "${req.targetRelation}" through registered constraints or Live conditionals.`,
+      };
+    }
+
     // M1(ii) Non-Contingent Structural Definability: δ cannot excise contingent handle tags.
     const criterionHandles = collectHandles(req.criterionItem);
     for (const h of criterionHandles) {
@@ -715,6 +759,44 @@ export class InquiryEngine {
       }
     }
 
+    // M1, domain binding: Dom(B') = {h ∈ Dom(B) : ¬Live -δ(h)}, and every excised handle carries
+    // Live -δ(h) on B. A handle whose δ is Open stays in B'.
+    const bindVar =
+      req.criterionVariable ??
+      (req.originalUniversal.kind === "forall" ? req.originalUniversal.variable : "x");
+    const instanceOf = (h: string): Item => substituteHandle(req.criterionItem, bindVar, h);
+    const bindSnap = this.evaluate([
+      req.originalUniversal,
+      ...fromHandles.map((h) => instanceOf(h.id)),
+    ]);
+    for (const h of fromHandles) {
+      const excludedByCriterion = bindSnap.isLive(req.fromBoundary, "-", instanceOf(h.id));
+      if (!toHandleIds.has(h.id) && !excludedByCriterion) {
+        return {
+          ok: false,
+          violation: "M1-unbound-criterion",
+          reason: `M1 domain binding violation: handle "${h.id}" is excised from "${req.fromBoundary}" without a Live exclusion of the splitting criterion δ(${h.id}).`,
+        };
+      }
+      if (toHandleIds.has(h.id) && excludedByCriterion) {
+        return {
+          ok: false,
+          violation: "M1-unbound-criterion",
+          reason: `M1 domain binding violation: handle "${h.id}" is kept in "${req.toBoundary}" although δ(${h.id}) is Live excluded on "${req.fromBoundary}".`,
+        };
+      }
+    }
+
+    this.#track(req.originalUniversal);
+    for (const h of fromHandles) {
+      this.#track(instanceOf(h.id));
+    }
+    this.#refinements.push({
+      fromBoundary: req.fromBoundary,
+      toBoundary: req.toBoundary,
+      criterionItem: req.criterionItem,
+      criterionVariable: bindVar,
+    });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:RefineBoundary(${req.fromBoundary} → ${req.toBoundary})`);
     this.#captureStage();
@@ -784,20 +866,90 @@ export class InquiryEngine {
       reflectionValues.push({ item: it, polarity: holds ? "+" : "-" });
     }
 
-    return new EvaluationSnapshot(
-      evaluatePi({
-        bounds,
-        boundaries,
-        universe,
-        observations: [...record.baseObservations.values()],
-        baseObservations: record.baseObservations,
-        theorems: [...record.theorems.values()],
-        incompatibilities: record.incompatibilities,
-        collapses: record.structuralCollapses,
-        closedDomains: record.closedDomains,
-        reflectionValues,
-      }),
-    );
+    const report = evaluatePi({
+      bounds,
+      boundaries,
+      universe,
+      observations: [...record.baseObservations.values()],
+      baseObservations: record.baseObservations,
+      theorems: [...record.theorems.values()],
+      incompatibilities: record.incompatibilities,
+      collapses: record.structuralCollapses,
+      closedDomains: record.closedDomains,
+      reflectionValues,
+    });
+    const probe = new EvaluationSnapshot(report);
+    const refinementObligations: RefinementObligation[] = [];
+    for (const r of record.refinements) {
+      for (const h of bounds.handlesOf(r.toBoundary)) {
+        const instance = substituteHandle(r.criterionItem, r.criterionVariable, h.id);
+        if (probe.isLive(r.fromBoundary, "-", instance)) {
+          refinementObligations.push({
+            fromBoundary: r.fromBoundary,
+            toBoundary: r.toBoundary,
+            handle: h.id,
+            criterionKey: itemKey(instance),
+          });
+        }
+      }
+    }
+    return new EvaluationSnapshot(report, refinementObligations);
+  }
+
+  /**
+   * The first relation of `criterionRels` that reaches `targetRelation` in the relation-dependency
+   * graph built from the registered incompatibilities and structural collapses and from the
+   * conditionals that are Live on some boundary in `snap`; undefined when none does.
+   */
+  #indirectLink(
+    criterionRels: ReadonlySet<string>,
+    targetRelation: string,
+    snap: EvaluationSnapshot,
+  ): string | undefined {
+    const graph = new Map<string, Set<string>>();
+    const connect = (rels: ReadonlySet<string>): void => {
+      for (const a of rels) {
+        const set = graph.get(a) ?? new Set<string>();
+        for (const b of rels) {
+          if (a !== b) {
+            set.add(b);
+          }
+        }
+        graph.set(a, set);
+      }
+    };
+    for (const inc of this.#incompatibilities) {
+      connect(new Set([...collectRelations(inc.left), ...collectRelations(inc.right)]));
+    }
+    for (const sc of this.#structuralCollapses) {
+      connect(collectRelations(sc.item));
+    }
+    const bounds = this.boundaries.nonEmptyBoundaries();
+    const conditionals = buildUniverse(this.boundaries, bounds, [
+      ...this.#trackedItems.values(),
+    ]).filter((it) => it.kind === "implies");
+    for (const imp of conditionals) {
+      if (imp.kind === "implies" && bounds.some((b) => snap.isLive(b, "+", imp))) {
+        connect(new Set([...collectRelations(imp.antecedent), ...collectRelations(imp.consequent)]));
+      }
+    }
+    for (const start of criterionRels) {
+      const seen = new Set<string>([start]);
+      const queue = [start];
+      while (queue.length > 0) {
+        const cur = queue.shift() as string;
+        if (cur === targetRelation) {
+          return start;
+        }
+        for (const next of graph.get(cur) ?? []) {
+          if (!seen.has(next)) {
+            seen.add(next);
+            queue.push(next);
+          }
+        }
+      }
+    }
+    return undefined;
   }
 
   #addBaseObservation(
@@ -842,6 +994,7 @@ export class InquiryEngine {
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
       closedDomains: new Set(this.#closedDomains),
+      refinements: [...this.#refinements],
       trackedItems: new Map(this.#trackedItems),
       boundarySnapshot: this.boundaries.clone(),
     });
