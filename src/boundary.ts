@@ -461,78 +461,101 @@ export class BoundarySystem {
       return [[]];
     }
 
-    const baseCovers = new Map<string, Map<string, readonly string[]>>();
+    // The witnessed covers (item 5): the registered covers that are not invalid (with verifiedOnly,
+    // the valid ones), closed under Identity, Meet-Stability and Transitivity (Axioms 2–4). A
+    // derived cover is judged by the same rule as a registered one and is not derived when it fails
+    // it, so no witnessed cover is invalid and no base change comes out empty.
+    const covers = new Map<string, Map<string, readonly string[]>>();
+    const rejected = new Map<string, Set<string>>();
     for (const b of this.nonEmptyBoundaries()) {
-      const m = new Map<string, readonly string[]>();
-      const id = [b];
-      m.set(coverSignature(id), id);
-      baseCovers.set(b, m);
+      covers.set(b, new Map([[coverSignature([b]), [b]]]));
+      rejected.set(b, new Set());
     }
-
-    // Seed registered covers and their Meet-Stability pullbacks (Axioms 1, 2, 3, 5). An invalid
-    // cover witnesses nothing; an unverified one still witnesses unless verifiedOnly is set.
-    for (const { target: sup, cells } of this.#registeredCovers.values()) {
-      if (sup === BOT_BOUNDARY) {
-        continue;
+    const admit = (b: string, cells: readonly string[]): boolean => {
+      const bCovers = covers.get(b);
+      const bRejected = rejected.get(b);
+      if (bCovers === undefined || bRejected === undefined) {
+        return false;
       }
-      const validity = this.#assessCover(sup, cells).kind;
+      const sig = coverSignature(cells);
+      if (bCovers.has(sig) || bRejected.has(sig)) {
+        return false;
+      }
+      if (cells.length > MAX_COVER_CELLS) {
+        throw new Error(
+          `Cover closure for "${b}" needs a cover of ${cells.length} cells, above the limit of ${MAX_COVER_CELLS}; refusing to truncate the witnessed covers.`,
+        );
+      }
+      const validity = this.#assessCover(b, cells).kind;
       if (validity === "invalid" || (validity === "unverified" && options.verifiedOnly === true)) {
-        continue;
+        bRejected.add(sig);
+        return false;
       }
-      for (const sub of this.nonEmptySubBoundaries(sup)) {
-        // A cell whose overlap with sub is unknown may cover part of sub, so no cover of sub is
-        // derived from this one.
-        const statuses = cells.map((c) => this.meetStatus(c, sub));
-        if (statuses.some((st) => st.kind === "unknown")) {
-          continue;
-        }
-        const pulled = [
-          ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
-        ];
-        if (pulled.length > 0) {
-          baseCovers.get(sub)?.set(coverSignature(pulled), pulled);
-        }
+      bCovers.set(sig, cells);
+      return true;
+    };
+    for (const { target: sup, cells } of this.#registeredCovers.values()) {
+      if (sup !== BOT_BOUNDARY) {
+        admit(sup, cells);
       }
     }
 
-    // Close under finite Transitivity (Axiom 4). The pass bound and the cell cap are resource
-    // limits, not semantics: where either would cut the closure short, report it (item 14, G6).
-    const maxPasses = this.#defined.size + 1;
+    // The pass bound and the cell cap are resource limits, not semantics: where either would cut
+    // the closure short, report it (item 14, G6).
+    const baseChanged = new Set<string>();
+    const maxPasses = 2 * this.#defined.size + 2;
     let converged = false;
     for (let pass = 0; pass <= maxPasses; pass++) {
       let changed = false;
       for (const b of this.nonEmptyBoundaries()) {
-        const bCovers = baseCovers.get(b);
+        const bCovers = covers.get(b);
         if (bCovers === undefined) {
           continue;
         }
         for (const cover of [...bCovers.values()]) {
+          // Axiom 4 (Transitivity): replace one cell by a witnessed cover of that cell.
           for (let idx = 0; idx < cover.length; idx++) {
             const cell = cover[idx];
-            if (cell === undefined) {
-              continue;
-            }
-            const cellCovers = baseCovers.get(cell);
+            const cellCovers = cell === undefined ? undefined : covers.get(cell);
             if (cellCovers === undefined) {
               continue;
             }
-            for (const subCover of cellCovers.values()) {
+            for (const subCover of [...cellCovers.values()]) {
+              if (subCover.length === 1 && subCover[0] === cell) {
+                continue;
+              }
               const expanded = [
                 ...new Set([...cover.slice(0, idx), ...subCover, ...cover.slice(idx + 1)]),
               ];
-              if (expanded.length === 0) {
-                continue;
+              if (admit(b, expanded)) {
+                changed = true;
               }
-              const sig = coverSignature(expanded);
-              if (bCovers.has(sig)) {
-                continue;
-              }
-              if (expanded.length > MAX_COVER_CELLS) {
-                throw new Error(
-                  `Cover closure for "${b}" needs a cover of ${expanded.length} cells, above the limit of ${MAX_COVER_CELLS}; refusing to truncate the witnessed covers.`,
-                );
-              }
-              bCovers.set(sig, expanded);
+            }
+          }
+          // Axiom 3 (Meet-Stability), once per cover: the base change to every non-empty B' ⊑ b. A
+          // cell whose overlap with B' is unknown may hold part of B', so it blocks the base change.
+          const key = `${b}\0${coverSignature(cover)}`;
+          if (baseChanged.has(key) || (cover.length === 1 && cover[0] === b)) {
+            continue;
+          }
+          baseChanged.add(key);
+          for (const sub of this.nonEmptySubBoundaries(b)) {
+            if (sub === b) {
+              continue;
+            }
+            const statuses = cover.map((c) => this.meetStatus(c, sub));
+            if (statuses.some((st) => st.kind === "unknown")) {
+              continue;
+            }
+            const pulled = [
+              ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
+            ];
+            if (pulled.length === 0) {
+              throw new Error(
+                `Cover closure derived ∅ ▷ "${sub}" from a cover of "${b}" that is not invalid, which Axiom 5 forbids.`,
+              );
+            }
+            if (admit(sub, pulled)) {
               changed = true;
             }
           }
@@ -549,7 +572,7 @@ export class BoundarySystem {
       );
     }
 
-    return [...(baseCovers.get(target)?.values() ?? [])];
+    return [...(covers.get(target)?.values() ?? [])];
   }
 
   /** Check whether `cells` constitutes a witnessed exhaustive cover of `target`. */

@@ -1063,6 +1063,27 @@ function test_cover_revalidation_marks_invalid_and_unverified_covers(): void {
   u.defineBoundary("B4C2", { parents: ["B4", "C2"] });
   assert.deepEqual(u.coverValidity("cov"), { kind: "valid" });
   assert.deepEqual(eu.evaluate([PQ]).coverObligations(), []);
+
+  // A derived cover is judged as a registered one is: {C1, C2} ▷ B is unverified and {D1} ▷ C1 is
+  // valid, but X refutes their composite {D1, C2} ▷ B, which is therefore not derived, and no base
+  // change to X comes out empty. The unverified source already names X in its obligation.
+  const t = new BoundarySystem();
+  t.defineBoundary("B");
+  t.defineBoundary("C1", { parents: ["B"] });
+  t.defineBoundary("C2", { parents: ["B"] });
+  t.declareDisjoint("C1", "C2");
+  t.defineBoundary("D1", { parents: ["C1"] });
+  t.defineBoundary("X", { parents: ["B"] });
+  t.declareDisjoint("X", "C2");
+  t.declareDisjoint("X", "D1");
+  const outer = t.registerCover("B", ["C1", "C2"]);
+  const inner = t.registerCover("C1", ["D1"]);
+  assert.deepEqual(t.coverValidity(outer), { kind: "unverified", witnesses: ["X"] });
+  assert.deepEqual(t.coverValidity(inner), { kind: "valid" });
+  assert.equal(t.isWitnessedCover("B", ["C1", "C2"]), true);
+  assert.equal(t.isWitnessedCover("C1", ["D1"]), true);
+  assert.equal(t.isWitnessedCover("B", ["D1", "C2"]), false);
+  assert.deepEqual(t.witnessedCoversOf("X"), [["X"]]);
 }
 
 function test_withdraw_cancels_constraints_purely(): void {
