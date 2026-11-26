@@ -3,13 +3,18 @@
  * oracle of the evaluation program Π(Σ) (test/oracle/pi-sigma.ts, spec/core.md §5 item 14).
  *
  * Each seeded state uses the boundaries B, B1 ⊑ B, B2 ⊑ B and B12 ⊑ B1, B2 (plus ⊤_B), with
- * monotone random handle sets, positive and negative observations, conditionals,
- * incompatibilities, congruences, structural collapses, optional covers and domain closures,
+ * monotone random handle sets, positive and negative observations (some later retracted),
+ * conditionals, incompatibilities, congruences, structural collapses, optional covers and
+ * domain closures,
  * and queries built from atoms, `∧`, `∨`, `~`, `→` and quantifiers over closed and unclosed
  * domains. For every state the kernel and the oracle must agree on U(Σ, Q) and, for every slot
  * of 𝔅(Σ) × U(Σ, Q) (the queried slots included), on the local status, the authority of each
  * polarity, obstruction and the revision obligations. Recorded theorems and reflection values
  * are not generated, since the oracle omits those two rows (AMBIGUITIES.md A15).
+ *
+ * Item 14 tracks ⊥ and every item named by a past transition, retracted observations included.
+ * Until the oracle takes those items as an input, they are passed to it as queries: U(Σ, Q) closes
+ * tracked and queried items alike, so the universe and every atom are the same.
  *
  * UL_FUZZ_MULTIPLIER scales the number of states; UL_FUZZ_SEED replays a single state.
  */
@@ -128,6 +133,8 @@ type RandomState = {
   readonly collapses: PiCollapse[];
   readonly closedDomains: string[];
   readonly queries: Item[];
+  /** Items tracked by the kernel's history but absent from the oracle's state: ⊥ and retracted items. */
+  readonly historyItems: Item[];
 };
 
 function handleSpec(id: string): HandleSpec {
@@ -208,16 +215,17 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     }
   };
 
-  const observations: PiObservation[] = [];
+  const observed: { readonly id: string; readonly observation: PiObservation }[] = [];
   let next = 0;
   const observe = (b: string, polarity: Polarity, item: Item): void => {
     next += 1;
+    const id = `w${next}`;
     if (polarity === "+") {
-      engine.observePositive(b, item, `w${next}`);
+      engine.observePositive(b, item, id);
     } else {
-      engine.observeNegative(b, item, `w${next}`);
+      engine.observeNegative(b, item, id);
     }
-    observations.push({ boundary: b, polarity, item });
+    observed.push({ id, observation: { boundary: b, polarity, item } });
   };
 
   const observationCount = rng.int(2, 7);
@@ -249,6 +257,18 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     }
   }
 
+  // Retract: the record goes, the item stays tracked (item 14).
+  const historyItems: Item[] = [bottom()];
+  const retractCount = rng.bool(0.3) ? rng.int(1, 2) : 0;
+  for (let i = 0; i < retractCount && observed.length > 0; i++) {
+    const [gone] = observed.splice(rng.int(0, observed.length - 1), 1);
+    if (gone !== undefined) {
+      assert.equal(engine.retract(gone.id), true);
+      historyItems.push(gone.observation.item);
+    }
+  }
+  const observations = observed.map((o) => o.observation);
+
   const incompatibilities: PiIncompatibility[] = [];
   const incompatibilityCount = rng.int(profile.incompatibilities[0], profile.incompatibilities[1]);
   for (let i = 0; i < incompatibilityCount; i++) {
@@ -278,7 +298,16 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     queries.push(rng.bool(profile.quantifier) ? quantifier(1) : compound(rng.int(1, 2)));
   }
 
-  return { boundaries: bs, engine, observations, incompatibilities, collapses, closedDomains, queries };
+  return {
+    boundaries: bs,
+    engine,
+    observations,
+    incompatibilities,
+    collapses,
+    closedDomains,
+    queries,
+    historyItems,
+  };
 }
 
 type Coverage = {
@@ -299,7 +328,7 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
     incompatibilities: state.incompatibilities,
     collapses: state.collapses,
     closedDomains: state.closedDomains,
-    queries: state.queries,
+    queries: [...state.queries, ...state.historyItems],
   });
 
   const kernelUniverse = snap.universe().map(itemKey).sort();
