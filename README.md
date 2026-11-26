@@ -31,6 +31,18 @@ The executable TypeScript reference kernel (`src/`) and test suite (`test/`) run
 - `test/oracle/pi-sigma.ts` and `test/oracle.test.ts` — Clean-room oracle of the evaluation program `Π(Σ)` (core.md §5 item 14), written from the specification alone, with hand-computed cases; its ratified readings are recorded in `test/oracle/AMBIGUITIES.md`.
 - `test/differential.test.ts` — Seeded differential comparison of the kernel with the oracle (configurable via `UL_FUZZ_SEED` / `UL_FUZZ_MULTIPLIER`): on random states over `B`, `B1`, `B2` and `B12` they must agree on `U(Σ, Q)` and on local status, authority, obstruction and revision obligations for every slot.
 
+### Metatheory-to-kernel map
+
+Non-normative notes on where the reference kernel implements each result of [spec/metatheory.md](spec/metatheory.md).
+
+- **MT-1** — `src/engine.ts` builds the evaluation program `Π(Σ)` of `spec/core.md` §5 item 14 over `𝔅(Σ) × U(Σ, Q)`, computes its well-founded model by the alternating fixpoint, reports it under G4b (`statusOf`, `isLive`, `authorityOf`), and throws instead of truncating. `test/differential.test.ts` compares it slot by slot with the clean-room oracle `test/oracle/pi-sigma.ts`.
+- **MT-2** — `src/syntax.ts` (`checkRecursiveDefinitionSystem`, `collectBoundaryRefs`); `src/engine.ts` (`evaluateAtStage` over an immutable stage archive that snapshots the inquiry state and `BoundarySystem.clone()`, evaluating cross-stage reflection against a frozen stage `0 ≤ t < currentStage` with `level(J) ≤ k` and stage-`t` boundary admissibility via `isReflectionWellScopedAtStage`); `src/deduction.ts` (`refl-intro`).
+- **MT-3** — `src/engine.ts` rejects `Observe⁺(B, ⊥)` on non-empty boundaries, introduces `-(A → C)` one way from a `Live +A` and a `-C` record, and gates `imposs-excl` on `Live +(A → ⊥)`; under a self-refuting pair `+A`, `+(A → ⊥)` a `+⊥` record is at most possible, never present or `Live`.
+- **MT-5** — Cover-Gluing in both polarities in `src/engine.ts`, and the `cover-glue` rule of `src/deduction.ts`.
+- **MT-7** — `refineBoundary` in `src/engine.ts`; a handle is contingent when its `HandleSpec.kind` in `src/boundary.ts` is `"contingent"`.
+- **MT-8a** — `src/deduction.ts` (capture-avoiding `substituteHandle` with bound-variable freshness checks on `∀I` and `∃E`, lexically scoped `→I` discharge, `→E`, `∧I`/`∧E`, `∨I`/`∨E`, open-domain schematic `∀I`, `∀E`, `∃I`, `∃E` non-escape, standalone Cover-Gluing, `≈_B`, and `UL-Intuitionistic`-gated `⊥E`), with intermediate-node `GroundDependency` anchoring and `@incompat:` provenance in `src/engine.ts`.
+- **MT-9** — `src/specializations.ts` enforces `monotoneOnly: true`, (C3)'s witnessed closed non-empty domains with `Dom(D) ⊆ Dom(B*)`, `No-Gaps` over every reachable atom and congruence, the quantifier constraint `[δ]`, and consistency with existing `Live` compound exclusions, and reports `GlobalCoverStatus` (`"+" | "-" | "split"`) with per-cell polarities (`2^k`).
+
 ## Verification
 
 This repository checks type safety, kernel behavior, cross-references, claim evidence bindings, and orientation integrity (Node 22+):
