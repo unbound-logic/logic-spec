@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BoundarySystem } from "../src/boundary.ts";
+import { BOT_BOUNDARY, BoundarySystem } from "../src/boundary.ts";
 import { InquiryEngine } from "../src/engine.ts";
 import {
   evaluateClassicalSpecialization,
@@ -211,6 +211,7 @@ function test_classical_specialization_guards_compound_exclusions_nogaps_and_fro
   eDom.observeNegative("B_star", dPred("b"), "w_ndb");
   eDom.observePositive("B_star", p("a"), "w_pa");
   eDom.observeNegative("B_star", p("b"), "w_npb");
+  eDom.closeDomain("B_star");
 
   const constrainedForall = forall("x", "B_star", p("x"), dPred("x"));
   const constrainedExists = exists("x", "B_star", p("x"), flip(dPred("x")));
@@ -240,6 +241,61 @@ function test_classical_specialization_guards_compound_exclusions_nogaps_and_fro
   assert.equal(resLastConflict.ok, false);
 }
 
+function test_classical_specialization_requires_closed_nonempty_domains(): void {
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const b = new BoundarySystem();
+  b.defineBoundary("Universe", { nativeRelations: ["P"], handles: [h("a"), h("b"), h("c")] });
+  b.defineBoundary("B_star", { parents: ["Universe"], handles: [h("a"), h("b")] });
+  b.defineBoundary("Empty", { handles: [] });
+  const p = (x: string) => atom("P", [{ role: "arg", handle: x }]);
+  const atoms = [p("a"), p("b")];
+  const e = new InquiryEngine(b, { monotoneOnly: true });
+  e.observePositive("B_star", p("a"), "w_pa");
+  e.observeNegative("B_star", p("b"), "w_npb");
+
+  // (C3): a quantifier domain without a witnessed CloseDomain is rejected.
+  const allStar = forall("x", "B_star", p("x"));
+  const exStar = exists("x", "B_star", p("x"));
+  const unclosed = evaluateClassicalSpecialization(e, "B_star", atoms, [allStar, exStar]);
+  assert.equal(unclosed.ok, false);
+  if (!unclosed.ok) {
+    assert.match(unclosed.reason, /CloseDomain\("B_star"\)/);
+  }
+
+  // Closed, non-empty and inside Dom(B*): classical values follow.
+  e.closeDomain("B_star");
+  const closed = evaluateClassicalSpecialization(e, "B_star", atoms, [allStar, exStar]);
+  assert.equal(closed.ok, true);
+  if (closed.ok) {
+    assert.equal(closed.results.get(itemKey(allStar))?.polarity, "-");
+    assert.equal(closed.results.get(itemKey(exStar))?.polarity, "+");
+  }
+
+  // A closed but empty domain is rejected, also when nested inside another quantifier.
+  e.closeDomain("Empty");
+  const empty = evaluateClassicalSpecialization(e, "B_star", atoms, [forall("x", "Empty", p("x"))]);
+  assert.equal(empty.ok, false);
+  if (!empty.ok) {
+    assert.match(empty.reason, /non-empty quantifier domains; Dom\("Empty"\) is empty/);
+  }
+  const nested = evaluateClassicalSpecialization(e, "B_star", atoms, [
+    forall("x", "B_star", exists("y", "Empty", p("y"))),
+  ]);
+  assert.equal(nested.ok, false);
+
+  // A closed domain reaching beyond Dom(B*) is rejected.
+  e.closeDomain("Universe");
+  const wide = evaluateClassicalSpecialization(e, "B_star", atoms, [forall("x", "Universe", p("x"))]);
+  assert.equal(wide.ok, false);
+  if (!wide.ok) {
+    assert.match(wide.reason, /Dom\("Universe"\) ⊆ Dom\("B_star"\); handle "c"/);
+  }
+
+  // ⊥_B can never be closed, so a quantifier over it never meets (C3).
+  const overBottom = evaluateClassicalSpecialization(e, "B_star", atoms, [forall("x", BOT_BOUNDARY, p("x"))]);
+  assert.equal(overBottom.ok, false);
+}
+
 test("four-tier deductive spectrum and classical recovery", test_four_tier_deductive_spectrum_and_classical_recovery);
 test(
   "classical atomic cover 2^k Boolean algebra reporting",
@@ -248,4 +304,8 @@ test(
 test(
   "classical specialization guards compound exclusions No-Gaps and frozen constraints",
   test_classical_specialization_guards_compound_exclusions_nogaps_and_frozen,
+);
+test(
+  "classical specialization requires closed non-empty domains",
+  test_classical_specialization_requires_closed_nonempty_domains,
 );

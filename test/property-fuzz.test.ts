@@ -1638,6 +1638,7 @@ function test_fuzz_ul_classical_boolean_recovery(): void {
     }
 
     const engine = new InquiryEngine(bs, { monotoneOnly: true });
+    engine.closeDomain("B_top");
     const p = (h: string) => atom("P", [{ role: "arg", handle: h }]);
     const q = (h: string) => atom("Q", [{ role: "arg", handle: h }]);
     const delta = (h: string) => atom("Delta", [{ role: "arg", handle: h }]);

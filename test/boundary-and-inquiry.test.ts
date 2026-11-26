@@ -597,6 +597,128 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   assert.equal(snapEx.isLive("D", "-", exP), true);
 }
 
+function test_domain_monotonicity_rejects_sub_boundary_handles(): void {
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const ids = (bs: BoundarySystem, boundary: string) => bs.handlesOf(boundary).map((x) => x.id).sort();
+  const b = new BoundarySystem();
+  b.defineBoundary("D", { handles: [h("a"), h("b"), h("c")] });
+
+  // A sub-boundary may narrow its parent's domain but never add an individual the parent lacks.
+  b.defineBoundary("D_ab", { parents: ["D"], handles: [h("a"), h("b")] });
+  b.defineBoundary("D_bc", { parents: ["D"], handles: [h("b"), h("c")] });
+  assert.deepEqual(ids(b, "D_ab"), ["a", "b"]);
+  assert.throws(
+    () => b.defineBoundary("D_bad", { parents: ["D_ab"], handles: [h("a"), h("c")] }),
+    /Domain monotonicity violation: handle "c"/,
+  );
+  assert.throws(() => b.refines("D_bad", "D"), /Unknown boundary/);
+
+  // With several parents the handles must lie in every parent.
+  assert.throws(
+    () => b.defineBoundary("D_joint_bad", { parents: ["D_ab", "D_bc"], handles: [h("a"), h("b")] }),
+    /Domain monotonicity violation: handle "a" of "D_joint_bad" is not in Dom\("D_bc"\)/,
+  );
+
+  // Default handles: those common to every parent, then the handle filter.
+  b.defineBoundary("D_joint", { parents: ["D_ab", "D_bc"] });
+  assert.deepEqual(ids(b, "D_joint"), ["b"]);
+  b.defineBoundary("D_inherit", { parents: ["D_ab"] });
+  assert.deepEqual(ids(b, "D_inherit"), ["a", "b"]);
+  b.defineBoundary("D_filtered", { parents: ["D_ab", "D_bc"], handleFilter: (x) => x.id !== "b" });
+  assert.deepEqual(ids(b, "D_filtered"), []);
+
+  // ⊤_B carries no handle registry and constrains nothing.
+  b.defineBoundary("Free", { handles: [h("z")] });
+  assert.deepEqual(ids(b, "Free"), ["z"]);
+
+  // Disjoint parents are rejected before the monotonicity check.
+  b.defineBoundary("X", { handles: [h("x")] });
+  b.defineBoundary("Y", { handles: [h("y")] });
+  b.declareDisjoint("X", "Y");
+  assert.throws(() => b.defineBoundary("XY", { parents: ["X", "Y"], handles: [h("x")] }), /disjoint parents/);
+}
+
+function test_close_domain_gates_enumerative_quantifiers(): void {
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const b = new BoundarySystem();
+  b.defineBoundary("D", { nativeRelations: ["P", "Q", "R"], handles: [h("t1"), h("t2")] });
+  b.defineBoundary("D_sub", { parents: ["D"], handles: [h("t1")] });
+  b.defineBoundary("Empty", { handles: [] });
+  const p = (x: string) => atom("P", [{ role: "arg", handle: x }]);
+  const q = (x: string) => atom("Q", [{ role: "arg", handle: x }]);
+  const r = (x: string) => atom("R", [{ role: "arg", handle: x }]);
+  const allP = forall("x", "D", p("x"));
+  const exP = exists("x", "D", p("x"));
+
+  const e = new InquiryEngine(b);
+  e.observePositive("D", p("t1"), "w_p1");
+  e.observePositive("D", p("t2"), "w_p2");
+
+  // Unclosed domain: enumeration never grounds +∀; +∃ stays open-world (one witness suffices).
+  const stageOpen = e.stage;
+  let snap = e.evaluate([allP, exP]);
+  assert.equal(snap.statusOf("D", allP), "Open");
+  assert.equal(snap.statusOf("D", exP), "Grounded");
+  assert.equal(e.isDomainClosed("D"), false);
+
+  // CloseDomain(D) is a stage-archived transition that licenses enumerative +∀.
+  e.closeDomain("D");
+  assert.equal(e.stage, stageOpen + 1);
+  assert.equal(e.transitionLog.at(-1), `Σ${e.stage}:CloseDomain(D)`);
+  assert.equal(e.isDomainClosed("D"), true);
+  snap = e.evaluate([allP]);
+  assert.equal(snap.statusOf("D", allP), "Grounded");
+  assert.equal(snap.isLive("D", "+", allP), true);
+  assert.ok(
+    snap
+      .liveGrounds("D", "+", allP)
+      .some((g) => g.provenance.kind === "derived" && g.provenance.baseLeaves.includes("@closure:D")),
+  );
+  assert.equal(e.evaluateAtStage(stageOpen, [allP]).statusOf("D", allP), "Open");
+
+  // The closure belongs to D alone and does not pass to its sub-boundary D_sub.
+  const allPSub = forall("x", "D_sub", p("x"));
+  assert.equal(e.isDomainClosed("D_sub"), false);
+  assert.equal(e.evaluate([allPSub]).statusOf("D_sub", allPSub), "Open");
+
+  // -∃ by enumeration needs the closure as well; an exclusion record per handle suffices.
+  e.observeNegative("D", q("t1"), "w_nq1");
+  e.observeNegative("D", q("t2"), "w_nq2");
+  const exQ = exists("x", "D", q("x"));
+  const exQSub = exists("x", "D_sub", q("x"));
+  snap = e.evaluate([exQ, exQSub]);
+  assert.equal(snap.statusOf("D", exQ), "Excluded");
+  assert.equal(snap.isLive("D", "-", exQ), true);
+  assert.equal(snap.statusOf("D_sub", exQSub), "Open");
+
+  // An empty D_δ: every handle carries Live -δ, so +∀ holds vacuously on the closed domain.
+  e.observeNegative("D", r("t1"), "w_nr1");
+  e.observeNegative("D", r("t2"), "w_nr2");
+  const allQGivenR = forall("x", "D", q("x"), r("x"));
+  snap = e.evaluate([allQGivenR]);
+  assert.equal(snap.statusOf("D", allQGivenR), "Grounded");
+  assert.equal(snap.isLive("D", "+", allQGivenR), true);
+
+  // An empty Dom(D): Open while unclosed, vacuous +∀ and -∃ once closed (no admissible witness needed).
+  const allEmpty = forall("x", "Empty", p("x"));
+  const exEmpty = exists("x", "Empty", p("x"));
+  snap = e.evaluate([allEmpty, exEmpty]);
+  assert.equal(snap.statusOf("D", allEmpty), "Open");
+  assert.equal(snap.statusOf("D", exEmpty), "Open");
+  e.closeDomain("Empty");
+  snap = e.evaluate([allEmpty, exEmpty]);
+  assert.equal(snap.statusOf("D", allEmpty), "Grounded");
+  assert.equal(snap.isLive("D", "+", allEmpty), true);
+  assert.equal(snap.statusOf("D", exEmpty), "Excluded");
+  assert.equal(snap.isLive("D", "-", exEmpty), true);
+
+  // D ≠ ⊥_B: ⊥_B can never be closed, so a quantifier over it is never grounded by enumeration.
+  assert.throws(() => e.closeDomain(BOT_BOUNDARY), /CloseDomain requires a boundary D ≠/);
+  assert.throws(() => e.closeDomain("Nowhere"), /Unknown boundary/);
+  const allBot = forall("x", BOT_BOUNDARY, p("x"));
+  assert.equal(e.evaluate([allBot]).statusOf("D", allBot), "Open");
+}
+
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
@@ -606,3 +728,5 @@ test(
   "core engine congruence forall-elim domainConstraint and semilattice consistency",
   test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency,
 );
+test("domain monotonicity rejects sub-boundary handles", test_domain_monotonicity_rejects_sub_boundary_handles);
+test("CloseDomain gates enumerative quantifiers", test_close_domain_gates_enumerative_quantifiers);
