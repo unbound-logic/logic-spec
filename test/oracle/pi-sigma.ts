@@ -18,7 +18,8 @@
  * The readings this oracle chose where item 14 was ambiguous are recorded in
  * test/oracle/AMBIGUITIES.md; comments below cite those entries as "A<n>". The maintainer
  * ratified them, amending A3, A6 and A13 and the reporting rule (G4b), in the item 14 of
- * main commit 7b36043, which this oracle follows.
+ * main commit 7b36043. The oracle follows item 14 as of main commit 9c0fd4d, which also
+ * tracks ⊥ and the items of past transitions (A22, A23).
  */
 
 import { BOT_BOUNDARY, type BoundarySystem } from "../../src/boundary.ts";
@@ -72,6 +73,13 @@ export type PiState = {
   readonly closedDomains?: readonly string[];
   /** The queried items Q. */
   readonly queries?: readonly Item[];
+  /**
+   * Items named by past transitions of Σ that are no longer in force, such as the item of a
+   * retracted observation (A23). They are tracked, so they and their closure belong to
+   * U(Σ, Q), but they supply no record and no constraint. The oracle derives nothing from
+   * them: for a past collapse of A, list both A and A → ⊥.
+   */
+  readonly historyItems?: readonly Item[];
 };
 
 export type PolarityPair<T> = { readonly "+": T; readonly "-": T };
@@ -164,6 +172,7 @@ export function buildUniverse(
       case "forall":
       case "exists": {
         // A4: a quantifier's sub-items are its instances; the open body is not an item.
+        // A25: Dom(D) is whatever the boundary system admits.
         const constraint = item.domainConstraint;
         for (const h of bs.handlesOf(item.domain)) {
           add(substituteHandle(item.body, item.variable, h.id));
@@ -272,6 +281,10 @@ export function evaluatePi(state: PiState): PiModel {
     ...state.observations.map((o) => o.item),
     ...incompatibilities.flatMap((c) => [c.left, c.right]),
     ...collapses.flatMap((c) => [c.item, implies(c.item, bottom())]),
+    // A23: items of past transitions stay tracked after a retraction.
+    ...(state.historyItems ?? []),
+    // A22: ⊥ is always tracked.
+    bottom(),
   ];
   const universe = buildUniverse(bs, boundaries, tracked, queries);
   const nu = universe.length;
@@ -546,7 +559,8 @@ export function evaluatePi(state: PiState): PiModel {
               ? idx(substituteHandle(constraint, item.variable, h.id))
               : undefined,
         }));
-        // A13 as amended: enumeration needs CloseDomain(D) and D ≠ ⊥_B.
+        // A13 as amended: enumeration needs CloseDomain(D) and D ≠ ⊥_B; a closure listed for
+        // ⊥_B is accepted and grounds nothing (A24).
         const closed = closedDomains.has(item.domain) && item.domain !== BOT_BOUNDARY;
         for (const b of allB) {
           const plusDelta = (delta: number | undefined): Prem[] =>

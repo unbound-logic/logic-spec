@@ -108,7 +108,8 @@ function test_oracle_single_observation(): void {
   const m = evaluatePi({ boundaries: bs, observations: [{ boundary: "B", polarity: "+", item: P }] });
 
   assert.deepEqual(m.boundaries, [TOP_BOUNDARY, "B"]);
-  assert.deepEqual(m.universe.map(itemKey), [itemKey(P)]);
+  // ⊥ is always tracked (A22).
+  assert.deepEqual(m.universe.map(itemKey).sort(), [itemKey(P), itemKey(bottom())].sort());
   expectRow(m, "B", P, { ...GROUNDED_LIVE, obs: "false" });
   // Heredity runs downward only, so the broader ⊤_B holds no record.
   expectRow(m, TOP_BOUNDARY, P, { ...OPEN, obs: "false" });
@@ -544,9 +545,13 @@ function test_oracle_nested_polarity_flips_belong_to_universe(): void {
   expectRow(nested, "B", flip(P), GROUNDED_LIVE);
   expectRow(nested, "B", conjunction, GROUNDED_LIVE);
 
-  // No flip is prefixed to tracked items: without a query, ~P and ~Q are not in U(Σ, Q).
+  // No flip is prefixed to tracked items: without a query, ~P and ~Q are not in U(Σ, Q),
+  // which holds only P, Q and the always-tracked ⊥.
   const plain = evaluatePi({ boundaries: singleBoundary(), observations });
-  assert.deepEqual(plain.universe.map(itemKey).sort(), [itemKey(P), itemKey(Q)].sort());
+  assert.deepEqual(
+    plain.universe.map(itemKey).sort(),
+    [itemKey(P), itemKey(Q), itemKey(bottom())].sort(),
+  );
   assert.throws(() => plain.at("B", flip(P)), /outside/);
 
   // Flipped quantifier instances ~P(a), ~P(b) belong to U(Σ, Q), so ∀ generic can use them.
@@ -661,3 +666,65 @@ test(
   "test_oracle_vacuous_grounding_requires_non_bottom_domain",
   test_oracle_vacuous_grounding_requires_non_bottom_domain,
 );
+
+function test_oracle_retracted_observation_keeps_its_item(): void {
+  // A23: the observation +(P ∧ R) on B was retracted; its item is passed as a history item.
+  // It stays tracked, so it and its sub-items belong to U(Σ, Q), but it supplies no record.
+  const R = atom("R");
+  const retracted = and(P, R);
+  const singleBoundary = (): BoundarySystem => {
+    const system = new BoundarySystem();
+    system.defineBoundary("B");
+    return system;
+  };
+
+  const m = evaluatePi({
+    boundaries: singleBoundary(),
+    observations: [{ boundary: "B", polarity: "+", item: Q }],
+    historyItems: [retracted],
+  });
+  for (const b of [TOP_BOUNDARY, "B"]) {
+    expectRow(m, b, retracted, { ...OPEN, obs: "false" });
+    expectRow(m, b, P, OPEN);
+    expectRow(m, b, R, OPEN);
+  }
+  expectRow(m, "B", Q, GROUNDED_LIVE);
+
+  // Without the history item, the retracted item is outside U(Σ, Q).
+  const forgotten = evaluatePi({
+    boundaries: singleBoundary(),
+    observations: [{ boundary: "B", polarity: "+", item: Q }],
+  });
+  assert.throws(() => forgotten.at("B", retracted), /outside/);
+
+  // A history item still takes records that current grounds derive: ∧I from +P and +R.
+  const rederived = evaluatePi({
+    boundaries: singleBoundary(),
+    observations: [
+      { boundary: "B", polarity: "+", item: P },
+      { boundary: "B", polarity: "+", item: R },
+    ],
+    historyItems: [retracted],
+  });
+  expectRow(rederived, "B", retracted, GROUNDED_LIVE);
+}
+test("test_oracle_retracted_observation_keeps_its_item", test_oracle_retracted_observation_keeps_its_item);
+
+function test_oracle_bottom_is_always_tracked(): void {
+  // A22: ⊥ belongs to U(Σ, Q) in every state, with its structural exclusion on every boundary.
+  const bs = new BoundarySystem();
+  bs.defineBoundary("B");
+  const m = evaluatePi({ boundaries: bs, observations: [{ boundary: "B", polarity: "+", item: P }] });
+
+  assert.ok(m.universe.some((item) => item.kind === "bottom"), "⊥ ∈ U(Σ, Q)");
+  for (const b of [TOP_BOUNDARY, "B"]) {
+    expectRow(m, b, bottom(), { ...EXCLUDED_LIVE, obs: "false" });
+  }
+  assert.deepEqual(m.revisionObligations, []);
+
+  // Even a state with no observations at all tracks ⊥.
+  const empty = evaluatePi({ boundaries: bs, observations: [] });
+  assert.deepEqual(empty.universe.map(itemKey), [itemKey(bottom())]);
+  expectRow(empty, "B", bottom(), EXCLUDED_LIVE);
+}
+test("test_oracle_bottom_is_always_tracked", test_oracle_bottom_is_always_tracked);
