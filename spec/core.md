@@ -73,7 +73,7 @@ Every normative item below carries one label from the claim status ladder of [AG
    - A finite family `{B₁, ..., B_k}` is a **witnessed exhaustive cover** of `B` (written `{B_i} ▷ B` or `B = ⨆_{i=1}^k B_i`) only when structurally witnessed under the following finitary coverage axioms:
      1. **Refinement**: For every `i`, `B_i ⊑ B`.
      2. **Identity**: `{B} ▷ B` for every `B ≠ ⊥_B`; `∅ ▷ ⊥_B`.
-     3. **Meet-Stability (Base Change)**: If `{B_i} ▷ B` and `B' ⊑ B`, then `{B_i ⊓ B' | B_i ⊓ B' ≠ ⊥_B} ▷ B'`.
+     3. **Meet-Stability (Base Change)**: If `{B_i} ▷ B`, `B' ⊑ B`, and each `B_i` is known to overlap `B'` or disjoint from it (item 4), then `{B_i ⊓ B' | B_i known to overlap B'} ▷ B'`. A cell whose overlap with `B'` is unknown may hold part of `B'`, so the cover has no base change to `B'` until that overlap is settled.
      4. **Transitivity (Composition)**: If `{B_i} ▷ B` and `{B_{i,j}} ▷ B_i` for every `i`, then `{B_{i,j}} ▷ B`.
      5. **Non-Vacuity**: For every `B ≠ ⊥_B`, `∅ ▷ B` never holds.
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity" min="1" reason="All five finitary Grothendieck coverage axioms are verified" -->
@@ -210,7 +210,7 @@ Every normative item below carries one label from the claim status ladder of [AG
        - *Closure conditions*:
          - (C1) Freeze `Σ` (no vertical updates).
          - (C2) Restrict to object level `n = 0`.
-         - (C3) Fix a closed atomic boundary `B* ≠ ⊥_B` with finest congruence `≈_{B*}`, or a witnessed finite cover of such cells over a non-empty boundary; the cover must be valid and free of unknown overlaps once [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift) and [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world) are specified. The items considered mention only handles of `Dom(B*)`, and every quantifier domain `D` they use satisfies `Dom(D) ⊆ Dom(B*)`, is finite and non-empty, and has a witnessed closure `CloseDomain(D)`.
+         - (C3) Fix a closed atomic boundary `B* ≠ ⊥_B` with finest congruence `≈_{B*}`, or a witnessed finite cover of such cells over a non-empty boundary; no cell of the cover may have an unknown overlap (item 4) with another cell, and the cover must be valid once [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift) is specified. The items considered mention only handles of `Dom(B*)`, and every quantifier domain `D` they use satisfies `Dom(D) ⊆ Dom(B*)`, is finite and non-empty, and has a witnessed closure `CloseDomain(D)`.
          - (C4) Enforce **`No-Gluts`**: no `(B, A)` is in `Collision` on any boundary of `Σ`.
          - (C5) Enforce **`No-Gaps`** for atoms: every atom and congruence item whose handles lie in `Dom(B*)` is `Grounded` or `Excluded` on each atomic cell `B*`.
          - (C6) **Conditional closure**: on each atomic cell, `-(A → C)` holds exactly when `+A` and `-C` hold, and `+(A → C)` holds otherwise.
@@ -290,3 +290,4 @@ Every normative item below carries one label from the claim status ladder of [AG
     <!-- @assert-count target="test/oracle.test.ts" symbol="function test_oracle_retracted_observation_keeps_its_item" min="1" reason="Items named in the history of Σ stay tracked" -->
     <!-- @assert-count target="test/oracle.test.ts" symbol="function test_oracle_bottom_is_always_tracked" min="1" reason="⊥ is always tracked" -->
     <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_overlap_unknown_records_obligation_without_collision" min="1" reason="Opposite records across an unknown overlap record OverlapUnknown and no Collision" -->
+    <!-- @assert-count target="test/differential.test.ts" symbol="function test_differential_general_states" min="1" reason="Kernel and oracle agree on OverlapUnknown over random topologies with known, declared disjoint and unknown overlaps" -->
