@@ -66,9 +66,8 @@ MT-9 is `Proved`: the maintainer approved its written proof on 2026-11-26 and, t
 
 ## 3. Boundary Algebra, Disjoint Isolation & Cover Stability
 
-4. `Decided` **MT-4: Disjoint Regime Zero-Leakage & Selective Quarantine Survival** ([core.md](core.md) §2 item 4, §3 items 9–10; [worked-examples.md](worked-examples.md) §1):
-   - **Audit status**: the disjointness premise can currently hold by omission; under [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world) it requires declared disjointness.
-   - **Statement**: Suppose `B₁, B₂ ≠ ⊥_B` are disjoint (`B₁ ⊓ B₂ = ⊥_B`). Suppose further that `Σ₁` extends `Σ₀` solely by adding a counterexample `Observe⁻(B₂, A, w)` (or derived exclusions native to `B₂`). Then:
+4. `Tested` **MT-4: Disjoint Regime Zero-Leakage & Selective Quarantine Survival** ([core.md](core.md) §2 item 4, §3 items 9–10; [worked-examples.md](worked-examples.md) §1):
+   - **Statement**: Suppose `B₁, B₂ ≠ ⊥_B` are disjoint (`B₁ ⊓ B₂ = ⊥_B`): disjointness is declared for them or inherited from declared ancestors ([core.md](core.md) §2 item 4); an unknown overlap does not qualify. Suppose further that `Σ₁` extends `Σ₀` solely by adding a counterexample `Observe⁻(B₂, A, w)` (or derived exclusions native to `B₂`). Then:
      1. **Zero Negative Leakage**: For every non-empty sub-boundary `B' ⊑ B₁`, the exclusion `B₂ ⊩⁻ A` cannot inherit onto `B'`.
      2. **Local Non-Obstruction**: `(B₁, A)` itself is not obstructed by `Collision` on `(B₂, A)`.
      3. **Selective Survival**: Every ground `(B₁, ±Y [π])` that was `Live` in `Σ₀` and whose provenance DAG `π` contains no node `(B_sup, X)` with `B₂ ⊑ B_sup` remains `Live` in `Σ₁`.
@@ -78,6 +77,7 @@ MT-9 is `Proved`: the maintainer approved its written proof on 2026-11-26 and, t
      - For (3), any node `(B_node, X)` in `π` with `B₂ ⋢ B_node` cannot become `obstructed` by any collision at or below `B₂`; by structural induction over the acyclic DAG `π`, every dependency in `π` remains in `Live(Σ₁)`, so `(B₁, ±Y [π]) ∈ Live(Σ₁)`.
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_symmetric_downward_heredity_and_disjoint_zero_leakage" min="1" reason="Disjoint regime zero negative leakage is verified" -->
    <!-- @assert-count target="test/calculus-and-quarantine.test.ts" symbol="function test_quarantine_upstream_obstruction_and_selective_survival" min="1" reason="Upstream obstruction and selective quarantine survival are verified" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_meet_status_is_three_valued" min="1" reason="The open-world registry reads overlap as known, declared disjoint, or unknown" -->
 
 5. `Decided` **MT-5: Meet-Stability of Cover-Witnessed Disjunction (`D2`) & Soundness of `∨E` Gluing** ([core.md](core.md) §2 item 5, §3 item 12; [`layer4-conjunction-disjunction-and-covers`](../docs/design-review.md#layer4-conjunction-disjunction-and-covers)):
    - **Audit status**: the proof sketch relies on Non-Vacuity, which the reference kernel does not maintain as boundaries are added; see [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift).

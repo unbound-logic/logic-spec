@@ -55,17 +55,18 @@ Every normative item below carries one label from the claim status ladder of [AG
 
 ## 2. Boundary Algebra & Inquiry State Dynamics
 
-4. `Decided` **Boundary Meet-Semilattice `(B, ⊑, ⊓, ⊤_B, ⊥_B)`** ([`layer1-scope-factorization`](../docs/design-review.md#layer1-scope-factorization), [`layer3-boundary-composition`](../docs/design-review.md#layer3-boundary-composition)):
-   - **Audit status**: the reference kernel reads an unregistered overlap as disjointness and its meet is not total; the three-valued meet ratified in [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world) is not yet specified here.
+4. `Tested` **Boundary Meet-Semilattice `(B, ⊑, ⊓, ⊤_B, ⊥_B)`** ([`layer1-scope-factorization`](../docs/design-review.md#layer1-scope-factorization), [`layer3-boundary-composition`](../docs/design-review.md#layer3-boundary-composition)):
    - A **Domain Boundary `B`** is a functional constraint-frame role (a condition held fixed as `B` in one inquiry may be evaluated as an item `A` in another).
    - Boundaries form a bounded meet-semilattice:
      - **Refinement (`⊑`)**: reflexive, antisymmetric (up to boundary equivalence), transitive partial order (`B' ⊑ B` reads "`B'` is a sub-regime at least as restrictive as `B`").
-     - **Meet / Overlap (`⊓`)**: idempotent, commutative, associative greatest lower bound (`B₁ ⊓ B₂`). Two boundaries **overlap** iff `B₁ ⊓ B₂ ≠ ⊥_B`, and are **disjoint** iff `B₁ ⊓ B₂ = ⊥_B`.
+     - **Meet / Overlap (`⊓`)**: idempotent, commutative, associative greatest lower bound (`B₁ ⊓ B₂`). The registry of `Σ` settles a meet only in part, so overlap is three-valued: two boundaries are **known to overlap** when one refines the other, a meet is registered for them, or they have a unique maximal registered common sub-boundary (several call for a registered meet); they are **disjoint** (`B₁ ⊓ B₂ = ⊥_B`) only when one of them is `⊥_B` or disjointness is declared for them or inherited from declared ancestors; otherwise their overlap is **unknown**. An unknown overlap is not disjointness: it never satisfies a disjointness premise, licenses no Scoped Cut, and opposite records across it carry an `OverlapUnknown` obligation (item 14; [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world)).
      - **Top (`⊤_B`)**: unrestricted global frame (`B ⊑ ⊤_B` for all `B`).
      - **Empty / Impossible Boundary (`⊥_B`)**: bottom element (`⊥_B ⊑ B` for all `B`). **Non-Witnessing Law**: `⊥_B` has no realizable domain and **cannot supply any genuine positive Witness (`+`)**.
    - **Adjoining a Constraint (`B ⊓ [A]`)**: Where an evaluable item `A` is promoted to a boundary constraint `[A]`, structural collapse occurs iff `B ⊓ [A] = ⊥_B`.
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_boundary_meet_semilattice_and_non_witnessing_bottom" min="1" reason="Boundary meet-semilattice and non-witnessing ⊥_B law are verified" -->
    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency" min="1" reason="Semilattice disjoint-meet consistency guards are verified" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_meet_status_is_three_valued" min="1" reason="The open-world registry reads overlap as known, declared disjoint, or unknown" -->
+   <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_overlap_unknown_records_obligation_without_collision" min="1" reason="Opposite records across an unknown overlap record OverlapUnknown and no Collision" -->
 
 5. `Decided` **Witnessed Exhaustive Covers (`{B_i} ▷ B`)** ([`layer4-conjunction-disjunction-and-covers`](../docs/design-review.md#layer4-conjunction-disjunction-and-covers)):
    - **Audit status**: registered covers are not re-validated as the boundary system grows; ratified fix in [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift).
@@ -262,7 +263,7 @@ Every normative item below carries one label from the claim status ladder of [AG
       | `∨` by cover | `(B, +, A ∨ C)` | — | `(Bᵢ, +, A)` or `(Bᵢ, +, C)` for every cell | `{Bᵢ} ▷ B` witnessed |
       | `∨` exclusion | `(B, -, A ∨ C)` | `(B, -, A)`, `(B, -, C)` | — | — |
       | `∨E` | `(B, +, E)` | — | `(B, +, A ∨ C)`, `(B, +, A → E)`, `(B, +, C → E)` | — |
-      | Scoped Cut | `(B₁ ⊓ B₂, +, C)` | — | `(B₁, +, A)`, `(B₂, +, A → C)` | `B₁ ⊓ B₂ ≠ ⊥_B` |
+      | Scoped Cut | `(B₁ ⊓ B₂, +, C)` | — | `(B₁, +, A)`, `(B₂, +, A → C)` | `B₁` and `B₂` known to overlap (item 4) |
       | Counterexample | `(B, -, A → C)` | `(B, -, C)` | `(B, +, A)` | — |
       | `imposs-excl` | `(B, -, A)` | — | `(B, +, A → ⊥)` | — |
       | Incompatibility | `(B', -, C)`; `(B', -, A)` | — | `(B', +, A)`; `(B', +, C)` | `A ⊥_B C` in `C_B`, `B' ⊑ B` |
@@ -276,10 +277,10 @@ Every normative item below carries one label from the claim status ladder of [AG
       | Cover-Gluing | `(B, p, A)` | — | `(Bᵢ, p, A)` for every cell | `{Bᵢ} ▷ B` witnessed, other than `{B}` |
     - **Reporting**, in the well-founded model `M` of `Π(Σ)`:
       - A record of `(B, p, A)` is **present** when `rec(B, p, A)` is true in `M`; a record whose atom is undefined is possible but not present, and no status rests on it.
-      - `(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`, so a possible conflict is never hidden, and each such `(B, A)` carries a revision obligation `Rev(B, A)`. Otherwise its local status is `Grounded`, `Excluded` or `Open` according to which of its records are present.
+      - `(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`, so a possible conflict is never hidden, and each such `(B, A)` carries a revision obligation `Rev(B, A)`. For two boundaries whose overlap is unknown (item 4), each item `A` with a present `+A` record on one and a present `-A` record on the other carries an obligation `OverlapUnknown(B₁, B₂, A)`; no `Collision` is reported for it, since no boundary holds both records. Otherwise its local status is `Grounded`, `Excluded` or `Open` according to which of its records are present.
       - The authority of a present record is `Live` when `live(B, p, A)` is true in `M`, `Undetermined` when it is undefined, and `Quarantined` when it is false; an absent record has no authority. Only `Live` records transmit, so a symmetric conflict reads `Collision` with `Undetermined` authority on both sides and transmits on neither.
       - A provenance DAG of a `Live` record is any finite derivation of it by rule instances whose premises are `Live`. It explains the record; it does not define it.
-    - **Pending interfaces**: a "witnessed" cover is one that stays valid under [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift); `B₁ ⊓ B₂ ≠ ⊥_B` means an overlap that is known under [`audit-unregistered-meet-closed-world`](../docs/design-review.md#audit-unregistered-meet-closed-world); `CloseDomain(D)` is the closure of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import). Until those are specified, the registered covers and computed meets of item 4 and item 5 stand in for them.
+    - **Pending interfaces**: a "witnessed" cover is one that stays valid under [`audit-cover-non-vacuity-drift`](../docs/design-review.md#audit-cover-non-vacuity-drift); `CloseDomain(D)` is the closure of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import). Until cover validity is specified, the registered covers of item 5 stand in for witnessed covers.
     <!-- @assert-count target="test/differential.test.ts" symbol="function test_differential_general_states" min="1" reason="The kernel computes Π(Σ) as the clean-room oracle does on random states" -->
     <!-- @assert-count target="test/differential.test.ts" symbol="function test_differential_conflict_heavy_states" min="1" reason="Kernel and oracle agree where conflicts leave authority undetermined" -->
     <!-- @assert-count target="test/differential.test.ts" symbol="function test_differential_quantifiers_over_closed_and_unclosed_domains" min="1" reason="Kernel and oracle agree on quantifiers over closed and unclosed domains" -->
@@ -288,3 +289,4 @@ Every normative item below carries one label from the claim status ladder of [AG
     <!-- @assert-count target="test/oracle.test.ts" symbol="function test_oracle_undefined_record_is_possible_but_not_present" min="1" reason="Record presence follows G4b" -->
     <!-- @assert-count target="test/oracle.test.ts" symbol="function test_oracle_retracted_observation_keeps_its_item" min="1" reason="Items named in the history of Σ stay tracked" -->
     <!-- @assert-count target="test/oracle.test.ts" symbol="function test_oracle_bottom_is_always_tracked" min="1" reason="⊥ is always tracked" -->
+    <!-- @assert-count target="test/boundary-and-inquiry.test.ts" symbol="function test_overlap_unknown_records_obligation_without_collision" min="1" reason="Opposite records across an unknown overlap record OverlapUnknown and no Collision" -->
