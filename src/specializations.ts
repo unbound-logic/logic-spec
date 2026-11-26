@@ -88,7 +88,8 @@ export function verifyIntuitionisticSpecialization(
 /**
  * Evaluate items under UL-Classical closure conditions on `boundary`:
  * 1) Frozen Σ & No-Gluts;
- * 2) `boundary` is atomic or admits a witnessed finite cover `{B*_i}` of atomic cells;
+ * 2) `boundary` is atomic or admits a witnessed finite cover `{B*_i}` of atomic cells, and every
+ *    quantifier domain D of the items is closed (CloseDomain), non-empty and within each Dom(B*_i) (C3);
  * 3) No-Gaps holds on every atom in every atomic cell `B*_i`.
  *
  * Returns classical bivalent valuations obtained strictly via No-Gaps closure on UL-Core's
@@ -108,6 +109,7 @@ export function evaluateClassicalSpecialization(
   }
 
   const groundAtomMap = new Map<string, Item>();
+  const quantifierDomains = new Set<string>();
   const collectGroundAtoms = (item: Item): string | undefined => {
     switch (item.kind) {
       case "atom":
@@ -129,6 +131,7 @@ export function evaluateClassicalSpecialization(
         return collectGroundAtoms(item.antecedent) ?? collectGroundAtoms(item.consequent);
       case "forall":
       case "exists": {
+        quantifierDomains.add(item.domain);
         for (const h of engine.boundaries.handlesOf(item.domain)) {
           const bodyErr = collectGroundAtoms(substituteHandle(item.body, item.variable, h.id));
           if (bodyErr !== undefined) {
@@ -173,6 +176,34 @@ export function evaluateClassicalSpecialization(
       ok: false,
       reason: `Boundary "${boundary}" is neither atomic nor covered by a witnessed finite atomic partition.`,
     };
+  }
+
+  // (C3): every quantifier domain D the items use has a witnessed CloseDomain(D), is non-empty,
+  // and satisfies Dom(D) ⊆ Dom(B*) for every atomic cell B*.
+  for (const d of quantifierDomains) {
+    if (!engine.isDomainClosed(d)) {
+      return {
+        ok: false,
+        reason: `UL-Classical (C3) requires a witnessed CloseDomain("${d}") for every quantifier domain.`,
+      };
+    }
+    const dom = engine.boundaries.handlesOf(d);
+    if (dom.length === 0) {
+      return {
+        ok: false,
+        reason: `UL-Classical (C3) requires non-empty quantifier domains; Dom("${d}") is empty.`,
+      };
+    }
+    for (const cell of atomicCover) {
+      const cellDom = new Set(engine.boundaries.handlesOf(cell).map((h) => h.id));
+      const outside = dom.find((h) => !cellDom.has(h.id));
+      if (outside !== undefined) {
+        return {
+          ok: false,
+          reason: `UL-Classical (C3) requires Dom("${d}") ⊆ Dom("${cell}"); handle "${outside.id}" lies outside.`,
+        };
+      }
+    }
   }
 
   // Enforce No-Gaps on all base atoms and congruences reachable across atoms and queryItems.
