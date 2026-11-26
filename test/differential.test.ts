@@ -2,20 +2,26 @@
  * Differential comparison of the reference kernel (src/engine.ts) with the clean-room
  * oracle of the evaluation program Π(Σ) (test/oracle/pi-sigma.ts, spec/core.md §5 item 14).
  *
- * Each seeded state uses the boundaries B, B1 ⊑ B, B2 ⊑ B and B12 ⊑ B1, B2 (plus ⊤_B), with
- * monotone random handle sets, positive and negative observations (some later retracted),
- * conditionals, incompatibilities, congruences, structural collapses, optional covers and
- * domain closures,
- * and queries built from atoms, `∧`, `∨`, `~`, `→` and quantifiers over closed and unclosed
- * domains. For every state the kernel and the oracle must agree on U(Σ, Q) and, for every slot
- * of 𝔅(Σ) × U(Σ, Q) (the queried slots included), on the local status, the authority of each
- * polarity, obstruction and the revision obligations. Recorded theorems and reflection values
- * are not generated, since the oracle omits those two rows (AMBIGUITIES.md A15).
+ * Each seeded state uses the boundaries B, B1 ⊑ B and B2 ⊑ B (plus ⊤_B) in a random topology
+ * (a diamond with B12 ⊑ B1, B2, siblings of unknown overlap, or declared disjoint siblings),
+ * sometimes with an unrelated C, a sub-boundary X ⊑ B whose overlap with B1 and B2 is declared
+ * disjoint, settled by a registered common sub-boundary, or left unknown, and a nested D1 ⊑ B1.
+ * States carry monotone random handle sets, positive and negative observations (some later
+ * retracted), conditionals, incompatibilities, congruences, structural collapses, covers that
+ * the topology may leave valid, unverified or invalid (core.md §2 item 5), domain closures, and
+ * a Withdraw of some constraint (item 7), with queries built from atoms, `∧`, `∨`, `~`, `→` and
+ * quantifiers over closed and unclosed domains. For every state the kernel and the oracle must
+ * agree on U(Σ, Q); for every slot of 𝔅(Σ) × U(Σ, Q) (the queried slots included) on the local
+ * status, the authority of each polarity, obstruction and the revision obligations; on the
+ * OverlapUnknown and cover obligations; and on the ⊆-minimal witnessed covers of every boundary.
+ * Recorded theorems and reflection values are not generated, since the oracle omits those two
+ * rows (AMBIGUITIES.md A15).
  *
- * Item 14 tracks ⊥ and every item named by a past transition, retracted observations included.
- * The kernel keeps those items itself; the oracle receives the items of retracted observations
- * through PiState.historyItems (AMBIGUITIES.md A23) and tracks ⊥ on its own (A22), so both are
- * compared on the same universe.
+ * Item 14 tracks ⊥ and every item named by a past transition, retracted observations and
+ * withdrawn constraints included. The kernel keeps those items itself; the oracle receives them
+ * through PiState.historyItems (AMBIGUITIES.md A23, A38) and tracks ⊥ on its own (A22), so both
+ * are compared on the same universe. A withdrawn cover leaves the shared boundary system, which
+ * both read.
  *
  * UL_FUZZ_MULTIPLIER scales the number of states; UL_FUZZ_SEED replays a single state.
  */
@@ -121,11 +127,13 @@ type Profile = {
   readonly sweep: number;
   /** Probability that a state retracts one or two of its observations. */
   readonly retraction: number;
+  /** Probability that a state withdraws one of its constraints. */
+  readonly withdrawal: number;
 };
 
-const GENERAL: Profile = { conditional: 0.3, incompatibilities: [0, 2], closure: 0.4, quantifier: 0.3, sweep: 0.2, retraction: 0.4 };
-const CONFLICTS: Profile = { conditional: 0.5, incompatibilities: [1, 3], closure: 0.3, quantifier: 0.15, sweep: 0.1, retraction: 0.4 };
-const QUANTIFIERS: Profile = { conditional: 0.2, incompatibilities: [0, 1], closure: 0.6, quantifier: 0.7, sweep: 0.6, retraction: 0.3 };
+const GENERAL: Profile = { conditional: 0.3, incompatibilities: [0, 2], closure: 0.4, quantifier: 0.3, sweep: 0.2, retraction: 0.4, withdrawal: 0.35 };
+const CONFLICTS: Profile = { conditional: 0.5, incompatibilities: [1, 3], closure: 0.3, quantifier: 0.15, sweep: 0.1, retraction: 0.4, withdrawal: 0.25 };
+const QUANTIFIERS: Profile = { conditional: 0.2, incompatibilities: [0, 1], closure: 0.6, quantifier: 0.7, sweep: 0.6, retraction: 0.3, withdrawal: 0.35 };
 
 type RandomState = {
   readonly boundaries: BoundarySystem;
@@ -135,8 +143,10 @@ type RandomState = {
   readonly collapses: PiCollapse[];
   readonly closedDomains: string[];
   readonly queries: Item[];
-  /** Items of past transitions no longer in force: the items of retracted observations. */
+  /** Items of past transitions no longer in force: retracted observations, withdrawn constraints. */
   readonly historyItems: Item[];
+  /** The kind of the constraint withdrawn, if any. */
+  readonly withdrawn: string | undefined;
 };
 
 function handleSpec(id: string): HandleSpec {
@@ -171,13 +181,41 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     bs.defineBoundary("C", { nativeRelations: ["P", "Q", "R"], handles: rng.subset(HANDLES, 0.7).map(handleSpec) });
     names.push("C");
   }
+  // Cover stress (item 5): a nested cell D1 ⊑ B1, and a sub-boundary X ⊑ B whose overlap with each
+  // of B1, B2 (and D1) is declared disjoint, settled by a registered common sub-boundary, or left
+  // unknown, so that covers of B and B1 come out valid, unverified or invalid.
+  if (rng.bool(0.35)) {
+    bs.defineBoundary("D1", { parents: ["B1"], handles: rng.subset(domB1, 0.7).map(handleSpec) });
+    names.push("D1");
+  }
+  if (rng.bool(0.5)) {
+    const domX = rng.subset(domB, 0.7);
+    bs.defineBoundary("X", { parents: ["B"], handles: domX.map(handleSpec) });
+    names.push("X");
+    for (const cell of ["B1", "B2"] as const) {
+      const r = rng.next();
+      if (r < 0.4) {
+        bs.declareDisjoint("X", cell);
+      } else if (r < 0.65) {
+        bs.defineBoundary(`X${cell}`, { parents: ["X", cell] });
+        names.push(`X${cell}`);
+      }
+    }
+    if (names.includes("D1") && rng.bool(0.4) && bs.meetStatus("X", "D1").kind === "unknown") {
+      bs.declareDisjoint("X", "D1");
+    }
+  }
 
   const engine = new InquiryEngine(bs);
-  if (rng.bool(0.3)) {
-    engine.witnessCover("B", ["B1", "B2"]);
+  const coverIds: string[] = [];
+  if (rng.bool(0.45)) {
+    coverIds.push(engine.witnessCover("B", ["B1", "B2"]));
   }
-  if (names.includes("B12") && rng.bool(0.15)) {
-    engine.witnessCover("B1", ["B12"]);
+  if (names.includes("B12") && rng.bool(0.2)) {
+    coverIds.push(engine.witnessCover("B1", ["B12"]));
+  }
+  if (names.includes("D1") && rng.bool(0.5)) {
+    coverIds.push(engine.witnessCover("B1", ["D1"]));
   }
 
   const handle = (): string => rng.pick(HANDLES);
@@ -285,28 +323,59 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   }
   const observations = observed.map((o) => o.observation);
 
-  const incompatibilities: PiIncompatibility[] = [];
+  const incompatibilities: (PiIncompatibility & { readonly id: string })[] = [];
   const incompatibilityCount = rng.int(profile.incompatibilities[0], profile.incompatibilities[1]);
   for (let i = 0; i < incompatibilityCount; i++) {
     const c = { boundary: boundary(), left: baseAtom(), right: baseAtom() };
-    engine.addIncompatibility(c.boundary, c.left, c.right);
-    incompatibilities.push(c);
+    incompatibilities.push({ ...c, id: engine.addIncompatibility(c.boundary, c.left, c.right) });
   }
 
-  const collapses: PiCollapse[] = [];
+  const collapses: (PiCollapse & { readonly id: string })[] = [];
   if (rng.bool(0.2)) {
     const c = { boundary: boundary(), item: baseAtom() };
-    engine.addStructuralCollapse(c.boundary, c.item);
-    collapses.push(c);
+    collapses.push({ ...c, id: engine.addStructuralCollapse(c.boundary, c.item) });
   }
 
-  const closedDomains: string[] = [];
+  const closures: { readonly domain: string; readonly id: string }[] = [];
   for (const d of names) {
     if (rng.bool(profile.closure)) {
-      engine.closeDomain(d);
-      closedDomains.push(d);
+      closures.push({ domain: d, id: engine.closeDomain(d) });
     }
   }
+
+  // Withdraw (item 7): the constraint leaves C_B, and the items it named stay tracked (item 14).
+  // A withdrawn cover leaves the shared boundary system, which the oracle reads as well.
+  let withdrawn: string | undefined;
+  const candidates = [
+    ...incompatibilities.map((c) => ({ kind: "incompatibility", id: c.id })),
+    ...collapses.map((c) => ({ kind: "collapse", id: c.id })),
+    ...closures.map((c) => ({ kind: "closure", id: c.id })),
+    ...coverIds.map((id) => ({ kind: "cover", id })),
+  ];
+  if (candidates.length > 0 && rng.bool(profile.withdrawal)) {
+    const gone = rng.pick(candidates);
+    assert.equal(engine.withdraw(gone.id), true);
+    withdrawn = gone.kind;
+    const inc = incompatibilities.findIndex((c) => c.id === gone.id);
+    if (inc >= 0) {
+      const [c] = incompatibilities.splice(inc, 1);
+      if (c !== undefined) {
+        historyItems.push(c.left, c.right);
+      }
+    }
+    const col = collapses.findIndex((c) => c.id === gone.id);
+    if (col >= 0) {
+      const [c] = collapses.splice(col, 1);
+      if (c !== undefined) {
+        historyItems.push(c.item, implies(c.item, bottom()));
+      }
+    }
+    const clo = closures.findIndex((c) => c.id === gone.id);
+    if (clo >= 0) {
+      closures.splice(clo, 1);
+    }
+  }
+  const closedDomains = closures.map((c) => c.domain);
 
   const queries: Item[] = [];
   const queryCount = rng.int(2, 6);
@@ -323,6 +392,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     closedDomains,
     queries,
     historyItems,
+    withdrawn,
   };
 }
 
@@ -335,6 +405,9 @@ type Coverage = {
   closedUniversalGrounded: number;
   closedExistentialExcluded: number;
   overlapObligations: number;
+  invalidCovers: number;
+  unverifiedCovers: number;
+  withdrawals: number;
 };
 
 /** Assert kernel/oracle agreement on one state and accumulate what it exercised. */
@@ -409,6 +482,43 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
   const oracleOverlap = model.overlapObligations.map((o) => pairKey(o.left, o.right, itemKey(o.item))).sort();
   assert.deepEqual(kernelOverlap, oracleOverlap, `${ctx} OverlapUnknown obligations`);
   coverage.overlapObligations += kernelOverlap.length;
+
+  // Cover obligations (item 5): each invalid or unverified registered cover, with the
+  // sub-boundaries that refute it or leave it unsettled.
+  const kernelCover = snap
+    .coverObligations()
+    .map((o) => `${o.coverId} ${o.validity} ${[...o.witnesses].sort().join(",")}`)
+    .sort();
+  const oracleCover = model.coverObligations
+    .map((o) => `${o.id} ${o.validity} ${[...o.subBoundaries].sort().join(",")}`)
+    .sort();
+  assert.deepEqual(kernelCover, oracleCover, `${ctx} cover obligations`);
+  for (const o of snap.coverObligations()) {
+    if (o.validity === "invalid") {
+      coverage.invalidCovers += 1;
+    } else {
+      coverage.unverifiedCovers += 1;
+    }
+  }
+
+  // Witnessed covers (item 5): the ⊆-minimal covers of each boundary, which give every cover rule
+  // instance of Π(Σ); the oracle lists only those (AMBIGUITIES.md A36).
+  const signature = (cells: readonly string[]): string => [...cells].sort().join(",");
+  for (const b of model.boundaries) {
+    const all = state.boundaries.witnessedCoversOf(b).map((cells) => [...new Set(cells)]);
+    const minimal = all.filter(
+      (cells) => !all.some((other) => other.length < cells.length && other.every((c) => cells.includes(c))),
+    );
+    const kernelCovers = [...new Set(minimal.map(signature))].sort();
+    const oracleCovers = model.witnessedCovers
+      .filter((w) => w.boundary === b)
+      .map((w) => signature(w.cells))
+      .sort();
+    assert.deepEqual(kernelCovers, oracleCovers, `${ctx} minimal witnessed covers of ${b}`);
+  }
+  if (state.withdrawn !== undefined) {
+    coverage.withdrawals += 1;
+  }
   coverage.states += 1;
 }
 
@@ -422,6 +532,9 @@ function runSuite(suiteId: number, name: string, defaultCount: number, profile: 
     closedUniversalGrounded: 0,
     closedExistentialExcluded: 0,
     overlapObligations: 0,
+    invalidCovers: 0,
+    unverifiedCovers: 0,
+    withdrawals: 0,
   };
   const { seeds, replay } = suiteSeeds(suiteId, defaultCount);
   for (const seed of seeds) {
@@ -441,6 +554,9 @@ function test_differential_general_states(): void {
     assert.ok(coverage.quarantined > 0, "[suite=general] some record is Quarantined");
     assert.ok(coverage.retractions > 0, "[suite=general] some state retracts an observation");
     assert.ok(coverage.overlapObligations > 0, "[suite=general] some state records OverlapUnknown");
+    assert.ok(coverage.invalidCovers > 0, "[suite=general] some registered cover is invalid");
+    assert.ok(coverage.unverifiedCovers > 0, "[suite=general] some registered cover is unverified");
+    assert.ok(coverage.withdrawals > 0, "[suite=general] some state withdraws a constraint");
   }
 }
 
