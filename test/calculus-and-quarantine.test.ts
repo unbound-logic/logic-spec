@@ -15,6 +15,28 @@ import {
   structImposs,
 } from "../src/syntax.ts";
 
+function test_local_status_and_authority_are_separate_axes(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("B_sub", { parents: ["B"] });
+  const e = new InquiryEngine(b);
+  const a = atom("A");
+  e.observePositive("B", a, "w_pos");
+  e.observeNegative("B_sub", a, "w_neg");
+  const snap = e.evaluate();
+
+  // The ground record on B stands, so its local status is Grounded ...
+  assert.equal(snap.localStatus("B", a), "Grounded");
+  assert.equal(snap.hasRecord("B", "+", a), true);
+  // ... while the collision on B_sub obstructs it: its authority is Quarantined, and it transmits nothing.
+  assert.equal(snap.localStatus("B_sub", a), "Collision");
+  assert.equal(snap.isObstructed("B", a), true);
+  assert.equal(snap.authorityOf("B", "+", a), "Quarantined");
+  assert.equal(snap.isLive("B", "+", a), false);
+  // An absent record has no authority.
+  assert.equal(snap.authorityOf("B", "-", a), null);
+}
+
 function test_dual_polarity_statuses_and_well_founded_dag_rejects_cycles(): void {
   const b = new BoundarySystem();
   b.defineBoundary("B");
@@ -624,3 +646,4 @@ test(
   "symmetric conflict zero ghost leakage across multihop MP",
   test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp,
 );
+test("local status and authority are separate axes", test_local_status_and_authority_are_separate_axes);
