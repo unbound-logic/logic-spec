@@ -371,10 +371,19 @@ function assertSnapshotCoreInvariants(
     entryCache.set(entryId, true);
   };
 
+  const revisionSlots = new Set(snap.revisionObligations().map((r) => `${r.boundary} ${r.itemKey}`));
+
   for (const b of nonEmpty) {
     assert.equal(snap.statusOf(b, sentinel), "Open", `${ctx} Non-Explosion violated on ${b}`);
     assert.equal(snap.allGrounds(b, "+", sentinel).length, 0, `${ctx} Sentinel + ground on ${b}`);
-    assert.equal(snap.statusOf(b, bot), "Excluded", `${ctx} bottom must stay Excluded on ${b}`);
+    // (B, ⊥) stays Excluded unless a possible but absent +⊥ leaves coll(B, ⊥) undefined, which
+    // item 14 (G4b) reports as Collision; no +⊥ record is ever present or Live.
+    const botStatus = snap.statusOf(b, bot);
+    assert.ok(
+      botStatus === "Excluded" || botStatus === "Collision",
+      `${ctx} bottom must stay Excluded or possibly collide on ${b}, got ${botStatus}`,
+    );
+    assert.equal(snap.authorityOf(b, "+", bot), null, `${ctx} no +bottom record on ${b}`);
     assert.equal(snap.isLive(b, "+", bot), false, `${ctx} bottom must never be Live (+) on ${b}`);
     assert.equal(snap.allGrounds(b, "+", bot).length, 0, `${ctx} zero +bottom entries on ${b}`);
 
@@ -383,18 +392,39 @@ function assertSnapshotCoreInvariants(
       const posAll = snap.allGrounds(b, "+", it);
       const negAll = snap.allGrounds(b, "-", it);
       const st = snap.statusOf(b, it);
-      const expectedStatus =
-        posAll.length > 0 && negAll.length > 0
-          ? "Collision"
-          : posAll.length > 0
-            ? "Grounded"
-            : negAll.length > 0
-              ? "Excluded"
-              : "Open";
+      // G4b: Collision when the collision atom is true or undefined (both records present make it
+      // true); otherwise the present (true) records decide the local status.
+      const collided = snap.isCollided(b, it);
+      if (posAll.length > 0 && negAll.length > 0) {
+        assert.equal(collided, true, `${ctx} both records present but no Collision for (${b}, ${itemKey(it)})`);
+      }
+      const expectedStatus = collided
+        ? "Collision"
+        : posAll.length > 0
+          ? "Grounded"
+          : negAll.length > 0
+            ? "Excluded"
+            : "Open";
       assert.equal(st, expectedStatus, `${ctx} status mismatch for (${b}, ${itemKey(it)})`);
+      assert.equal(
+        revisionSlots.has(`${b} ${itemKey(it)}`),
+        collided,
+        `${ctx} Rev must accompany exactly the Collision of (${b}, ${itemKey(it)})`,
+      );
 
       for (const pol of ["+", "-"] as const) {
+        const authority = snap.authorityOf(b, pol, it);
+        assert.equal(
+          authority !== null,
+          snap.allGrounds(b, pol, it).length > 0,
+          `${ctx} authority exactly for present records (${b}, ${pol}, ${itemKey(it)})`,
+        );
         const lives = snap.liveGrounds(b, pol, it);
+        assert.equal(
+          authority === "Live",
+          lives.length > 0,
+          `${ctx} Live authority exactly with a Live witness (${b}, ${pol}, ${itemKey(it)})`,
+        );
         if (lives.length > 0) {
           assert.equal(
             snap.isObstructed(b, it),
@@ -673,8 +703,15 @@ function test_fuzz_inquiry_dynamics_quarantine_and_biased_conflict_graphs(): voi
       assert.equal(snap.isLive("B", "+", c), false, `${ctx} C not Live`);
     }
     assert.equal(snap.allGrounds("B", "+", y).length, 0, `${ctx} zero ghost +Y`);
-    assert.equal(snap.statusOf("B", y), "Excluded", `${ctx} Y stays Excluded`);
-    assert.equal(snap.isLive("B", "-", y), true, `${ctx} -Y stays Live`);
+    if (hasIndependentDefeatOfA) {
+      assert.equal(snap.statusOf("B", y), "Excluded", `${ctx} Y stays Excluded`);
+      assert.equal(snap.isLive("B", "-", y), true, `${ctx} -Y stays Live`);
+    } else {
+      // Pure symmetric conflict: +A stays Undetermined, so +Y is possible but never present;
+      // coll(B, Y) is undefined and item 14 (G4b) reports Collision with -Y not Live.
+      assert.equal(snap.statusOf("B", y), "Collision", `${ctx} Y possibly collides`);
+      assert.equal(snap.isLive("B", "-", y), false, `${ctx} -Y not Live`);
+    }
     assert.equal(
       snap.statusOf("B", implies(collAnt, cons)),
       "Grounded",

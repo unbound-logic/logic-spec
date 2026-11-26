@@ -453,7 +453,9 @@ function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
   assert.equal(snap1.statusOf("B", a2), "Open");
   assert.equal(snap1.allGrounds("B", "+", a2).length, 0);
 
-  // Conflicting +(A3 → ⊥) and +A3 puts (B, A3 → ⊥) into Collision and emits zero +⊥ entries
+  // Conflicting +(A3 → ⊥) and +A3 puts (B, A3 → ⊥) into Collision. imposs-excl and the
+  // counterexample leave both grounds Undetermined, so Scoped Cut makes +⊥ possible but never
+  // present: coll(B, ⊥) is undefined and (B, ⊥) reads Collision (item 14, G4b) with no +⊥ record.
   const bConf = new BoundarySystem();
   bConf.defineBoundary("B");
   const eConf = new InquiryEngine(bConf);
@@ -464,7 +466,9 @@ function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
   const snapConf = eConf.evaluate([a3, structImposs(a3), bottom()]);
   assert.equal(snapConf.statusOf("B", structImposs(a3)), "Collision");
   assert.equal(snapConf.allGrounds("B", "+", bottom()).length, 0);
-  assert.equal(snapConf.statusOf("B", bottom()), "Excluded");
+  assert.equal(snapConf.statusOf("B", bottom()), "Collision");
+  assert.equal(snapConf.authorityOf("B", "+", bottom()), null);
+  assert.equal(snapConf.isLive("B", "+", bottom()), false);
 }
 
 function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
@@ -491,10 +495,12 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snap.isLive("B", "+", c), false);
   assert.equal(snap.allGrounds("B", "+", x).length, 0);
   assert.equal(snap.allGrounds("B", "+", y).length, 0);
-  assert.equal(snap.statusOf("B", y), "Excluded");
-  assert.equal(snap.isLive("B", "-", y), true);
-  assert.equal(snap.statusOf("B", flip(y)), "Grounded");
-  assert.equal(snap.isLive("B", "+", flip(y)), true);
+  // The symmetric conflict leaves +A and +C Undetermined, so +X and +Y are possible but never
+  // present: (B, Y) and (B, ~Y) read Collision (item 14, G4b) and -Y is not Live.
+  assert.equal(snap.statusOf("B", y), "Collision");
+  assert.equal(snap.isLive("B", "-", y), false);
+  assert.equal(snap.statusOf("B", flip(y)), "Collision");
+  assert.equal(snap.isLive("B", "+", flip(y)), false);
 
   // Part B: 2-hop mutual symmetric conflict cycle (+A, +(A→C), C ⊥_B D, +D, +(D→E), E ⊥_B A)
   const eCycle = new InquiryEngine(b);
@@ -517,8 +523,8 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snapCycle.isLive("B", "+", d), false);
   assert.equal(snapCycle.allGrounds("B", "+", x).length, 0);
   assert.equal(snapCycle.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapCycle.statusOf("B", y), "Excluded");
-  assert.equal(snapCycle.isLive("B", "-", y), true);
+  assert.equal(snapCycle.statusOf("B", y), "Collision");
+  assert.equal(snapCycle.isLive("B", "-", y), false);
 
   // Part C (Bug B): Reverse conditional +(Y → C) must NOT hijack {A, C, Y} into a single source SCC
   const eRevC = new InquiryEngine(b);
@@ -537,8 +543,8 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snapRevC.isLive("B", "+", c), false);
   assert.equal(snapRevC.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevC.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevC.statusOf("B", y), "Excluded");
-  assert.equal(snapRevC.isLive("B", "-", y), true);
+  assert.equal(snapRevC.statusOf("B", y), "Collision");
+  assert.equal(snapRevC.isLive("B", "-", y), false);
 
   // Part D (Bug B self-cyclic variant): +(Y → ~A) must NOT merge Y into {A, C}
   const eRevNotA = new InquiryEngine(b);
@@ -557,8 +563,8 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snapRevNotA.isLive("B", "+", c), false);
   assert.equal(snapRevNotA.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevNotA.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevNotA.statusOf("B", y), "Excluded");
-  assert.equal(snapRevNotA.isLive("B", "-", y), true);
+  assert.equal(snapRevNotA.statusOf("B", y), "Collision");
+  assert.equal(snapRevNotA.isLive("B", "-", y), false);
 
   // Part E (Bug B subset-minimal variant): +(Y → ~C) has ancestors {A, Y} ⊋ {A} and must NOT hijack {A, C}
   const eRevNotC = new InquiryEngine(b);
@@ -577,8 +583,8 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   assert.equal(snapRevNotC.isLive("B", "+", c), false);
   assert.equal(snapRevNotC.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevNotC.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevNotC.statusOf("B", y), "Excluded");
-  assert.equal(snapRevNotC.isLive("B", "-", y), true);
+  assert.equal(snapRevNotC.statusOf("B", y), "Collision");
+  assert.equal(snapRevNotC.isLive("B", "-", y), false);
 
   // Part F (Cleanup #4a): Collided (+A and -A) must NOT refute +(A → C) via counter-implies
   const eCollAnt = new InquiryEngine(b);
