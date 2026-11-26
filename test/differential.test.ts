@@ -106,7 +106,6 @@ function suiteSeeds(suiteId: number, defaultCount: number): { readonly seeds: nu
 }
 
 const HANDLES = ["a", "b", "c"] as const;
-const BOUNDARIES = ["B", "B1", "B2", "B12"] as const;
 const NULLARY = ["X0", "X1", "X2", "X3"] as const;
 
 type Profile = {
@@ -157,18 +156,32 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   bs.defineBoundary("B", { nativeRelations: ["P", "Q", "R"], handles: domB.map(handleSpec) });
   bs.defineBoundary("B1", { parents: ["B"], handles: domB1.map(handleSpec) });
   bs.defineBoundary("B2", { parents: ["B"], handles: domB2.map(handleSpec) });
-  bs.defineBoundary("B12", { parents: ["B1", "B2"], handles: domB12.map(handleSpec) });
+  // Random topology (core.md §2 item 4): the diamond with a registered common sub-boundary B12,
+  // siblings B1 and B2 whose overlap is unknown, or siblings declared disjoint; and sometimes an
+  // unrelated top-level boundary C, whose overlap with the B family is unknown.
+  const topology = rng.pick(["diamond", "unknown-siblings", "disjoint-siblings"] as const);
+  const names: string[] = ["B", "B1", "B2"];
+  if (topology === "diamond") {
+    bs.defineBoundary("B12", { parents: ["B1", "B2"], handles: domB12.map(handleSpec) });
+    names.push("B12");
+  } else if (topology === "disjoint-siblings") {
+    bs.declareDisjoint("B1", "B2");
+  }
+  if (rng.bool(0.5)) {
+    bs.defineBoundary("C", { nativeRelations: ["P", "Q", "R"], handles: rng.subset(HANDLES, 0.7).map(handleSpec) });
+    names.push("C");
+  }
 
   const engine = new InquiryEngine(bs);
   if (rng.bool(0.3)) {
     engine.witnessCover("B", ["B1", "B2"]);
   }
-  if (rng.bool(0.15)) {
+  if (names.includes("B12") && rng.bool(0.15)) {
     engine.witnessCover("B1", ["B12"]);
   }
 
   const handle = (): string => rng.pick(HANDLES);
-  const boundary = (): string => rng.pick(BOUNDARIES);
+  const boundary = (): string => rng.pick(names);
   const unary = (relation: "P" | "Q", h: string): Item => atom(relation, [{ role: "arg", handle: h }]);
   const baseAtom = (): Item => {
     const k = rng.int(0, 9);
@@ -288,7 +301,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   }
 
   const closedDomains: string[] = [];
-  for (const d of BOUNDARIES) {
+  for (const d of names) {
     if (rng.bool(profile.closure)) {
       engine.closeDomain(d);
       closedDomains.push(d);
@@ -321,6 +334,7 @@ type Coverage = {
   collisions: number;
   closedUniversalGrounded: number;
   closedExistentialExcluded: number;
+  overlapObligations: number;
 };
 
 /** Assert kernel/oracle agreement on one state and accumulate what it exercised. */
@@ -384,6 +398,17 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
     .sort();
   const oracleRev = model.revisionObligations.map((r) => `${r.boundary} ${itemKey(r.item)}`).sort();
   assert.deepEqual(kernelRev, oracleRev, `${ctx} revision obligations`);
+
+  // OverlapUnknown (item 14): opposite present records across an unknown overlap, each unordered
+  // pair once.
+  const pairKey = (a: string, b: string, k: string): string => `${[a, b].sort().join(" ")} ${k}`;
+  const kernelOverlap = snap
+    .overlapObligations()
+    .map((o) => pairKey(o.left, o.right, o.itemKey))
+    .sort();
+  const oracleOverlap = model.overlapObligations.map((o) => pairKey(o.left, o.right, itemKey(o.item))).sort();
+  assert.deepEqual(kernelOverlap, oracleOverlap, `${ctx} OverlapUnknown obligations`);
+  coverage.overlapObligations += kernelOverlap.length;
   coverage.states += 1;
 }
 
@@ -396,6 +421,7 @@ function runSuite(suiteId: number, name: string, defaultCount: number, profile: 
     collisions: 0,
     closedUniversalGrounded: 0,
     closedExistentialExcluded: 0,
+    overlapObligations: 0,
   };
   const { seeds, replay } = suiteSeeds(suiteId, defaultCount);
   for (const seed of seeds) {
@@ -414,6 +440,7 @@ function test_differential_general_states(): void {
     assert.ok(coverage.collisions > 0, "[suite=general] some state reaches Collision");
     assert.ok(coverage.quarantined > 0, "[suite=general] some record is Quarantined");
     assert.ok(coverage.retractions > 0, "[suite=general] some state retracts an observation");
+    assert.ok(coverage.overlapObligations > 0, "[suite=general] some state records OverlapUnknown");
   }
 }
 
