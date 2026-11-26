@@ -2,7 +2,8 @@
  * Clean-room oracle for the evaluation program Π(Σ) of spec/core.md §5 item 14.
  *
  * Written from the specification alone (spec/core.md, AGENTS.md, and the design-review
- * entries `audit-spec-kernel-coupling` and `audit-universal-existential-import`). It imports
+ * entries `audit-spec-kernel-coupling`, `audit-universal-existential-import` and
+ * `audit-unregistered-meet-closed-world`). It imports
  * only the item syntax of src/syntax.ts and the boundary algebra of src/boundary.ts and never
  * reads or calls the reference kernel, so the two can be compared by differential testing.
  *
@@ -19,10 +20,12 @@
  * test/oracle/AMBIGUITIES.md; comments below cite those entries as "A<n>". The maintainer
  * ratified them, amending A3, A6 and A13 and the reporting rule (G4b), in the item 14 of
  * main commit 7b36043. The oracle follows item 14 as of main commit 9c0fd4d, which also
- * tracks ⊥ and the items of past transitions (A22, A23).
+ * tracks ⊥ and the items of past transitions (A22, A23), and items 4 and 14 as of main commit
+ * 5a385ce, which make overlap three-valued: Scoped Cut needs a known overlap, and opposite
+ * records across an unknown overlap carry an OverlapUnknown obligation (A26–A32).
  */
 
-import { BOT_BOUNDARY, type BoundarySystem } from "../../src/boundary.ts";
+import { BOT_BOUNDARY, type BoundarySystem, type MeetStatus } from "../../src/boundary.ts";
 import {
   atom,
   bottom,
@@ -101,6 +104,18 @@ export type PiRow = {
   readonly revisionObligation: boolean;
 };
 
+/**
+ * OverlapUnknown(B₁, B₂, A) (item 14, Reporting): the overlap of `left` and `right` is unknown
+ * (item 4), and one of them holds a present +A record while the other holds a present -A
+ * record. Each unordered pair is reported once per item, with `left` listed before `right` in
+ * PiModel.boundaries (A28).
+ */
+export type PiOverlapObligation = {
+  readonly left: string;
+  readonly right: string;
+  readonly item: Item;
+};
+
 export type PiModel = {
   /** 𝔅(Σ), in the order the boundary system lists them. */
   readonly boundaries: readonly string[];
@@ -109,6 +124,12 @@ export type PiModel = {
   /** One row for every B in 𝔅(Σ) and A in U(Σ, Q). */
   readonly rows: readonly PiRow[];
   readonly revisionObligations: readonly { readonly boundary: string; readonly item: Item }[];
+  /**
+   * The OverlapUnknown obligations, sorted by `left`, then `right` (both in the order of
+   * `boundaries`), then the item's place in `universe` (A28, A29). They are separate from the
+   * Rev(B, A) obligations and change no local status.
+   */
+  readonly overlapObligations: readonly PiOverlapObligation[];
   /** Number of applications of the Gelfond–Lifschitz-style operator Γ. */
   readonly rounds: number;
   /** The row of (boundary, item); throws when the slot is outside 𝔅(Σ) × U(Σ, Q). */
@@ -317,29 +338,51 @@ export function evaluatePi(state: PiState): PiModel {
     return subs;
   };
 
-  // A11: computed meets stand in for known overlaps; an uncomputable meet stops the oracle.
-  const meetCache = new Map<number, number>();
-  const meetIndex = (b1: number, b2: number): number => {
-    const key = b1 * nb + b2;
+  // A26: overlap is three-valued (item 4) and read from BoundarySystem.meetStatus. The oracle
+  // never calls `meet`, which gives ⊥_B for an unknown overlap as well as for disjointness.
+  // A31: an ambiguous meet (several maximal common sub-boundaries) is an error, raised only
+  // where a rule instance or the reporting needs that pair's status.
+  type PairMeet =
+    | { readonly kind: "overlap"; readonly meet: number }
+    | { readonly kind: "disjoint" }
+    | { readonly kind: "unknown" };
+  type PairMeetOrAmbiguous = PairMeet | { readonly kind: "ambiguous"; readonly reason: string };
+  const meetCache = new Map<number, PairMeetOrAmbiguous>();
+  const pairMeet = (b1: number, b2: number): PairMeetOrAmbiguous => {
+    // meetStatus is symmetric, so the cache is keyed by the unordered pair.
+    const key = Math.min(b1, b2) * nb + Math.max(b1, b2);
     const cached = meetCache.get(key);
     if (cached !== undefined) {
       return cached;
     }
-    let meet: string;
+    let status: MeetStatus;
     try {
-      meet = bs.meet(boundaryName(b1), boundaryName(b2));
+      status = bs.meetStatus(boundaryName(b1), boundaryName(b2));
     } catch (error) {
+      // Both boundaries are declared, so meetStatus throws only for an ambiguous meet.
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Π(Σ) oracle: the meet of "${boundaryName(b1)}" and "${boundaryName(b2)}" is not computable (${reason}).`,
-      );
+      const ambiguous = { kind: "ambiguous", reason } as const;
+      meetCache.set(key, ambiguous);
+      return ambiguous;
     }
-    const result = meet === BOT_BOUNDARY ? -1 : boundaryIndex(meet, "meet");
+    const result: PairMeet =
+      status.kind === "overlap" ? { kind: "overlap", meet: boundaryIndex(status.meet, "meet") } : status;
     meetCache.set(key, result);
     return result;
   };
+  /** The status of a pair that `purpose` needs; an ambiguous meet stops the oracle (A11, A31). */
+  const neededMeet = (b1: number, b2: number, purpose: string): PairMeet => {
+    const result = pairMeet(b1, b2);
+    if (result.kind === "ambiguous") {
+      throw new Error(
+        `Π(Σ) oracle: ${purpose} needs the meet of "${boundaryName(b1)}" and "${boundaryName(b2)}", which is ambiguous (${result.reason}).`,
+      );
+    }
+    return result;
+  };
 
-  // A10: registered covers closed under the item 5 axioms stand in for witnessed covers.
+  // A10: registered covers closed under the item 5 axioms stand in for witnessed covers. A32:
+  // their Meet-Stability pullbacks are computed by the boundary system, not by the oracle.
   const coversOf = boundaries.map((b) =>
     bs.witnessedCoversOf(b).map((cells) => cells.map((c) => boundaryIndex(c, "cover cell"))),
   );
@@ -530,12 +573,13 @@ export function evaluatePi(state: PiState): PiModel {
       case "implies": {
         const antecedent = idx(item.antecedent);
         const consequent = idx(item.consequent);
-        // Scoped Cut: (B₁ ⊓ B₂, +, C) from Live (B₁, +, A), Live (B₂, +, A → C).
+        // Scoped Cut: (B₁ ⊓ B₂, +, C) from Live (B₁, +, A), Live (B₂, +, A → C), only when B₁
+        // and B₂ are known to overlap; a disjoint or unknown overlap licenses nothing (A26, A27).
         for (const b1 of allB) {
           for (const b2 of allB) {
-            const m = meetIndex(b1, b2);
-            if (m >= 0) {
-              emit(m, "+", consequent, each(L(b1, "+", antecedent), L(b2, "+", a)));
+            const m = neededMeet(b1, b2, "Scoped Cut");
+            if (m.kind === "overlap") {
+              emit(m.meet, "+", consequent, each(L(b1, "+", antecedent), L(b2, "+", a)));
             }
           }
         }
@@ -855,11 +899,37 @@ export function evaluatePi(state: PiState): PiModel {
     });
   }
 
+  // OverlapUnknown (A28–A31): for each unordered pair of distinct boundaries whose overlap is
+  // unknown, every item with a present +A record on one and a present -A record on the other.
+  // Presence is G4b's (rec true); authority and the record's origin do not matter.
+  const isPresent = (b: number, p: Polarity, a: number): boolean =>
+    under.truth[recAtom(p, slot(b, a))] === 1;
+  const overlapObligations: PiOverlapObligation[] = [];
+  for (let left = 0; left < nb; left++) {
+    for (let right = left + 1; right < nb; right++) {
+      let kind: PairMeet["kind"] | undefined;
+      for (const [a, item] of universe.entries()) {
+        const opposed =
+          (isPresent(left, "+", a) && isPresent(right, "-", a)) ||
+          (isPresent(left, "-", a) && isPresent(right, "+", a));
+        if (!opposed) {
+          continue;
+        }
+        kind ??= neededMeet(left, right, "reporting OverlapUnknown").kind;
+        if (kind !== "unknown") {
+          break;
+        }
+        overlapObligations.push({ left: boundaryName(left), right: boundaryName(right), item });
+      }
+    }
+  }
+
   return {
     boundaries,
     universe,
     rows,
     revisionObligations,
+    overlapObligations,
     rounds,
     at(boundary: string, item: Item): PiRow {
       const row = rowIndex.get(`${boundary}\u0000${itemKey(item)}`);

@@ -1,7 +1,8 @@
 /**
  * Hand-computed cases for the clean-room Π(Σ) oracle in test/oracle/pi-sigma.ts
- * (spec/core.md §5 item 14, as amended in main commit 7b36043). Every expectation is derived
- * by hand from item 14's program, rule table and Reporting section (G4b); readings follow
+ * (spec/core.md §5 item 14, as amended in main commit 7b36043, with the three-valued meet of
+ * §2 item 4 from main commit 5a385ce). Every expectation is derived by hand from item 14's
+ * program, rule table and Reporting section (G4b); readings follow
  * test/oracle/AMBIGUITIES.md.
  */
 
@@ -85,6 +86,11 @@ const OPEN: Expected = {
 
 function revisionKeys(model: PiModel): string[] {
   return model.revisionObligations.map((r) => `${r.boundary} ${itemKey(r.item)}`).sort();
+}
+
+/** The OverlapUnknown obligations in the model's own order (A28). */
+function overlapKeys(model: PiModel): string[] {
+  return model.overlapObligations.map((o) => `${o.left} ${o.right} ${itemKey(o.item)}`);
 }
 
 function handle(id: string): HandleSpec {
@@ -728,3 +734,262 @@ function test_oracle_bottom_is_always_tracked(): void {
   expectRow(empty, "B", bottom(), EXCLUDED_LIVE);
 }
 test("test_oracle_bottom_is_always_tracked", test_oracle_bottom_is_always_tracked);
+
+// ---------------------------------------------------------------------------------------------
+// The three-valued meet of item 4 (main commit 5a385ce): Lab and Field below ⊤_B share no
+// registered sub-boundary and no declared disjointness, so their overlap is unknown.
+
+function labAndField(): BoundarySystem {
+  const bs = new BoundarySystem();
+  bs.defineBoundary("Lab");
+  bs.defineBoundary("Field");
+  return bs;
+}
+
+function test_oracle_scoped_cut_needs_known_overlap(): void {
+  const observations = [
+    { boundary: "Lab", polarity: "+" as const, item: A },
+    { boundary: "Field", polarity: "+" as const, item: implies(A, C) },
+  ];
+
+  // Unknown overlap: Scoped Cut has no conclusion boundary, so +C appears nowhere.
+  const unknown = evaluatePi({ boundaries: labAndField(), observations });
+  for (const b of [TOP_BOUNDARY, "Lab", "Field"]) {
+    expectRow(unknown, b, C, OPEN);
+  }
+  expectRow(unknown, "Lab", A, GROUNDED_LIVE);
+  expectRow(unknown, "Field", implies(A, C), GROUNDED_LIVE);
+  assert.deepEqual(overlapKeys(unknown), []);
+
+  // Declared disjointness licenses nothing either.
+  const disjointSystem = labAndField();
+  disjointSystem.declareDisjoint("Lab", "Field");
+  const disjoint = evaluatePi({ boundaries: disjointSystem, observations });
+  for (const b of [TOP_BOUNDARY, "Lab", "Field"]) {
+    expectRow(disjoint, b, C, OPEN);
+  }
+
+  // A registered common sub-boundary makes the overlap known, and the cut fires there.
+  const knownSystem = labAndField();
+  knownSystem.defineBoundary("LabField", { parents: ["Lab", "Field"] });
+  const known = evaluatePi({ boundaries: knownSystem, observations });
+  expectRow(known, "LabField", C, GROUNDED_LIVE);
+  for (const b of [TOP_BOUNDARY, "Lab", "Field"]) {
+    expectRow(known, b, C, OPEN);
+  }
+}
+test("test_oracle_scoped_cut_needs_known_overlap", test_oracle_scoped_cut_needs_known_overlap);
+
+function test_oracle_unknown_overlap_records_obligation_without_collision(): void {
+  // -P on Lab and +P on Field: no boundary holds both records, so nothing collides, both records
+  // stay Live, and the conflict is reported as OverlapUnknown(Lab, Field, P). Lab precedes Field
+  // in 𝔅(Σ), so it is the left boundary although it holds the exclusion (A28).
+  const m = evaluatePi({
+    boundaries: labAndField(),
+    observations: [
+      { boundary: "Lab", polarity: "-", item: P },
+      { boundary: "Field", polarity: "+", item: P },
+    ],
+  });
+
+  expectRow(m, "Lab", P, { ...EXCLUDED_LIVE, obs: "false" });
+  expectRow(m, "Field", P, { ...GROUNDED_LIVE, obs: "false" });
+  expectRow(m, TOP_BOUNDARY, P, { ...OPEN, obs: "false" });
+  assert.deepEqual(m.boundaries, [TOP_BOUNDARY, "Lab", "Field"]);
+  assert.deepEqual(m.revisionObligations, []);
+  assert.deepEqual(m.overlapObligations, [{ left: "Lab", right: "Field", item: P }]);
+}
+test(
+  "test_oracle_unknown_overlap_records_obligation_without_collision",
+  test_oracle_unknown_overlap_records_obligation_without_collision,
+);
+
+function test_oracle_declared_disjointness_raises_no_obligation(): void {
+  const bs = labAndField();
+  bs.declareDisjoint("Lab", "Field");
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "Lab", polarity: "+", item: P },
+      { boundary: "Field", polarity: "-", item: P },
+    ],
+  });
+
+  expectRow(m, "Lab", P, { ...GROUNDED_LIVE, obs: "false" });
+  expectRow(m, "Field", P, { ...EXCLUDED_LIVE, obs: "false" });
+  expectRow(m, TOP_BOUNDARY, P, { ...OPEN, obs: "false" });
+  assert.deepEqual(m.revisionObligations, []);
+  assert.deepEqual(m.overlapObligations, []);
+}
+test(
+  "test_oracle_declared_disjointness_raises_no_obligation",
+  test_oracle_declared_disjointness_raises_no_obligation,
+);
+
+function test_oracle_registered_common_sub_boundary_collides_instead(): void {
+  // Defining LabField below both makes the overlap known (audit reproduction R3): heredity
+  // brings +P and -P together on LabField, which collides and obstructs both broad grounds.
+  const bs = labAndField();
+  bs.defineBoundary("LabField", { parents: ["Lab", "Field"] });
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "Lab", polarity: "+", item: P },
+      { boundary: "Field", polarity: "-", item: P },
+    ],
+  });
+
+  expectRow(m, "LabField", P, {
+    rec: ["true", "true"],
+    live: ["false", "false"],
+    coll: "true",
+    obs: "true",
+    status: "Collision",
+    authority: ["Quarantined", "Quarantined"],
+    rev: true,
+  });
+  expectRow(m, "Lab", P, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  expectRow(m, "Field", P, {
+    rec: ["false", "true"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Excluded",
+    authority: [null, "Quarantined"],
+    rev: false,
+  });
+  expectRow(m, TOP_BOUNDARY, P, { ...OPEN, obs: "true" });
+  assert.deepEqual(revisionKeys(m), [`LabField ${itemKey(P)}`]);
+  assert.deepEqual(m.overlapObligations, []);
+}
+test(
+  "test_oracle_registered_common_sub_boundary_collides_instead",
+  test_oracle_registered_common_sub_boundary_collides_instead,
+);
+
+function test_oracle_overlap_obligations_follow_present_records(): void {
+  // A29, A30. -P on ⊤_B and +P on Lab, with Lab1 ⊑ Lab declared after Field. Heredity puts -P
+  // on every boundary and +P on Lab1, so Lab and Lab1 collide and every record of P is
+  // Quarantined. ⊤_B is known to overlap every boundary, so its -P raises no obligation; the
+  // unknown pairs (Lab, Field) and (Field, Lab1) each do, through inherited and quarantined
+  // records and next to the collisions, which keep their own Rev(B, P).
+  const chain = labAndField();
+  chain.defineBoundary("Lab1", { parents: ["Lab"] });
+  const m = evaluatePi({
+    boundaries: chain,
+    observations: [
+      { boundary: TOP_BOUNDARY, polarity: "-", item: P },
+      { boundary: "Lab", polarity: "+", item: P },
+    ],
+  });
+
+  for (const b of ["Lab", "Lab1"]) {
+    expectRow(m, b, P, { status: "Collision", authority: ["Quarantined", "Quarantined"], rev: true });
+  }
+  expectRow(m, "Field", P, {
+    rec: ["false", "true"],
+    live: ["false", "false"],
+    obs: "false",
+    status: "Excluded",
+    authority: [null, "Quarantined"],
+    rev: false,
+  });
+  expectRow(m, TOP_BOUNDARY, P, { status: "Excluded", authority: [null, "Quarantined"], obs: "true" });
+  assert.deepEqual(m.boundaries, [TOP_BOUNDARY, "Lab", "Field", "Lab1"]);
+  assert.deepEqual(revisionKeys(m), [`Lab ${itemKey(P)}`, `Lab1 ${itemKey(P)}`]);
+  assert.deepEqual(overlapKeys(m), [`Lab Field ${itemKey(P)}`, `Field Lab1 ${itemKey(P)}`]);
+
+  // A merely possible record raises no obligation. The symmetric conflict A ⊥_Lab C leaves
+  // live(Lab, +, A) and live(Lab, +, C) undefined, so ∧I gives +(A ∧ C) on Lab an undefined
+  // record, while Field holds a present -(A ∧ C).
+  const conjunction = and(A, C);
+  const possible = evaluatePi({
+    boundaries: labAndField(),
+    observations: [
+      { boundary: "Lab", polarity: "+", item: A },
+      { boundary: "Lab", polarity: "+", item: C },
+      { boundary: "Field", polarity: "-", item: conjunction },
+    ],
+    incompatibilities: [{ boundary: "Lab", left: A, right: C }],
+  });
+  expectRow(possible, "Lab", conjunction, {
+    rec: ["undefined", "undefined"],
+    coll: "undefined",
+    status: "Collision",
+    authority: [null, null],
+    rev: true,
+  });
+  expectRow(possible, "Field", conjunction, { ...EXCLUDED_LIVE, obs: "false" });
+  assert.deepEqual(possible.overlapObligations, []);
+}
+test(
+  "test_oracle_overlap_obligations_follow_present_records",
+  test_oracle_overlap_obligations_follow_present_records,
+);
+
+function test_oracle_ambiguous_meet_is_an_error_where_needed(): void {
+  // A11, A31. M1 and M2 are two maximal common sub-boundaries of Lab and Field, so their meet
+  // is ambiguous until a meet is registered.
+  const ambiguous = (): BoundarySystem => {
+    const bs = labAndField();
+    bs.defineBoundary("M1", { parents: ["Lab", "Field"] });
+    bs.defineBoundary("M2", { parents: ["Lab", "Field"] });
+    return bs;
+  };
+
+  // Scoped Cut needs every pair's meet once U(Σ, Q) holds an implication.
+  assert.throws(
+    () => evaluatePi({ boundaries: ambiguous(), observations: [], queries: [implies(A, C)] }),
+    /Scoped Cut needs the meet of "Lab" and "Field", which is ambiguous/,
+  );
+  // The reporting needs the status of a pair holding opposite present records.
+  assert.throws(
+    () =>
+      evaluatePi({
+        boundaries: ambiguous(),
+        observations: [
+          { boundary: "Lab", polarity: "+", item: P },
+          { boundary: "Field", polarity: "-", item: P },
+        ],
+      }),
+    /reporting OverlapUnknown needs the meet of "Lab" and "Field", which is ambiguous/,
+  );
+  // Otherwise the ambiguous pair is never classified.
+  const m = evaluatePi({
+    boundaries: ambiguous(),
+    observations: [{ boundary: "Lab", polarity: "+", item: P }],
+  });
+  for (const b of ["Lab", "M1", "M2"]) {
+    expectRow(m, b, P, GROUNDED_LIVE);
+  }
+  assert.deepEqual(m.overlapObligations, []);
+
+  // Registering the meet removes the ambiguity: the conflict collides on M, M1 and M2, and the
+  // known overlap of Lab and Field raises no obligation. M, M1 and M2 are pairwise of unknown
+  // overlap and each holds both records, so each of their pairs carries one (A29).
+  const resolvedSystem = ambiguous();
+  resolvedSystem.defineBoundary("M", { parents: ["Lab", "Field"] });
+  resolvedSystem.defineMeet("Lab", "Field", "M");
+  const resolved = evaluatePi({
+    boundaries: resolvedSystem,
+    observations: [
+      { boundary: "Lab", polarity: "+", item: P },
+      { boundary: "Field", polarity: "-", item: P },
+    ],
+  });
+  assert.deepEqual(revisionKeys(resolved), [`M ${itemKey(P)}`, `M1 ${itemKey(P)}`, `M2 ${itemKey(P)}`]);
+  assert.deepEqual(overlapKeys(resolved), [
+    `M1 M2 ${itemKey(P)}`,
+    `M1 M ${itemKey(P)}`,
+    `M2 M ${itemKey(P)}`,
+  ]);
+}
+test("test_oracle_ambiguous_meet_is_an_error_where_needed", test_oracle_ambiguous_meet_is_an_error_where_needed);
