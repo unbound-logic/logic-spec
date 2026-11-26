@@ -1241,35 +1241,219 @@ function test_oracle_cover_closure_composes_covers(): void {
 }
 test("test_oracle_cover_closure_composes_covers", test_oracle_cover_closure_composes_covers);
 
-function test_oracle_derived_empty_cover_is_an_error(): void {
-  // {C1, C2} ▷ B is unverified (X ⊑ B is disjoint from C2 and of unknown overlap with C1) and
-  // {D1} ▷ C1 is valid. Transitivity gives {D1, C2} ▷ B, whose base change to X is ∅ ▷ X, since
-  // X is declared disjoint from D1 and C2: the closure breaks Non-Vacuity (A37).
-  const system = (withInner: boolean): BoundarySystem => {
+function test_oracle_invalid_derived_cover_is_not_derived(): void {
+  // A37 as ruled. {C1, C2} ▷ B is unverified (X ⊑ B is disjoint from C2 and of unknown overlap
+  // with C1) and {D1} ▷ C1 is valid. Transitivity would give {D1, C2} ▷ B, but X is declared
+  // disjoint from D1 and C2, so item 5's rule judges that cover invalid: it is not derived, it
+  // has no base change to X, and nothing throws.
+  const system = (): BoundarySystem => {
     const bs = twoCellCover();
     bs.defineBoundary("D1", { parents: ["C1"] });
     bs.defineBoundary("X", { parents: ["B"] });
     bs.declareDisjoint("X", "C2");
     bs.declareDisjoint("X", "D1");
     bs.registerCover("B", ["C1", "C2"], "cover-B");
-    if (withInner) {
-      bs.registerCover("C1", ["D1"], "cover-C1");
-    }
+    bs.registerCover("C1", ["D1"], "cover-C1");
     return bs;
   };
-  assert.throws(
-    () => evaluatePi({ boundaries: system(true), observations: [] }),
-    /the base change of \{C2, D1\} ▷ B to X derives ∅ ▷ X, which Axiom 5 \(Non-Vacuity\) of item 5 forbids/,
-  );
-
-  // Without {D1} ▷ C1 nothing is derived from the unverified cover at X.
-  const m = evaluatePi({ boundaries: system(false), observations: [] });
+  const m = evaluatePi({ boundaries: system(), observations: [] });
+  // No obligation is recorded for the derived cover; the unverified source carries one.
   assert.deepEqual(m.coverObligations, [
     { id: "cover-B", target: "B", cells: ["C1", "C2"], validity: "unverified", subBoundaries: ["X"] },
   ]);
+  assert.deepEqual(coversOf(m, "B"), ["B", "C1, C2"]);
+  assert.ok(!coversOf(m, "B").includes("C2, D1"), "{D1, C2} ▷ B is not witnessed");
+  assert.deepEqual(coversOf(m, "C1"), ["C1", "D1"]);
   assert.deepEqual(coversOf(m, "X"), ["X"]);
+
+  // The missing composite shows in Π(Σ). E ⊑ C1 collides on P, obstructing C1 and B but not D1
+  // or C2 (E has an unknown overlap with D1, so {D1} ▷ C1 is now unverified as well). C1 glues
+  // D1's Live +P into a Quarantined record, so {C1, C2} ▷ B cannot glue P onto B, and the
+  // composite that could is not derived: B stays Open, unlike in
+  // test_oracle_cover_closure_composes_covers, where the composite is valid.
+  const obstructed = system();
+  obstructed.defineBoundary("E", { parents: ["C1"] });
+  const o = evaluatePi({
+    boundaries: obstructed,
+    observations: [
+      { boundary: "D1", polarity: "+", item: P },
+      { boundary: "C2", polarity: "+", item: P },
+      { boundary: "E", polarity: "+", item: P },
+      { boundary: "E", polarity: "-", item: P },
+    ],
+  });
+  assert.deepEqual(o.coverObligations, [
+    { id: "cover-B", target: "B", cells: ["C1", "C2"], validity: "unverified", subBoundaries: ["X"] },
+    { id: "cover-C1", target: "C1", cells: ["D1"], validity: "unverified", subBoundaries: ["E"] },
+  ]);
+  assert.deepEqual(coversOf(o, "B"), ["B", "C1, C2"]);
+  expectRow(o, "E", P, { rec: ["true", "true"], coll: "true", status: "Collision", rev: true });
+  expectRow(o, "D1", P, GROUNDED_LIVE);
+  expectRow(o, "C2", P, GROUNDED_LIVE);
+  expectRow(o, "C1", P, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+  });
+  expectRow(o, "B", P, { ...OPEN, obs: "true" });
+  expectRow(o, "X", P, OPEN);
+  assert.deepEqual(revisionKeys(o), [`E ${itemKey(P)}`]);
+  assert.deepEqual(overlapKeys(o), [`D1 E ${itemKey(P)}`]);
 }
-test("test_oracle_derived_empty_cover_is_an_error", test_oracle_derived_empty_cover_is_an_error);
+test("test_oracle_invalid_derived_cover_is_not_derived", test_oracle_invalid_derived_cover_is_not_derived);
+
+function test_oracle_superset_cover_derives_what_its_subset_cannot(): void {
+  // A36. X ⊑ Y ⊑ B, X declared disjoint from C2 and D1 ⊑ C1. {C1, C2} ▷ B is unverified (Y and
+  // X leave it unsettled) and {C1, C2, Y} ▷ B is valid, although it contains the first. With
+  // {D1} ▷ C1, the first would compose into {D1, C2} ▷ B, which X refutes, so it is not derived;
+  // the second composes into {D1, C2, Y} ▷ B, which is valid because X ⊑ Y. That cover contains
+  // no smaller witnessed cover of B, so it is minimal, yet only the larger registered cover
+  // derives it: the closure must keep non-minimal covers.
+  const bs = twoCellCover();
+  bs.defineBoundary("D1", { parents: ["C1"] });
+  bs.defineBoundary("Y", { parents: ["B"] });
+  bs.defineBoundary("X", { parents: ["Y"] });
+  bs.declareDisjoint("X", "C2");
+  bs.declareDisjoint("X", "D1");
+  bs.defineBoundary("E", { parents: ["C1"] });
+  bs.registerCover("B", ["C1", "C2"], "cover-B");
+  bs.registerCover("B", ["C1", "C2", "Y"], "cover-BY");
+  bs.registerCover("C1", ["D1"], "cover-C1");
+  // As in test_oracle_cover_closure_composes_covers, a collision on E ⊑ C1 obstructs C1 and B
+  // for P, so only a composed cover glues the Live +P of D1, C2 and Y into a record on B.
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "D1", polarity: "+", item: P },
+      { boundary: "C2", polarity: "+", item: P },
+      { boundary: "Y", polarity: "+", item: P },
+      { boundary: "E", polarity: "+", item: P },
+      { boundary: "E", polarity: "-", item: P },
+    ],
+  });
+
+  assert.deepEqual(m.coverObligations, [
+    { id: "cover-B", target: "B", cells: ["C1", "C2"], validity: "unverified", subBoundaries: ["Y", "X"] },
+    { id: "cover-C1", target: "C1", cells: ["D1"], validity: "unverified", subBoundaries: ["E"] },
+  ]);
+  // {C1, C2, Y} is witnessed but not minimal; {C2, D1, Y} is minimal.
+  assert.deepEqual(coversOf(m, "B"), ["B", "C1, C2", "C2, D1, Y"]);
+  for (const b of ["D1", "C2", "Y", "X"]) {
+    expectRow(m, b, P, GROUNDED_LIVE);
+  }
+  expectRow(m, "C1", P, { rec: ["true", "false"], live: ["false", "false"], obs: "true", status: "Grounded" });
+  expectRow(m, "B", P, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  assert.deepEqual(revisionKeys(m), [`E ${itemKey(P)}`]);
+  assert.deepEqual(overlapKeys(m), [`D1 E ${itemKey(P)}`, `Y E ${itemKey(P)}`, `X E ${itemKey(P)}`]);
+}
+test(
+  "test_oracle_superset_cover_derives_what_its_subset_cannot",
+  test_oracle_superset_cover_derives_what_its_subset_cannot,
+);
+
+function test_oracle_derived_cover_composes_with_registered_covers(): void {
+  // A36. {G1, G2} ▷ ⊤_B (G1, G2 declared disjoint; C1 meets G1 in D1 and is declared disjoint from
+  // G2) has the base change {D1} ▷ C1. Transitivity then composes the registered {C1, C2} ▷ B with
+  // that derived cover into {D1, C2} ▷ B, a combination of a cover from the seeds with one
+  // derived later. With E ⊑ C1 colliding on P, only that composite glues P onto B.
+  const bs = twoCellCover();
+  bs.defineBoundary("G1");
+  bs.defineBoundary("G2");
+  bs.declareDisjoint("G1", "G2");
+  bs.declareDisjoint("C1", "G2");
+  bs.defineBoundary("D1", { parents: ["C1", "G1"] });
+  bs.defineBoundary("E", { parents: ["C1"] });
+  bs.registerCover("B", ["C1", "C2"], "cover-B");
+  bs.registerCover(TOP_BOUNDARY, ["G1", "G2"], "cover-top");
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "D1", polarity: "+", item: P },
+      { boundary: "C2", polarity: "+", item: P },
+      { boundary: "E", polarity: "+", item: P },
+      { boundary: "E", polarity: "-", item: P },
+    ],
+  });
+
+  // C2 and E have an unknown overlap with G1 and are not known to overlap G2.
+  assert.deepEqual(m.coverObligations, [
+    { id: "cover-top", target: TOP_BOUNDARY, cells: ["G1", "G2"], validity: "unverified", subBoundaries: ["C2", "E"] },
+  ]);
+  assert.deepEqual(coversOf(m, "C1"), ["C1", "D1"]);
+  assert.deepEqual(coversOf(m, "B"), ["B", "C1, C2", "C2, D1"]);
+  // The base changes of {G1, G2} ▷ ⊤_B to B and to C2 are blocked by G2 and G1 respectively.
+  assert.deepEqual(coversOf(m, "C2"), ["C2"]);
+  expectRow(m, "D1", P, GROUNDED_LIVE);
+  expectRow(m, "C2", P, GROUNDED_LIVE);
+  expectRow(m, "C1", P, { rec: ["true", "false"], live: ["false", "false"], obs: "true", status: "Grounded" });
+  expectRow(m, "B", P, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  expectRow(m, "G1", P, OPEN);
+  expectRow(m, TOP_BOUNDARY, P, { ...OPEN, obs: "true" });
+  assert.deepEqual(revisionKeys(m), [`E ${itemKey(P)}`]);
+  assert.deepEqual(overlapKeys(m), [`D1 E ${itemKey(P)}`]);
+}
+test(
+  "test_oracle_derived_cover_composes_with_registered_covers",
+  test_oracle_derived_cover_composes_with_registered_covers,
+);
+
+function test_oracle_base_change_of_a_valid_cover_is_judged_too(): void {
+  // A39. {C1, C2} ▷ B is valid. Bp ⊑ B is disjoint from C2, and its meet with C1 is registered
+  // as M; Bpp ⊑ Bp meets C1 in N. The registry does not know that N ⊑ M, so Bpp and M have an
+  // unknown overlap. The base change {C1 ⊓ Bp} = {M} ▷ Bp is witnessed (unverified, but derived
+  // covers owe no obligation), and Cover-Gluing lifts +P from M to Bp.
+  const system = (): BoundarySystem => {
+    const bs = twoCellCover();
+    bs.defineBoundary("Bp", { parents: ["B"] });
+    bs.declareDisjoint("Bp", "C2");
+    bs.defineBoundary("M", { parents: ["Bp", "C1"] });
+    bs.defineMeet("Bp", "C1", "M");
+    bs.defineBoundary("Bpp", { parents: ["Bp"] });
+    bs.defineBoundary("N", { parents: ["Bpp", "C1"] });
+    bs.registerCover("B", ["C1", "C2"], "cover-B");
+    return bs;
+  };
+  const observations = [{ boundary: "M", polarity: "+" as const, item: P }];
+  const derived = evaluatePi({ boundaries: system(), observations });
+  assert.deepEqual(derived.coverObligations, []);
+  assert.deepEqual(coversOf(derived, "Bp"), ["Bp", "M"]);
+  assert.deepEqual(coversOf(derived, "Bpp"), ["Bpp", "N"]);
+  expectRow(derived, "Bp", P, GROUNDED_LIVE);
+  expectRow(derived, "B", P, OPEN);
+
+  // The registry also admits declaring Bpp disjoint from M. The registered cover stays valid,
+  // but its base change {M} ▷ Bp is now refuted by Bpp: it is not derived, and +P stays on M.
+  const refuted = system();
+  refuted.declareDisjoint("Bpp", "M");
+  const m = evaluatePi({ boundaries: refuted, observations });
+  assert.deepEqual(m.coverObligations, []);
+  assert.deepEqual(coversOf(m, "Bp"), ["Bp"]);
+  assert.deepEqual(coversOf(m, "Bpp"), ["Bpp", "N"]);
+  expectRow(m, "M", P, GROUNDED_LIVE);
+  expectRow(m, "Bp", P, OPEN);
+}
+test(
+  "test_oracle_base_change_of_a_valid_cover_is_judged_too",
+  test_oracle_base_change_of_a_valid_cover_is_judged_too,
+);
 
 function test_oracle_cover_needs_an_ambiguous_meet_only_where_it_decides(): void {
   // A35. M1 and M2 are two maximal common sub-boundaries of B3 and C1, so their meet is
