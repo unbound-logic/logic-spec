@@ -82,7 +82,7 @@ Every normative item below carries one label from the claim status ladder of [AG
 
 6. `Tested` **Co-Reference & Individuation Across Updates (`≈_B`, `I_B`)** ([`layer5-content-and-coreference`](../docs/design-review.md#layer5-content-and-coreference)):
    - Each handle `t` admissible in `B` (written `t ∈ Dom(B)`) carries an explicit boundary-relative **individuation criterion `I_B(t)`**.
-   - **Domain Monotonicity**: whenever `B' ⊑ B`, `Dom(B') ⊆ Dom(B)`; a sub-regime never admits individuals its parents lack, so a boundary with several parents admits only handles common to all of them. The eigenvariable typing of `∀E` (`eigenDom ⊑ D`) relies on this ([`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import)).
+   - **Domain Monotonicity**: whenever `B' ⊑ B`, `Dom(B') ⊆ Dom(B)`; a sub-regime never admits individuals its parents lack, so a boundary with several parents admits only handles common to all of them. The eigenvariable typing of `∀E` (`eigenDom ⊑ D`) relies on this property, ratified with the domain closure of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import).
    - `≈_B` is a witnessed congruence on `Dom(B)`: reflexive, symmetric, transitive on unquarantined grounds, and substitutive for every relation `R` native to `B`:
      - If `B ⊩⁺ (t₁ ≈_B t₂)` and `B ⊩⁺ R(..., r: t₁, ...)`, then `B ⊩⁺ R(..., r: t₂, ...)` (and identically for `⊩⁻`), recording provenance on both premises.
    - **Multi-Granularity Isolation**: Refining `B_macro` to a finer regime `B_micro ⊑ B_macro` may introduce finer relations not native to `B_macro`; `t₁ ≈_{B_macro} t₂` and `t₁ ≉_{B_micro} t₂` coexist without conflict because congruence is indexed by its boundary.
