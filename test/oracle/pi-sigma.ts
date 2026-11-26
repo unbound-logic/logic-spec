@@ -2,10 +2,13 @@
  * Clean-room oracle for the evaluation program Π(Σ) of spec/core.md §5 item 14.
  *
  * Written from the specification alone (spec/core.md, AGENTS.md, and the design-review
- * entries `audit-spec-kernel-coupling`, `audit-universal-existential-import` and
- * `audit-unregistered-meet-closed-world`). It imports
- * only the item syntax of src/syntax.ts and the boundary algebra of src/boundary.ts and never
- * reads or calls the reference kernel, so the two can be compared by differential testing.
+ * entries `audit-spec-kernel-coupling`, `audit-universal-existential-import`,
+ * `audit-unregistered-meet-closed-world` and `audit-cover-non-vacuity-drift`). It imports
+ * only the item syntax of src/syntax.ts and the base queries of the boundary system in
+ * src/boundary.ts (nonEmptyBoundaries, refines, meetStatus, handlesOf, isAdmissibleHandle,
+ * hasNativeRelation, registeredCovers). It never reads or calls the reference kernel, nor the
+ * boundary system's own cover closure and cover validity check, so the two can be compared by
+ * differential testing.
  *
  * The oracle grounds Π(Σ) over the finite universe 𝔅(Σ) × U(Σ, Q) and computes its
  * well-founded model with the alternating fixpoint (Van Gelder 1989; Van Gelder, Ross and
@@ -22,7 +25,12 @@
  * main commit 7b36043. The oracle follows item 14 as of main commit 9c0fd4d, which also
  * tracks ⊥ and the items of past transitions (A22, A23), and items 4 and 14 as of main commit
  * 5a385ce, which make overlap three-valued: Scoped Cut needs a known overlap, and opposite
- * records across an unknown overlap carry an OverlapUnknown obligation (A26–A32).
+ * records across an unknown overlap carry an OverlapUnknown obligation (A26–A32). It follows
+ * items 5, 7 and 14 as amended in main commits fde28ec and a7377cf (main at c658e38): it judges
+ * every registered cover valid, invalid or unverified, reports the obligations of the last two,
+ * computes the witnessed covers as the registered covers that are not invalid closed under
+ * Axioms 2–4, with a cell of unknown overlap blocking a base change, and reads Withdraw as
+ * leaving a constraint out of the state while its items stay tracked (A33–A38).
  */
 
 import { BOT_BOUNDARY, type BoundarySystem, type MeetStatus } from "../../src/boundary.ts";
@@ -66,21 +74,30 @@ export type PiCollapse = {
   readonly item: Item;
 };
 
-/** Explicit description of an inquiry state Σ and a query set Q. */
+/**
+ * Explicit description of an inquiry state Σ and a query set Q. It lists what is in force: the
+ * observations in G± and the constraints of C_B that are registered and not withdrawn (item 7,
+ * Withdraw; item 14, Constraints). The covers in force are the boundary system's
+ * registeredCovers(), from which Withdraw removes a cover by its identifier (A38).
+ */
 export type PiState = {
   readonly boundaries: BoundarySystem;
   readonly observations: readonly PiObservation[];
+  /** Incompatibilities in force; a withdrawn one is left out and its items go to historyItems. */
   readonly incompatibilities?: readonly PiIncompatibility[];
+  /** Structural collapses in force; a withdrawn one is left out and its items go to historyItems. */
   readonly collapses?: readonly PiCollapse[];
-  /** Quantifier domains D whose closure CloseDomain(D) is witnessed in C_B. */
+  /** Quantifier domains D whose closure CloseDomain(D) is witnessed in C_B and not withdrawn. */
   readonly closedDomains?: readonly string[];
   /** The queried items Q. */
   readonly queries?: readonly Item[];
   /**
-   * Items named by past transitions of Σ that are no longer in force, such as the item of a
-   * retracted observation (A23). They are tracked, so they and their closure belong to
+   * Items named by past transitions of Σ that are no longer in force: the item of a retracted
+   * observation (A23), both sides of a withdrawn incompatibility A ⊥_B C, and both A and A → ⊥
+   * of a withdrawn collapse of A (A38). They are tracked, so they and their closure belong to
    * U(Σ, Q), but they supply no record and no constraint. The oracle derives nothing from
-   * them: for a past collapse of A, list both A and A → ⊥.
+   * them, so the caller lists every item. A withdrawn cover or closure names boundaries, not
+   * items, and adds none.
    */
   readonly historyItems?: readonly Item[];
 };
@@ -116,6 +133,33 @@ export type PiOverlapObligation = {
   readonly item: Item;
 };
 
+/**
+ * The revision obligation item 5 attaches to an invalid or unverified registered cover (A34). It
+ * names the cover and the sub-boundaries B' ⊑ target that its validity rests on; settling their
+ * overlaps or withdrawing the cover discharges it.
+ */
+export type PiCoverObligation = {
+  /** The identifier the cover was registered under by WitnessCover, which Withdraw names. */
+  readonly id: string;
+  readonly target: string;
+  /** The cells as registered. */
+  readonly cells: readonly string[];
+  readonly validity: "invalid" | "unverified";
+  /**
+   * In the order of PiModel.boundaries: for an invalid cover, every B' disjoint from every cell
+   * (the boundaries that refute it); for an unverified cover, every B' known to overlap no cell
+   * and of unknown overlap with at least one (the boundaries that leave it unsettled).
+   */
+  readonly subBoundaries: readonly string[];
+};
+
+/** A witnessed cover {cells} ▷ boundary that no witnessed cover of boundary with fewer cells contains (A36). */
+export type PiWitnessedCover = {
+  readonly boundary: string;
+  /** In the order of PiModel.boundaries. */
+  readonly cells: readonly string[];
+};
+
 export type PiModel = {
   /** 𝔅(Σ), in the order the boundary system lists them. */
   readonly boundaries: readonly string[];
@@ -130,6 +174,17 @@ export type PiModel = {
    * Rev(B, A) obligations and change no local status.
    */
   readonly overlapObligations: readonly PiOverlapObligation[];
+  /**
+   * The ⊆-minimal witnessed covers of every boundary of 𝔅(Σ), the identity covers {B} included,
+   * sorted by boundary, then by cells (A36). They give every cover rule instance of Π(Σ); a
+   * witnessed cover not listed is a superset of a listed cover of the same boundary.
+   */
+  readonly witnessedCovers: readonly PiWitnessedCover[];
+  /**
+   * One obligation for every invalid or unverified registered cover, in registration order
+   * (A34). Separate from the Rev(B, A) and OverlapUnknown obligations; changes no local status.
+   */
+  readonly coverObligations: readonly PiCoverObligation[];
   /** Number of applications of the Gelfond–Lifschitz-style operator Γ. */
   readonly rounds: number;
   /** The row of (boundary, item); throws when the slot is outside 𝔅(Σ) × U(Σ, Q). */
@@ -137,6 +192,12 @@ export type PiModel = {
 };
 
 const POLARITIES: readonly Polarity[] = ["+", "-"];
+
+/**
+ * Bound on the minimal witnessed covers of one state. It is not semantics: past it the oracle
+ * reports an error instead of a truncated closure (item 14, Role; A36).
+ */
+const MAX_WITNESSED_COVERS = 20_000;
 
 function opposite(p: Polarity): Polarity {
   return p === "+" ? "-" : "+";
@@ -381,10 +442,255 @@ export function evaluatePi(state: PiState): PiModel {
     return result;
   };
 
-  // A10: registered covers closed under the item 5 axioms stand in for witnessed covers. A32:
-  // their Meet-Stability pullbacks are computed by the boundary system, not by the oracle.
-  const coversOf = boundaries.map((b) =>
-    bs.witnessedCoversOf(b).map((cells) => cells.map((c) => boundaryIndex(c, "cover cell"))),
+  // ---------------------------------------------------------------- witnessed covers (item 5)
+  // Item 5 as amended in a7377cf: every registered cover is judged against the current
+  // boundaries (A33), an invalid one witnesses nothing, and the witnessed covers are the
+  // registered covers that are not invalid, closed under Axioms 2–4 (A36). The oracle computes
+  // this itself from BoundarySystem.registeredCovers() and meetStatus (A26); it never calls the
+  // boundary system's own cover closure or validity check (A10 as superseded).
+  const byIndex = (x: number, y: number): number => x - y;
+  const describeCover = (target: number, cells: readonly number[]): string =>
+    `{${cells.map(boundaryName).join(", ")}} ▷ ${boundaryName(target)}`;
+
+  const coverObligations: PiCoverObligation[] = [];
+  const seeds: { readonly target: number; readonly cells: readonly number[] }[] = [];
+  for (const cover of bs.registeredCovers()) {
+    if (cover.target === BOT_BOUNDARY) {
+      // A33: ⊥_B has no row and no non-empty sub-boundary to judge a cover of it by.
+      continue;
+    }
+    const target = boundaryIndex(cover.target, `target of cover "${cover.id}"`);
+    const cellSet = new Set<number>();
+    for (const cell of cover.cells) {
+      if (cell === BOT_BOUNDARY) {
+        // A33: a ⊥_B cell is disjoint from every boundary, and ∅ ▷ ⊥_B (Axiom 2) lets
+        // Transitivity drop it, so it is judged as disjoint and left out of the witnessed cover.
+        continue;
+      }
+      const c = boundaryIndex(cell, `cell of cover "${cover.id}"`);
+      if (!isSub(c, target)) {
+        // A16: Axiom 1 (Refinement) is a registration condition; such a state is not a valid Σ.
+        throw new Error(
+          `Π(Σ) oracle: the registered cover "${cover.id}" breaks Axiom 1 of item 5: "${cell}" does not refine "${cover.target}".`,
+        );
+      }
+      cellSet.add(c);
+    }
+    const cells = [...cellSet].sort(byIndex);
+
+    // A33: the sub-boundaries B' ⊑ B range over 𝔅(Σ), B included. B' refutes the cover when it is
+    // disjoint from every cell, and leaves it unsettled when it is known to overlap no cell and
+    // has an unknown overlap with one. A35: a B' with no known overlap and an ambiguous meet with
+    // a cell cannot be classified, which matters only if no B' refutes the cover.
+    const refuting: number[] = [];
+    const unsettled: number[] = [];
+    let undecided: { readonly sub: number; readonly cell: number; readonly reason: string } | undefined;
+    for (const sub of subsOf[target] ?? []) {
+      let overlap = false;
+      let unknown = false;
+      let ambiguous: { readonly cell: number; readonly reason: string } | undefined;
+      for (const c of cells) {
+        const m = pairMeet(sub, c);
+        if (m.kind === "overlap") {
+          overlap = true;
+          break;
+        }
+        if (m.kind === "unknown") {
+          unknown = true;
+        } else if (m.kind === "ambiguous") {
+          ambiguous ??= { cell: c, reason: m.reason };
+        }
+      }
+      if (overlap) {
+        continue;
+      }
+      if (ambiguous !== undefined) {
+        undecided ??= { sub, ...ambiguous };
+      } else if (unknown) {
+        unsettled.push(sub);
+      } else {
+        refuting.push(sub);
+      }
+    }
+
+    // A34: one obligation per invalid or unverified cover, naming it and the sub-boundaries its
+    // validity rests on.
+    const registered = { id: cover.id, target: cover.target, cells: [...cover.cells] };
+    if (refuting.length > 0) {
+      coverObligations.push({
+        ...registered,
+        validity: "invalid",
+        subBoundaries: refuting.map(boundaryName),
+      });
+      continue; // an invalid cover witnesses nothing, and no cover is derived from it
+    }
+    if (undecided !== undefined) {
+      throw new Error(
+        `Π(Σ) oracle: judging the cover "${cover.id}" (item 5) needs the meet of "${boundaryName(undecided.sub)}" and "${boundaryName(undecided.cell)}", which is ambiguous (${undecided.reason}).`,
+      );
+    }
+    if (unsettled.length > 0) {
+      coverObligations.push({
+        ...registered,
+        validity: "unverified",
+        subBoundaries: unsettled.map(boundaryName),
+      });
+    }
+    seeds.push({ target, cells }); // an unverified cover still witnesses
+  }
+
+  // A36: the oracle keeps, for each boundary, the ⊆-minimal witnessed covers. A cover with more
+  // cells than another cover of the same boundary gives rule instances with more premises, which
+  // the well-founded model never needs, and Axioms 3 and 4 derive from it only covers that are
+  // supersets of covers derived from the smaller one; so the minimal covers of the closure are
+  // those of this antichain closure. Transitivity is applied one cell at a time, which reaches the
+  // same minimal covers as replacing every cell at once.
+  const coverKey = (cells: readonly number[]): string => cells.join(",");
+  const isSubset = (small: readonly number[], large: readonly number[]): boolean => {
+    let j = 0;
+    for (const x of small) {
+      while (j < large.length && (large[j] ?? -1) < x) {
+        j++;
+      }
+      if (large[j] !== x) {
+        return false;
+      }
+      j++;
+    }
+    return true;
+  };
+  // Axiom 2 (Identity): {B} ▷ B for every B ∈ 𝔅(Σ).
+  const coverSets: Map<string, readonly number[]>[] = allB.map(
+    (b) => new Map([[coverKey([b]), [b] as readonly number[]]]),
+  );
+  const coversAt = (b: number): Map<string, readonly number[]> => {
+    const covers = coverSets[b];
+    if (covers === undefined) {
+      throw new Error(`Π(Σ) oracle: internal error, boundary index ${b} out of range.`);
+    }
+    return covers;
+  };
+  let coverCount = nb;
+  const addCover = (target: number, cells: readonly number[], origin: () => string): boolean => {
+    if (cells.length === 0) {
+      // A37: Axiom 5 forbids ∅ ▷ B for a non-empty B, and a guessed closure would be wrong.
+      throw new Error(
+        `Π(Σ) oracle: ${origin()} derives ∅ ▷ ${boundaryName(target)}, which Axiom 5 (Non-Vacuity) of item 5 forbids (A37).`,
+      );
+    }
+    const covers = coversAt(target);
+    for (const existing of covers.values()) {
+      if (isSubset(existing, cells)) {
+        return false;
+      }
+    }
+    for (const [key, existing] of covers) {
+      if (isSubset(cells, existing)) {
+        covers.delete(key);
+        coverCount -= 1;
+      }
+    }
+    covers.set(coverKey(cells), cells);
+    coverCount += 1;
+    if (coverCount > MAX_WITNESSED_COVERS) {
+      throw new Error(
+        `Π(Σ) oracle: the witnessed covers exceed ${MAX_WITNESSED_COVERS} minimal covers; reporting an error instead of a truncated closure (item 14, Role).`,
+      );
+    }
+    return true;
+  };
+  for (const { target, cells } of seeds) {
+    addCover(target, cells, () => `the registered cover ${describeCover(target, cells)}`);
+  }
+
+  // A35: a base change that needs an ambiguous meet is an error only if its source cover is one of
+  // the minimal witnessed covers at the end; a source that a smaller cover replaced is not needed.
+  const pendingAmbiguous = new Map<
+    string,
+    { readonly target: number; readonly cells: readonly number[]; readonly sub: number; readonly cell: number; readonly reason: string }
+  >();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const b of allB) {
+      const covers = coversAt(b);
+      for (const cells of [...covers.values()]) {
+        if (!covers.has(coverKey(cells))) {
+          continue; // replaced by a smaller cover during this pass
+        }
+        // Axiom 4 (Transitivity): replace one cell c by a witnessed cover of c.
+        for (const c of cells) {
+          if (c === b) {
+            continue; // only the identity cover {B} holds B itself
+          }
+          for (const refinement of [...coversAt(c).values()]) {
+            if (refinement.length === 1 && refinement[0] === c) {
+              continue;
+            }
+            const next = [...new Set([...cells.filter((x) => x !== c), ...refinement])].sort(byIndex);
+            if (
+              addCover(b, next, () => `Transitivity of ${describeCover(b, cells)} with ${describeCover(c, refinement)}`)
+            ) {
+              changed = true;
+            }
+          }
+        }
+        // Axiom 3 (Meet-Stability): {Bᵢ ⊓ B' | Bᵢ known to overlap B'} ▷ B' for B' ⊑ B, when every
+        // cell is known to overlap B' or disjoint from it; a cell of unknown overlap blocks it.
+        for (const sub of subsOf[b] ?? []) {
+          if (sub === b) {
+            continue;
+          }
+          const meets = new Set<number>();
+          let blocked = false;
+          let ambiguous: { readonly cell: number; readonly reason: string } | undefined;
+          for (const c of cells) {
+            const m = pairMeet(c, sub);
+            if (m.kind === "unknown") {
+              blocked = true;
+              break;
+            }
+            if (m.kind === "ambiguous") {
+              ambiguous ??= { cell: c, reason: m.reason };
+            } else if (m.kind === "overlap") {
+              meets.add(m.meet);
+            }
+          }
+          if (blocked) {
+            continue;
+          }
+          if (ambiguous !== undefined) {
+            pendingAmbiguous.set(`${b}|${coverKey(cells)}|${sub}`, { target: b, cells, sub, ...ambiguous });
+            continue;
+          }
+          const pulledBack = [...meets].sort(byIndex);
+          if (
+            addCover(sub, pulledBack, () => `the base change of ${describeCover(b, cells)} to ${boundaryName(sub)}`)
+          ) {
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+  for (const p of pendingAmbiguous.values()) {
+    if (coversAt(p.target).has(coverKey(p.cells))) {
+      throw new Error(
+        `Π(Σ) oracle: the base change of ${describeCover(p.target, p.cells)} to ${boundaryName(p.sub)} (item 5, Axiom 3) needs the meet of "${boundaryName(p.cell)}" and "${boundaryName(p.sub)}", which is ambiguous (${p.reason}).`,
+      );
+    }
+  }
+  const compareCells = (x: readonly number[], y: readonly number[]): number => {
+    for (let i = 0; i < Math.min(x.length, y.length); i++) {
+      const d = (x[i] ?? 0) - (y[i] ?? 0);
+      if (d !== 0) {
+        return d;
+      }
+    }
+    return x.length - y.length;
+  };
+  const coversOf = allB.map((b) => [...coversAt(b).values()].sort(compareCells));
+  const witnessedCovers: PiWitnessedCover[] = allB.flatMap((b) =>
+    (coversOf[b] ?? []).map((cells) => ({ boundary: boundaryName(b), cells: cells.map(boundaryName) })),
   );
 
   // ---------------------------------------------------------------- ground program
@@ -728,7 +1034,8 @@ export function evaluatePi(state: PiState): PiModel {
     }
   }
 
-  // Cover-Gluing: (B, p, A) from Live (Bᵢ, p, A) for every cell, {Bᵢ} ▷ B other than {B}.
+  // Cover-Gluing: (B, p, A) from Live (Bᵢ, p, A) for every cell, {Bᵢ} ▷ B other than {B}. A
+  // minimal cover other than {B} never holds B itself (A36).
   for (const b of allB) {
     for (const cells of coversOf[b] ?? []) {
       if (cells.length === 1 && cells[0] === b) {
@@ -930,6 +1237,8 @@ export function evaluatePi(state: PiState): PiModel {
     rows,
     revisionObligations,
     overlapObligations,
+    witnessedCovers,
+    coverObligations,
     rounds,
     at(boundary: string, item: Item): PiRow {
       const row = rowIndex.get(`${boundary}\u0000${itemKey(item)}`);
