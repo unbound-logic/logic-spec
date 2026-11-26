@@ -137,21 +137,22 @@ export class BoundarySystem {
         handleMap.set(h.id, h);
       }
     } else {
-      for (const p of parentList) {
-        const parentHandles = this.#handles.get(p);
-        if (parentHandles === undefined) {
-          continue;
-        }
-        for (const [hid, spec] of parentHandles) {
-          if (config.handleFilter === undefined || config.handleFilter(spec)) {
-            handleMap.set(hid, spec);
-          }
+      // Default: the handles common to every declared parent (core.md §2 item 6), so a
+      // boundary with several parents admits only individuals all of them admit.
+      const declaredParents = parentList.filter((p) => p !== TOP_BOUNDARY);
+      const [first, ...rest] = declaredParents.map((p) => this.#handles.get(p) ?? new Map<string, HandleSpec>());
+      for (const [hid, spec] of first ?? new Map<string, HandleSpec>()) {
+        if (
+          rest.every((other) => other.has(hid)) &&
+          (config.handleFilter === undefined || config.handleFilter(spec))
+        ) {
+          handleMap.set(hid, spec);
         }
       }
     }
 
-    // Domain monotonicity: Dom(D') ⊆ Dom(D) whenever D' ⊑ D (`audit-universal-existential-import`).
-    // ⊤_B carries no handle registry, so only declared parents constrain the sub-boundary.
+    // Domain monotonicity (core.md §2 item 6): Dom(D') ⊆ Dom(D) whenever D' ⊑ D. ⊤_B carries
+    // no handle registry, so only declared parents constrain the sub-boundary.
     for (const p of parentList) {
       if (p === TOP_BOUNDARY) {
         continue;
