@@ -355,6 +355,8 @@ type StageRecord = {
   readonly incompatibilities: readonly IncompatibilityConstraint[];
   readonly structuralCollapses: readonly StructuralCollapse[];
   readonly closedDomains: ReadonlySet<string>;
+  /** The items tracked by Σ: ⊥ and every item named by a transition so far, retracted ones included. */
+  readonly trackedItems: ReadonlyMap<string, Item>;
   readonly boundarySnapshot: BoundarySystem;
 };
 
@@ -370,6 +372,7 @@ export class InquiryEngine {
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: StructuralCollapse[] = [];
   readonly #closedDomains = new Set<string>();
+  readonly #trackedItems = new Map<string, Item>();
   readonly #stageArchive = new Map<number, StageRecord>();
   readonly #history: string[] = [];
   #stage = 0;
@@ -377,6 +380,7 @@ export class InquiryEngine {
   constructor(boundaries: BoundarySystem, options: EngineOptions = {}) {
     this.boundaries = boundaries;
     this.monotoneOnly = options.monotoneOnly ?? false;
+    this.#track(bottom());
     this.#captureStage();
   }
 
@@ -446,6 +450,10 @@ export class InquiryEngine {
       );
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    this.#track(item);
+    for (const dep of requiredGrounds) {
+      this.#track(dep.item);
+    }
     this.#theorems.set(theoremId, {
       theoremId,
       boundary,
@@ -516,6 +524,8 @@ export class InquiryEngine {
       throw new Error(`Cannot add material incompatibility on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    this.#track(left);
+    this.#track(right);
     this.#incompatibilities.push({ boundary, left, right });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Constrain(${itemKey(left)} ⊥_${boundary} ${itemKey(right)})`);
@@ -528,6 +538,8 @@ export class InquiryEngine {
       throw new Error(`Cannot add structural collapse on "${BOT_BOUNDARY}".`);
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    this.#track(item);
+    this.#track(implies(item, bottom()));
     this.#structuralCollapses.push({ boundary, item });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Collapse(${boundary} ⊓ [${itemKey(item)}] = ⊥_B)`);
@@ -543,17 +555,25 @@ export class InquiryEngine {
   }
 
   /**
-   * Register CloseDomain(D) in C_B: the handles of Dom(D) at registration exhaust the
-   * quantifier domain D (`audit-universal-existential-import`). Only a closed domain
-   * D ≠ ⊥_B licenses the enumerative rules `∀` generic and `∃` exclusion of item 14; the
-   * closure applies to D itself, never to its sub-boundaries.
+   * CloseDomain(D) (spec/core.md §2 item 7): register in C_B, for a boundary D ≠ ⊥_B, that the
+   * handles of Dom(D) exhaust D. Only a closed domain licenses the enumerative rules `∀`
+   * generic and `∃` exclusion of item 14; the closure applies to D itself, never to its
+   * sub-boundaries.
    */
   closeDomain(domain: string): void {
+    if (domain === BOT_BOUNDARY) {
+      throw new Error(`CloseDomain requires a boundary D ≠ "${BOT_BOUNDARY}".`);
+    }
     this.boundaries.handlesOf(domain);
     this.#closedDomains.add(domain);
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:CloseDomain(${domain})`);
     this.#captureStage();
+  }
+
+  /** True iff CloseDomain(domain) is registered in C_B at the current stage. */
+  isDomainClosed(domain: string): boolean {
+    return this.#closedDomains.has(domain);
   }
 
   /** Verify that targetBoundary and all boundaries referenced inside targetItem existed as non-empty at `stage`. */
@@ -795,6 +815,7 @@ export class InquiryEngine {
         );
       }
     }
+    this.#track(item);
     const key = itemKey(item);
     this.#baseObservations.set(baseId, { baseId, boundary, polarity, item, key });
     this.#stage += 1;
@@ -821,34 +842,28 @@ export class InquiryEngine {
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
       closedDomains: new Set(this.#closedDomains),
+      trackedItems: new Map(this.#trackedItems),
       boundarySnapshot: this.boundaries.clone(),
     });
+  }
+
+  /** Track an item named by a transition; it stays tracked after a Retract (item 14). */
+  #track(item: Item): void {
+    const key = itemKey(item);
+    if (!this.#trackedItems.has(key)) {
+      this.#trackedItems.set(key, item);
+    }
   }
 }
 
 /**
- * The items tracked by Σ (item 14): the items of its base observations and recorded theorems
- * (the conclusion and the grounds it cites), both sides of each incompatibility, and both
- * A and A → ⊥ for each structural collapse B ⊓ [A] = ⊥_B.
+ * The items tracked by Σ (item 14): ⊥ and every item named by a transition in the history of
+ * Σ, retracted ones included: the items of base observations and recorded theorems (the
+ * conclusion and the grounds it cites), both sides of each incompatibility, and both A and
+ * A → ⊥ for each structural collapse B ⊓ [A] = ⊥_B.
  */
 function trackedItemsOf(record: StageRecord): Item[] {
-  const out: Item[] = [];
-  for (const o of record.baseObservations.values()) {
-    out.push(o.item);
-  }
-  for (const t of record.theorems.values()) {
-    out.push(t.item);
-    for (const dep of t.requiredGrounds) {
-      out.push(dep.item);
-    }
-  }
-  for (const c of record.incompatibilities) {
-    out.push(c.left, c.right);
-  }
-  for (const c of record.structuralCollapses) {
-    out.push(c.item, implies(c.item, bottom()));
-  }
-  return out;
+  return [...record.trackedItems.values()];
 }
 
 /**
