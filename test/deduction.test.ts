@@ -41,11 +41,11 @@ function test_standalone_cover_gluing_and_quarantine_propagation(): void {
 
   // Standalone engine Cover-Gluing glues both polarities on complete cover and skips incomplete cover
   const snap0 = engine.evaluate([p, q, r]);
-  assert.equal(snap0.statusOf("Z", p), "Grounded");
+  assert.equal(snap0.localStatus("Z", p), "Grounded");
   assert.equal(snap0.isLive("Z", "+", p), true);
-  assert.equal(snap0.statusOf("Z", q), "Excluded");
+  assert.equal(snap0.localStatus("Z", q), "Excluded");
   assert.equal(snap0.isLive("Z", "-", q), true);
-  assert.equal(snap0.statusOf("Z", r), "Open");
+  assert.equal(snap0.localStatus("Z", r), "Open");
 
   // Natural deduction cover-glue rule succeeds on witnessed cover and rejects incomplete cover
   const gluedProof = verifyDerivation(engine, {
@@ -104,15 +104,15 @@ function test_standalone_cover_gluing_and_quarantine_propagation(): void {
   assert.equal(eAdmit.evaluate([p]).isLive("Z", "+", p), true);
   eAdmit.observeNegative("Odd", p, "w_odd_refute");
   const snapAdmitColl = eAdmit.evaluate([p]);
-  assert.equal(snapAdmitColl.statusOf("Odd", p), "Collision");
+  assert.equal(snapAdmitColl.localStatus("Odd", p), "Collision");
   assert.equal(snapAdmitColl.isObstructed("Z", p), true);
   assert.equal(snapAdmitColl.isLive("Z", "+", p), false);
 
   // Without an explicit entry on Z, colliding one cover cell suppresses Rule I gluing cleanly (no ghost Z ⊩+ P)
   engine.observeNegative("Odd", p, "w_odd_refute");
   const snapColl = engine.evaluate([p]);
-  assert.equal(snapColl.statusOf("Odd", p), "Collision");
-  assert.equal(snapColl.statusOf("Z", p), "Open");
+  assert.equal(snapColl.localStatus("Odd", p), "Collision");
+  assert.equal(snapColl.localStatus("Z", p), "Open");
   assert.equal(snapColl.allGrounds("Z", "+", p).length, 0);
   assert.equal(snapColl.isLive("Z", "+", p), false);
 }
@@ -249,13 +249,13 @@ function test_natural_deduction_implies_intro_and_anti_vacuity_quarantine(): voi
   // Colliding C removes Live authority from admitted theorem B ⊩+ (A → C)
   engine.observeNegative("B", c, "w_nc");
   const snapColl = engine.evaluate();
-  assert.equal(snapColl.statusOf("B", c), "Collision");
+  assert.equal(snapColl.localStatus("B", c), "Collision");
   assert.equal(snapColl.isLive("B", "+", implies(a, c)), false);
 
   // Retracting w_c cleanly withdraws the admitted theorem back to Open (zero ghost theorem)
   assert.equal(engine.retract("w_c"), true);
   const snapRetract = engine.evaluate([implies(a, c)]);
-  assert.equal(snapRetract.statusOf("B", implies(a, c)), "Open");
+  assert.equal(snapRetract.localStatus("B", implies(a, c)), "Open");
 }
 
 function test_schematic_forall_intro_eigenvariable_soundness_on_open_domains(): void {
@@ -705,10 +705,10 @@ function test_admitted_theorem_incompat_persistence_and_intermediate_quarantine(
   );
   assert.equal(admitIncompat.ok, true);
   assert.equal(e3A.evaluate().isLive("B", "+", flip(c)), true);
-  assert.equal(e3A.evaluate().statusOf("B", flip(c)), "Grounded");
+  assert.equal(e3A.evaluate().localStatus("B", flip(c)), "Grounded");
 
   assert.equal(e3A.retract("wa"), true);
-  assert.equal(e3A.evaluate([flip(c)]).statusOf("B", flip(c)), "Open");
+  assert.equal(e3A.evaluate([flip(c)]).localStatus("B", flip(c)), "Open");
 
   // 3B: Theorem relying on derived intermediate +(P ∧ Q) must be quarantined when (B, P ∧ Q) collides
   const e3B = new InquiryEngine(b);
@@ -735,7 +735,7 @@ function test_admitted_theorem_incompat_persistence_and_intermediate_quarantine(
 
   e3B.observeNegative("B", pAndQ, "wnpq");
   const snapColl = e3B.evaluate();
-  assert.equal(snapColl.statusOf("B", pAndQ), "Collision");
+  assert.equal(snapColl.localStatus("B", pAndQ), "Collision");
   assert.equal(snapColl.isLive("B", "+", implies(r, pAndQ)), false);
 
   assert.equal(e3B.retract("wnpq"), true);
@@ -794,11 +794,11 @@ function test_glivenko_double_imposs_does_not_derive_lem_or_dne(): void {
 
   // imposs-excl derives -(lemP → ⊥), yet must NOT invert into +(P ∨ (P → ⊥)) or +P!
   const snap = eMin.evaluate([p, lemP, negLemP, glivenkoFormula]);
-  assert.equal(snap.statusOf("B", glivenkoFormula), "Grounded");
-  assert.equal(snap.statusOf("B", negLemP), "Excluded");
-  assert.equal(snap.statusOf("B", lemP), "Open");
+  assert.equal(snap.localStatus("B", glivenkoFormula), "Grounded");
+  assert.equal(snap.localStatus("B", negLemP), "Excluded");
+  assert.equal(snap.localStatus("B", lemP), "Open");
   assert.equal(snap.allGrounds("B", "+", lemP).length, 0);
-  assert.equal(snap.statusOf("B", p), "Open");
+  assert.equal(snap.localStatus("B", p), "Open");
   assert.equal(snap.allGrounds("B", "+", p).length, 0);
 }
 

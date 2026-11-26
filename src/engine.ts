@@ -29,7 +29,7 @@ import {
   type Polarity,
 } from "./syntax.ts";
 
-export type DerivedStatus = "Open" | "Grounded" | "Excluded" | "Collision";
+export type LocalStatus = "Open" | "Grounded" | "Excluded" | "Collision";
 
 /** Authority of a present record (spec/core.md §5 item 14, Reporting). */
 export type Authority = "Live" | "Undetermined" | "Quarantined";
@@ -81,7 +81,7 @@ export type M1Result =
       readonly ok: true;
       readonly fromBoundary: string;
       readonly toBoundary: string;
-      readonly originalStatusBefore: DerivedStatus;
+      readonly originalStatusBefore: LocalStatus;
       readonly originalExcludedPreserved: boolean;
     }
   | {
@@ -270,7 +270,7 @@ export class EvaluationSnapshot {
    * Local status of (boundary, item) under item 14: `Collision` when coll(B, A) is true or
    * undefined; otherwise `Grounded`, `Excluded` or `Open` by its present (true) records.
    */
-  statusOf(boundary: string, item: Item): DerivedStatus {
+  localStatus(boundary: string, item: Item): LocalStatus {
     const s = this.#slot(boundary, item);
     if (s === undefined) {
       return "Open";
@@ -679,7 +679,7 @@ export class InquiryEngine {
     }
 
     const beforeSnap = this.evaluate([req.originalUniversal]);
-    const statusBefore = beforeSnap.statusOf(req.fromBoundary, req.originalUniversal);
+    const statusBefore = beforeSnap.localStatus(req.fromBoundary, req.originalUniversal);
     if (statusBefore !== "Excluded" && statusBefore !== "Collision") {
       return {
         ok: false,
@@ -772,7 +772,7 @@ export class InquiryEngine {
             req.originalUniversal.variable,
             h.id,
           );
-          const targetStatus = critSnap.statusOf(req.fromBoundary, targetInstance);
+          const targetStatus = critSnap.localStatus(req.fromBoundary, targetInstance);
           if (targetStatus === "Excluded" || targetStatus === "Collision") {
             return false;
           }
@@ -891,7 +891,7 @@ export class InquiryEngine {
       const priorSnap = this.#evaluateRecord(priorRecord, [it.targetItem]);
       const holds =
         it.targetStatus !== undefined
-          ? priorSnap.statusOf(it.targetBoundary, it.targetItem) === it.targetStatus
+          ? priorSnap.localStatus(it.targetBoundary, it.targetItem) === it.targetStatus
           : priorSnap.isLive(it.targetBoundary, it.targetPolarity, it.targetItem);
       reflectionValues.push({ item: it, polarity: holds ? "+" : "-" });
     }

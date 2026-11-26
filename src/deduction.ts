@@ -1171,7 +1171,7 @@ function verifyRoot(
         const priorSnap = engine.evaluateAtStage(targetStage, [targetItem]);
         const holds =
           targetStatus !== undefined
-            ? priorSnap.statusOf(targetBoundary, targetItem) === targetStatus
+            ? priorSnap.localStatus(targetBoundary, targetItem) === targetStatus
             : priorSnap.isLive(targetBoundary, targetPolarity, targetItem);
         return {
           ok: true,

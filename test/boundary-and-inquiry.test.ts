@@ -113,11 +113,11 @@ function test_coreference_multi_granularity_and_anti_equivocation(): void {
 
   const snap = engine.evaluate([nav1, equiv("B_micro", "river_t0", "river_t1")]);
   // Native relation Navigable transfers via ≈_{B_macro}
-  assert.equal(snap.statusOf("B_macro", nav1), "Grounded");
+  assert.equal(snap.localStatus("B_macro", nav1), "Grounded");
   assert.equal(snap.isLive("B_macro", "+", nav1), true);
   // Multi-granularity isolation: ≈_{B_macro} does not force IdenticalMolecules in B_micro
-  assert.equal(snap.statusOf("B_micro", mol0), "Grounded");
-  assert.equal(snap.statusOf("B_micro", mol1), "Excluded");
+  assert.equal(snap.localStatus("B_micro", mol0), "Grounded");
+  assert.equal(snap.localStatus("B_micro", mol1), "Excluded");
   assert.equal(snap.isCollisionFree(), true);
 
   // Anti-equivocation guard (worked-examples §2 Case 2C): bird_99 fails I_Swan
@@ -143,9 +143,9 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   const e0 = new InquiryEngine(b0);
   const planet = atom("Exists", [{ role: "body", handle: "planet_x" }]);
   e0.observeNegative("B", planet, "dust_artifact");
-  assert.equal(e0.evaluate().statusOf("B", planet), "Excluded");
+  assert.equal(e0.evaluate().localStatus("B", planet), "Excluded");
   assert.equal(e0.retract("dust_artifact"), true);
-  assert.equal(e0.evaluate().statusOf("B", planet), "Open");
+  assert.equal(e0.evaluate().localStatus("B", planet), "Open");
   assert.equal(e0.transitionLog.length, 2);
   assert.match(e0.transitionLog[0] ?? "", /Observe-/);
   assert.match(e0.transitionLog[1] ?? "", /Retract/);
@@ -154,23 +154,23 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   const eSeq1 = new InquiryEngine(b0);
   eSeq1.observePositive("B", planet, "w_p");
   assert.equal(eSeq1.retract("w_p"), true);
-  assert.equal(eSeq1.evaluate().statusOf("B", planet), "Open");
+  assert.equal(eSeq1.evaluate().localStatus("B", planet), "Open");
 
   const eSeq2 = new InquiryEngine(b0);
   assert.equal(eSeq2.retract("w_p"), false);
   eSeq2.observePositive("B", planet, "w_p");
-  assert.equal(eSeq2.evaluate().statusOf("B", planet), "Grounded");
+  assert.equal(eSeq2.evaluate().localStatus("B", planet), "Grounded");
 
   // MT-6 Quarantine Reinstatement: retracting one colliding side restores Live to survivor
   const eRein = new InquiryEngine(b0);
   eRein.observePositive("B", planet, "w_pos");
   eRein.observeNegative("B", planet, "w_neg");
   const snapColl = eRein.evaluate();
-  assert.equal(snapColl.statusOf("B", planet), "Collision");
+  assert.equal(snapColl.localStatus("B", planet), "Collision");
   assert.equal(snapColl.isLive("B", "+", planet), false);
   assert.equal(eRein.retract("w_neg"), true);
   const snapRein = eRein.evaluate();
-  assert.equal(snapRein.statusOf("B", planet), "Grounded");
+  assert.equal(snapRein.localStatus("B", planet), "Grounded");
   assert.equal(snapRein.isLive("B", "+", planet), true);
 
   // Part B: worked-examples §2 Case 2A — ℝ \ {0} passes M1 + M2
@@ -204,7 +204,7 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     criterionItem: flip(atom("AddId", [{ role: "el", handle: "x" }])),
   });
   assert.equal(resR.ok, true);
-  assert.equal(eMath.evaluate([genR]).statusOf("R", genR), "Excluded");
+  assert.equal(eMath.evaluate([genR]).localStatus("R", genR), "Excluded");
 
   // Part C: worked-examples §2 Case 2B — Swan #402 M1 rejections and admissible M1+M2 split
   const bBio = new BoundarySystem();
@@ -239,7 +239,7 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     "obs_eu_habitat",
     { handle: "swan_101", criterion: "I_Swan(cygnus)" },
   );
-  assert.equal(eBio.evaluate().statusOf("Swan", genSwan), "Collision");
+  assert.equal(eBio.evaluate().localStatus("Swan", genSwan), "Collision");
 
   // Attempt 1: δ₁(x) := White(x) -> refused M1(i) circular
   const att1 = eBio.refineBoundary({
@@ -292,7 +292,7 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
     ),
   });
   assert.equal(att3.ok, true);
-  assert.equal(eBio.evaluate().statusOf("Swan", genSwan), "Excluded");
+  assert.equal(eBio.evaluate().localStatus("Swan", genSwan), "Excluded");
 }
 
 function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities(): void {
@@ -427,7 +427,7 @@ function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_struc
     criterionItem: habX,
   });
   assert.equal(resAdmitted.ok, true);
-  assert.equal(eProxy.evaluate([genSwan]).statusOf("Swan", genSwan), "Excluded");
+  assert.equal(eProxy.evaluate([genSwan]).localStatus("Swan", genSwan), "Excluded");
 
   // Structural singularity exemption: ℝ \ {0} removes only structural handle "0", needing no extra empirical witness
   const bMath = new BoundarySystem();
@@ -617,10 +617,10 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   const constrainedAll = forall("x", "D", p("x"), delta("x"));
   const constrainedEx = exists("x", "D", q("x"), delta("x"));
   const snapDom = eDom.evaluate([constrainedAll, constrainedEx]);
-  assert.equal(snapDom.statusOf("D", constrainedAll), "Grounded");
+  assert.equal(snapDom.localStatus("D", constrainedAll), "Grounded");
   assert.equal(snapDom.isLive("D", "+", constrainedAll), true);
   assert.equal(snapDom.allGrounds("D", "+", constrainedEx).length, 0);
-  assert.equal(snapDom.statusOf("D", constrainedEx), "Excluded");
+  assert.equal(snapDom.localStatus("D", constrainedEx), "Excluded");
   assert.equal(snapDom.isLive("D", "-", constrainedEx), true);
 
   // Live-gated exists-intro: collided +P(t1) must NOT witness +∃(x : D) P(x)
@@ -631,7 +631,7 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   eExLive.observeNegative("D", exP, "w_nex");
   const snapEx = eExLive.evaluate([exP]);
   assert.equal(snapEx.allGrounds("D", "+", exP).length, 0);
-  assert.equal(snapEx.statusOf("D", exP), "Excluded");
+  assert.equal(snapEx.localStatus("D", exP), "Excluded");
   assert.equal(snapEx.isLive("D", "-", exP), true);
 }
 
@@ -695,8 +695,8 @@ function test_close_domain_gates_enumerative_quantifiers(): void {
   // Unclosed domain: enumeration never grounds +∀; +∃ stays open-world (one witness suffices).
   const stageOpen = e.stage;
   let snap = e.evaluate([allP, exP]);
-  assert.equal(snap.statusOf("D", allP), "Open");
-  assert.equal(snap.statusOf("D", exP), "Grounded");
+  assert.equal(snap.localStatus("D", allP), "Open");
+  assert.equal(snap.localStatus("D", exP), "Grounded");
   assert.equal(e.isDomainClosed("D"), false);
 
   // CloseDomain(D) is a stage-archived transition that licenses enumerative +∀.
@@ -705,19 +705,19 @@ function test_close_domain_gates_enumerative_quantifiers(): void {
   assert.equal(e.transitionLog.at(-1), `Σ${e.stage}:CloseDomain(D)`);
   assert.equal(e.isDomainClosed("D"), true);
   snap = e.evaluate([allP]);
-  assert.equal(snap.statusOf("D", allP), "Grounded");
+  assert.equal(snap.localStatus("D", allP), "Grounded");
   assert.equal(snap.isLive("D", "+", allP), true);
   assert.ok(
     snap
       .liveGrounds("D", "+", allP)
       .some((g) => g.provenance.kind === "derived" && g.provenance.baseLeaves.includes("@closure:D")),
   );
-  assert.equal(e.evaluateAtStage(stageOpen, [allP]).statusOf("D", allP), "Open");
+  assert.equal(e.evaluateAtStage(stageOpen, [allP]).localStatus("D", allP), "Open");
 
   // The closure belongs to D alone and does not pass to its sub-boundary D_sub.
   const allPSub = forall("x", "D_sub", p("x"));
   assert.equal(e.isDomainClosed("D_sub"), false);
-  assert.equal(e.evaluate([allPSub]).statusOf("D_sub", allPSub), "Open");
+  assert.equal(e.evaluate([allPSub]).localStatus("D_sub", allPSub), "Open");
 
   // -∃ by enumeration needs the closure as well; an exclusion record per handle suffices.
   e.observeNegative("D", q("t1"), "w_nq1");
@@ -725,36 +725,36 @@ function test_close_domain_gates_enumerative_quantifiers(): void {
   const exQ = exists("x", "D", q("x"));
   const exQSub = exists("x", "D_sub", q("x"));
   snap = e.evaluate([exQ, exQSub]);
-  assert.equal(snap.statusOf("D", exQ), "Excluded");
+  assert.equal(snap.localStatus("D", exQ), "Excluded");
   assert.equal(snap.isLive("D", "-", exQ), true);
-  assert.equal(snap.statusOf("D_sub", exQSub), "Open");
+  assert.equal(snap.localStatus("D_sub", exQSub), "Open");
 
   // An empty D_δ: every handle carries Live -δ, so +∀ holds vacuously on the closed domain.
   e.observeNegative("D", r("t1"), "w_nr1");
   e.observeNegative("D", r("t2"), "w_nr2");
   const allQGivenR = forall("x", "D", q("x"), r("x"));
   snap = e.evaluate([allQGivenR]);
-  assert.equal(snap.statusOf("D", allQGivenR), "Grounded");
+  assert.equal(snap.localStatus("D", allQGivenR), "Grounded");
   assert.equal(snap.isLive("D", "+", allQGivenR), true);
 
   // An empty Dom(D): Open while unclosed, vacuous +∀ and -∃ once closed (no admissible witness needed).
   const allEmpty = forall("x", "Empty", p("x"));
   const exEmpty = exists("x", "Empty", p("x"));
   snap = e.evaluate([allEmpty, exEmpty]);
-  assert.equal(snap.statusOf("D", allEmpty), "Open");
-  assert.equal(snap.statusOf("D", exEmpty), "Open");
+  assert.equal(snap.localStatus("D", allEmpty), "Open");
+  assert.equal(snap.localStatus("D", exEmpty), "Open");
   e.closeDomain("Empty");
   snap = e.evaluate([allEmpty, exEmpty]);
-  assert.equal(snap.statusOf("D", allEmpty), "Grounded");
+  assert.equal(snap.localStatus("D", allEmpty), "Grounded");
   assert.equal(snap.isLive("D", "+", allEmpty), true);
-  assert.equal(snap.statusOf("D", exEmpty), "Excluded");
+  assert.equal(snap.localStatus("D", exEmpty), "Excluded");
   assert.equal(snap.isLive("D", "-", exEmpty), true);
 
   // D ≠ ⊥_B: ⊥_B can never be closed, so a quantifier over it is never grounded by enumeration.
   assert.throws(() => e.closeDomain(BOT_BOUNDARY), /CloseDomain requires a boundary D ≠/);
   assert.throws(() => e.closeDomain("Nowhere"), /Unknown boundary/);
   const allBot = forall("x", BOT_BOUNDARY, p("x"));
-  assert.equal(e.evaluate([allBot]).statusOf("D", allBot), "Open");
+  assert.equal(e.evaluate([allBot]).localStatus("D", allBot), "Open");
 }
 
 function test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles(): void {
@@ -976,7 +976,7 @@ function test_overlap_unknown_records_obligation_without_collision(): void {
   b.defineBoundary("LabField", { parents: ["Lab", "Field"] });
   snap = e.evaluate();
   assert.deepEqual(snap.overlapObligations(), []);
-  assert.equal(snap.statusOf("LabField", p), "Collision");
+  assert.equal(snap.localStatus("LabField", p), "Collision");
 }
 
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);

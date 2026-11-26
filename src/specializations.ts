@@ -209,7 +209,7 @@ export function evaluateClassicalSpecialization(
   // Enforce No-Gaps on all base atoms and congruences reachable across atoms and queryItems.
   for (const cell of atomicCover) {
     for (const a of allGroundAtoms) {
-      const st = snap.statusOf(cell, a);
+      const st = snap.localStatus(cell, a);
       if (st === "Open") {
         return {
           ok: false,
@@ -222,7 +222,7 @@ export function evaluateClassicalSpecialization(
   let conflictReason: string | undefined;
   const evalOnAtomicCell = (cell: string, item: Item): Polarity => {
     const checkConsistent = (pol: Polarity): Polarity => {
-      const st = snap.statusOf(cell, item);
+      const st = snap.localStatus(cell, item);
       if ((st === "Grounded" && pol === "-") || (st === "Excluded" && pol === "+")) {
         conflictReason ??= `UL-Classical valuation of "${itemKey(item)}" (${pol}) conflicts with existing "${st}" ground on atomic cell "${cell}".`;
       }
@@ -231,13 +231,13 @@ export function evaluateClassicalSpecialization(
 
     switch (item.kind) {
       case "atom": {
-        const st = snap.statusOf(cell, item);
+        const st = snap.localStatus(cell, item);
         return checkConsistent(st === "Grounded" ? "+" : "-");
       }
       case "bottom":
         return checkConsistent("-");
       case "equiv": {
-        const st = snap.statusOf(cell, item);
+        const st = snap.localStatus(cell, item);
         return checkConsistent(st === "Grounded" ? "+" : "-");
       }
       case "flip":

@@ -366,7 +366,7 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
   const queried = new Set(state.queries.map(itemKey));
   for (const row of model.rows) {
     const label = `${ctx} (${row.boundary}, ${itemKey(row.item)})${queried.has(itemKey(row.item)) ? " [queried]" : ""}`;
-    assert.equal(snap.statusOf(row.boundary, row.item), row.localStatus, `${label} local status`);
+    assert.equal(snap.localStatus(row.boundary, row.item), row.localStatus, `${label} local status`);
     for (const p of ["+", "-"] as const) {
       const authority = snap.authorityOf(row.boundary, p, row.item);
       assert.equal(authority, row.authority[p], `${label} authority ${p}`);

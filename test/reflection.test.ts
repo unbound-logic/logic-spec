@@ -38,13 +38,13 @@ function test_cross_stage_reflection_trace_and_historical_immutability(): void {
     sameStage,
   ]);
 
-  assert.equal(snap4.statusOf("B", r0Open), "Grounded");
-  assert.equal(snap4.statusOf("B", r1Grounded), "Grounded");
-  assert.equal(snap4.statusOf("B", r1LivePos), "Grounded");
-  assert.equal(snap4.statusOf("B", r2Collision), "Grounded");
-  assert.equal(snap4.statusOf("B", r2LivePos), "Excluded"); // Quarantined at Σ2 -> Live is false
-  assert.equal(snap4.statusOf("B", r3LivePos), "Grounded"); // Reinstated at Σ3 -> Live is true
-  assert.equal(snap4.statusOf("B", sameStage), "Open"); // Same-stage reflection withheld
+  assert.equal(snap4.localStatus("B", r0Open), "Grounded");
+  assert.equal(snap4.localStatus("B", r1Grounded), "Grounded");
+  assert.equal(snap4.localStatus("B", r1LivePos), "Grounded");
+  assert.equal(snap4.localStatus("B", r2Collision), "Grounded");
+  assert.equal(snap4.localStatus("B", r2LivePos), "Excluded"); // Quarantined at Σ2 -> Live is false
+  assert.equal(snap4.localStatus("B", r3LivePos), "Grounded"); // Reinstated at Σ3 -> Live is true
+  assert.equal(snap4.localStatus("B", sameStage), "Open"); // Same-stage reflection withheld
 
   // Meta-reasoning via Scoped Cut: trigger NeedAudit from historical Σ2 collision
   engine.observePositive("B", implies(r2Collision, needAudit), "w_audit"); // Σ5
@@ -52,10 +52,10 @@ function test_cross_stage_reflection_trace_and_historical_immutability(): void {
   const nestedIllLevel = refl(0, "B", "+", r1LivePos, 2); // level 0 < inner level 1 -> Open
 
   const snap5 = engine.evaluate([needAudit, nestedValid, nestedIllLevel]);
-  assert.equal(snap5.statusOf("B", needAudit), "Grounded");
+  assert.equal(snap5.localStatus("B", needAudit), "Grounded");
   assert.equal(snap5.isLive("B", "+", needAudit), true);
-  assert.equal(snap5.statusOf("B", nestedValid), "Grounded");
-  assert.equal(snap5.statusOf("B", nestedIllLevel), "Open");
+  assert.equal(snap5.localStatus("B", nestedValid), "Grounded");
+  assert.equal(snap5.localStatus("B", nestedIllLevel), "Open");
 }
 
 function test_cross_stage_reflection_curry_immunity_and_deduction_stratification(): void {
@@ -70,8 +70,8 @@ function test_cross_stage_reflection_curry_immunity_and_deduction_stratification
   eCurry.observePositive("B", implies(reflK0, moon), "w_k1"); // Σ1
 
   const snapCurry = eCurry.evaluate([moon]);
-  assert.equal(snapCurry.statusOf("B", reflK0), "Excluded");
-  assert.equal(snapCurry.statusOf("B", moon), "Open");
+  assert.equal(snapCurry.localStatus("B", reflK0), "Excluded");
+  assert.equal(snapCurry.localStatus("B", moon), "Open");
 
   // Deduction rule refl-intro stratification and polarity checks
   const engine = new InquiryEngine(b);
@@ -148,13 +148,13 @@ function test_stage_archive_isolates_historical_boundary_and_cover_mutations(): 
   engine.observePositive("B", atom("Tick"), "w_tick"); // Σ3
 
   // Historical Σ2 must remain isolated from post-Σ2 registerCover mutation
-  assert.equal(engine.evaluateAtStage(2, [p]).statusOf("B", p), "Open");
+  assert.equal(engine.evaluateAtStage(2, [p]).localStatus("B", p), "Open");
   // Live evaluation at Σ3 sees the registered cover
-  assert.equal(engine.evaluate([p]).statusOf("B", p), "Grounded");
+  assert.equal(engine.evaluate([p]).localStatus("B", p), "Grounded");
 
   // Reflection against Σ2 observes historical Open/non-Live rather than retroactively Grounded
   const reflAt2 = refl(0, "B", "+", p, 2);
-  assert.equal(engine.evaluate([reflAt2]).statusOf("B", reflAt2), "Excluded");
+  assert.equal(engine.evaluate([reflAt2]).localStatus("B", reflAt2), "Excluded");
 }
 
 function test_cross_stage_reflection_rejects_post_stage_boundaries(): void {
@@ -170,7 +170,7 @@ function test_cross_stage_reflection_rejects_post_stage_boundaries(): void {
 
   const reflHalluc = reflStatus(0, 1, "B_new", a, "Open");
   const snapHalluc = engine.evaluate([reflHalluc]);
-  assert.equal(snapHalluc.statusOf("B", reflHalluc), "Open");
+  assert.equal(snapHalluc.localStatus("B", reflHalluc), "Open");
 
   const deductHalluc = verifyDerivation(engine, {
     kind: "refl-intro",
@@ -190,7 +190,7 @@ function test_cross_stage_reflection_rejects_post_stage_boundaries(): void {
     1,
   );
   const snapNoCrash = engine.evaluate([reflInnerDomain]);
-  assert.equal(snapNoCrash.statusOf("B", reflInnerDomain), "Open");
+  assert.equal(snapNoCrash.localStatus("B", reflInnerDomain), "Open");
 
   const deductInnerDomain = verifyDerivation(engine, {
     kind: "refl-intro",
@@ -216,9 +216,9 @@ function test_cross_stage_reflection_rejects_post_stage_boundaries(): void {
 
   assert.equal(eCov.stage, 3);
   assert.match(eCov.transitionLog[2] ?? "", /WitnessCover/);
-  assert.equal(eCov.evaluateAtStage(2, [p]).statusOf("B", p), "Open");
-  assert.equal(eCov.evaluate([p]).statusOf("B", p), "Grounded");
-  assert.equal(eCov.evaluateAtStage(3, [p]).statusOf("B", p), "Grounded");
+  assert.equal(eCov.evaluateAtStage(2, [p]).localStatus("B", p), "Open");
+  assert.equal(eCov.evaluate([p]).localStatus("B", p), "Grounded");
+  assert.equal(eCov.evaluateAtStage(3, [p]).localStatus("B", p), "Grounded");
 }
 
 test("cross-stage reflection trace and historical immutability", test_cross_stage_reflection_trace_and_historical_immutability);

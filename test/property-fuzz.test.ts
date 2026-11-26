@@ -384,11 +384,11 @@ function assertSnapshotCoreInvariants(
   const revisionSlots = new Set(snap.revisionObligations().map((r) => `${r.boundary} ${r.itemKey}`));
 
   for (const b of nonEmpty) {
-    assert.equal(snap.statusOf(b, sentinel), "Open", `${ctx} Non-Explosion violated on ${b}`);
+    assert.equal(snap.localStatus(b, sentinel), "Open", `${ctx} Non-Explosion violated on ${b}`);
     assert.equal(snap.allGrounds(b, "+", sentinel).length, 0, `${ctx} Sentinel + ground on ${b}`);
     // (B, ⊥) stays Excluded unless a possible but absent +⊥ leaves coll(B, ⊥) undefined, which
     // item 14 (G4b) reports as Collision; no +⊥ record is ever present or Live.
-    const botStatus = snap.statusOf(b, bot);
+    const botStatus = snap.localStatus(b, bot);
     assert.ok(
       botStatus === "Excluded" || botStatus === "Collision",
       `${ctx} bottom must stay Excluded or possibly collide on ${b}, got ${botStatus}`,
@@ -401,7 +401,7 @@ function assertSnapshotCoreInvariants(
     for (const it of itemsToCheck) {
       const posAll = snap.allGrounds(b, "+", it);
       const negAll = snap.allGrounds(b, "-", it);
-      const st = snap.statusOf(b, it);
+      const st = snap.localStatus(b, it);
       // G4b: Collision when the collision atom is true or undefined (both records present make it
       // true); otherwise the present (true) records decide the local status.
       const collided = snap.isCollided(b, it);
@@ -443,7 +443,7 @@ function assertSnapshotCoreInvariants(
           );
           for (const sub of subs) {
             assert.notEqual(
-              snap.statusOf(sub, it),
+              snap.localStatus(sub, it),
               "Collision",
               `${ctx} Live (${b}, ${pol}, ${itemKey(it)}) has colliding sub-boundary ${sub}`,
             );
@@ -568,7 +568,7 @@ function test_fuzz_inquiry_dynamics_quarantine_and_biased_conflict_graphs(): voi
     assert.equal(engine.retract(probeId), true, `${ctx} retract fresh probe`);
     const afterRetract = engine.evaluate([freshAtom]);
     assert.equal(
-      afterRetract.statusOf(probeBound, freshAtom),
+      afterRetract.localStatus(probeBound, freshAtom),
       "Open",
       `${ctx} pure Retract must return fresh item to Open`,
     );
@@ -580,10 +580,10 @@ function test_fuzz_inquiry_dynamics_quarantine_and_biased_conflict_graphs(): voi
     const reinItem = atom("ReinTarget");
     eRein.observePositive("BR", reinItem, "r_pos");
     eRein.observeNegative("BR", reinItem, "r_neg");
-    assert.equal(eRein.evaluate([reinItem]).statusOf("BR", reinItem), "Collision");
+    assert.equal(eRein.evaluate([reinItem]).localStatus("BR", reinItem), "Collision");
     assert.equal(eRein.evaluate([reinItem]).isLive("BR", "+", reinItem), false);
     assert.equal(eRein.retract("r_neg"), true);
-    assert.equal(eRein.evaluate([reinItem]).statusOf("BR", reinItem), "Grounded");
+    assert.equal(eRein.evaluate([reinItem]).localStatus("BR", reinItem), "Grounded");
     assert.equal(eRein.evaluate([reinItem]).isLive("BR", "+", reinItem), true);
   }
 
@@ -700,30 +700,30 @@ function test_fuzz_inquiry_dynamics_quarantine_and_biased_conflict_graphs(): voi
     assertSnapshotCoreInvariants(snap, bs, allChecked, sentinel, ctx);
 
     const hasIndependentDefeatOfA = extraFlipA || subNegA;
-    assert.equal(snap.statusOf("B", a), "Collision", `${ctx} A must be Collision`);
+    assert.equal(snap.localStatus("B", a), "Collision", `${ctx} A must be Collision`);
     assert.equal(snap.isLive("B", "+", a), false, `${ctx} A not Live`);
     if (hasIndependentDefeatOfA) {
       // Stratified Quarantine Reinstatement: A is independently defeated, so +A never fires A ⊥_B C; C is reinstated!
-      assert.equal(snap.statusOf("B", c), "Grounded", `${ctx} C must reinstate to Grounded`);
+      assert.equal(snap.localStatus("B", c), "Grounded", `${ctx} C must reinstate to Grounded`);
       assert.equal(snap.isLive("B", "+", c), true, `${ctx} C must be Live (+)`);
       assert.equal(snap.allGrounds("B", "-", c).length, 0, `${ctx} zero ghost -C`);
     } else {
       // Pure symmetric conflict: both A and C remain Collision and non-Live
-      assert.equal(snap.statusOf("B", c), "Collision", `${ctx} C must be Collision`);
+      assert.equal(snap.localStatus("B", c), "Collision", `${ctx} C must be Collision`);
       assert.equal(snap.isLive("B", "+", c), false, `${ctx} C not Live`);
     }
     assert.equal(snap.allGrounds("B", "+", y).length, 0, `${ctx} zero ghost +Y`);
     if (hasIndependentDefeatOfA) {
-      assert.equal(snap.statusOf("B", y), "Excluded", `${ctx} Y stays Excluded`);
+      assert.equal(snap.localStatus("B", y), "Excluded", `${ctx} Y stays Excluded`);
       assert.equal(snap.isLive("B", "-", y), true, `${ctx} -Y stays Live`);
     } else {
       // Pure symmetric conflict: +A stays Undetermined, so +Y is possible but never present;
       // coll(B, Y) is undefined and item 14 (G4b) reports Collision with -Y not Live.
-      assert.equal(snap.statusOf("B", y), "Collision", `${ctx} Y possibly collides`);
+      assert.equal(snap.localStatus("B", y), "Collision", `${ctx} Y possibly collides`);
       assert.equal(snap.isLive("B", "-", y), false, `${ctx} -Y not Live`);
     }
     assert.equal(
-      snap.statusOf("B", implies(collAnt, cons)),
+      snap.localStatus("B", implies(collAnt, cons)),
       "Grounded",
       `${ctx} collided antecedent must not refute conditional`,
     );
@@ -755,10 +755,10 @@ function test_fuzz_inquiry_dynamics_quarantine_and_biased_conflict_graphs(): voi
       const bridgeItems = [a, c, d, eItem, x1, x2, y1, y2, sentinel, bottom()];
       const snapBridge = eBridge.evaluate(bridgeItems);
       assertSnapshotCoreInvariants(snapBridge, bBridge, bridgeItems, sentinel, `${ctx}:bridge`);
-      assert.equal(snapBridge.statusOf("B", a), "Collision");
-      assert.equal(snapBridge.statusOf("B", c), "Collision");
-      assert.equal(snapBridge.statusOf("B", d), "Collision");
-      assert.equal(snapBridge.statusOf("B", eItem), "Collision");
+      assert.equal(snapBridge.localStatus("B", a), "Collision");
+      assert.equal(snapBridge.localStatus("B", c), "Collision");
+      assert.equal(snapBridge.localStatus("B", d), "Collision");
+      assert.equal(snapBridge.localStatus("B", eItem), "Collision");
       if (snapBridge.allGrounds("B", "+", y1).length > 0 || snapBridge.allGrounds("B", "+", y2).length > 0) {
         knownCrossConflictBridgeHits += 1;
       }
@@ -1015,7 +1015,7 @@ function test_fuzz_stage_archive_reflection_and_mutual_recursion_firewall(): voi
       for (const b of curBounds) {
         for (const it of tracked) {
           const sk = `${b}\0${itemKey(it)}`;
-          statuses.set(sk, snap.statusOf(b, it));
+          statuses.set(sk, snap.localStatus(b, it));
           lives.set(`${sk}\0+`, snap.isLive(b, "+", it));
           lives.set(`${sk}\0-`, snap.isLive(b, "-", it));
         }
@@ -1082,7 +1082,7 @@ function test_fuzz_stage_archive_reflection_and_mutual_recursion_firewall(): voi
         for (const it of tracked) {
           const sk = `${b}\0${itemKey(it)}`;
           assert.equal(
-            histSnap.statusOf(b, it),
+            histSnap.localStatus(b, it),
             rec.statuses.get(sk),
             `${ctx} stage ${rec.stage} status drift on (${b}, ${itemKey(it)})`,
           );
@@ -1139,26 +1139,26 @@ function test_fuzz_stage_archive_reflection_and_mutual_recursion_firewall(): voi
       illLevelNestedRefl,
     ]);
 
-    assert.equal(reflSnap.statusOf("B0", validRefl), "Grounded", `${ctx} valid Refl`);
-    assert.equal(reflSnap.statusOf("B0", wrongRefl), "Excluded", `${ctx} mismatched status Refl`);
-    assert.equal(reflSnap.statusOf("B0", sameStageRefl), "Open", `${ctx} same-stage Refl`);
-    assert.equal(reflSnap.statusOf("B0", futureStageRefl), "Open", `${ctx} future-stage Refl`);
+    assert.equal(reflSnap.localStatus("B0", validRefl), "Grounded", `${ctx} valid Refl`);
+    assert.equal(reflSnap.localStatus("B0", wrongRefl), "Excluded", `${ctx} mismatched status Refl`);
+    assert.equal(reflSnap.localStatus("B0", sameStageRefl), "Open", `${ctx} same-stage Refl`);
+    assert.equal(reflSnap.localStatus("B0", futureStageRefl), "Open", `${ctx} future-stage Refl`);
     assert.equal(
-      reflSnap.statusOf("B0", postBoundTargetRefl),
+      reflSnap.localStatus("B0", postBoundTargetRefl),
       "Open",
       `${ctx} post-stage targetBoundary must stay Open`,
     );
     assert.equal(
-      reflSnap.statusOf("B0", postBoundInnerForallRefl),
+      reflSnap.localStatus("B0", postBoundInnerForallRefl),
       "Open",
       `${ctx} post-stage inner domain must stay Open`,
     );
     assert.equal(
-      reflSnap.statusOf("B0", postBoundInnerEquivRefl),
+      reflSnap.localStatus("B0", postBoundInnerEquivRefl),
       "Open",
       `${ctx} post-stage inner equiv boundary must stay Open`,
     );
-    assert.equal(reflSnap.statusOf("B0", illLevelNestedRefl), "Open", `${ctx} ill-level nested Refl`);
+    assert.equal(reflSnap.localStatus("B0", illLevelNestedRefl), "Open", `${ctx} ill-level nested Refl`);
 
     for (const bad of [
       sameStageRefl,
@@ -1639,10 +1639,10 @@ function test_fuzz_deduction_soundness_domain_constraint_and_capture_avoiding_su
     const glivRes = admitVerifiedDerivation(eMal, glivProof, `gliv_${seed}`, "UL-Minimal");
     assert.equal(glivRes.ok, true, `${ctx} Glivenko double impossibility should verify`);
     const snapGliv = eMal.evaluate([openP, lem, doubleNegLem]);
-    assert.equal(snapGliv.statusOf("D", doubleNegLem), "Grounded", ctx);
-    assert.equal(snapGliv.statusOf("D", structImposs(lem)), "Excluded", ctx);
-    assert.equal(snapGliv.statusOf("D", lem), "Open", `${ctx} LEM on Open P must stay Open!`);
-    assert.equal(snapGliv.statusOf("D", openP), "Open", `${ctx} Open P must stay Open!`);
+    assert.equal(snapGliv.localStatus("D", doubleNegLem), "Grounded", ctx);
+    assert.equal(snapGliv.localStatus("D", structImposs(lem)), "Excluded", ctx);
+    assert.equal(snapGliv.localStatus("D", lem), "Open", `${ctx} LEM on Open P must stay Open!`);
+    assert.equal(snapGliv.localStatus("D", openP), "Open", `${ctx} Open P must stay Open!`);
   }
 }
 
@@ -2028,7 +2028,7 @@ function test_fuzz_m1_m2_anti_immunization_refine_boundary(): void {
     if (structOk.ok) {
       assert.equal(structOk.originalExcludedPreserved, true, ctx);
       assert.equal(eStruct.retract("w_gen"), true, ctx);
-      assert.equal(eStruct.evaluate([gen]).statusOf("B", gen), "Excluded", `${ctx} M2 non-erasure`);
+      assert.equal(eStruct.evaluate([gen]).localStatus("B", gen), "Excluded", `${ctx} M2 non-erasure`);
     }
 
     const eGood = buildEngine(true);
@@ -2049,7 +2049,7 @@ function test_fuzz_m1_m2_anti_immunization_refine_boundary(): void {
       assert.equal(goodRes.originalExcludedPreserved, true, ctx);
       assert.equal(eGood.retract("w_gen"), true, ctx);
       assert.equal(
-        eGood.evaluate([gen]).statusOf("B", gen),
+        eGood.evaluate([gen]).localStatus("B", gen),
         "Excluded",
         `${ctx} M2 must preserve Excluded on B`,
       );

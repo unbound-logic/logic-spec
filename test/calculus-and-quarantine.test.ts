@@ -31,10 +31,10 @@ function test_dual_polarity_statuses_and_well_founded_dag_rejects_cycles(): void
   engine.observeNegative("B", pCollided, "w_c2");
 
   const snap = engine.evaluate([pOpen]);
-  assert.equal(snap.statusOf("B", pOpen), "Open");
-  assert.equal(snap.statusOf("B", pGrounded), "Grounded");
-  assert.equal(snap.statusOf("B", pExcluded), "Excluded");
-  assert.equal(snap.statusOf("B", pCollided), "Collision");
+  assert.equal(snap.localStatus("B", pOpen), "Open");
+  assert.equal(snap.localStatus("B", pGrounded), "Grounded");
+  assert.equal(snap.localStatus("B", pExcluded), "Excluded");
+  assert.equal(snap.localStatus("B", pCollided), "Collision");
 
   // Well-Foundedness Law: mutual-support cycles (A -> B, B -> A) confer zero grounding
   const cyclicGraph = new Map<string, readonly string[]>([
@@ -74,9 +74,9 @@ function test_symmetric_downward_heredity_and_disjoint_zero_leakage(): void {
   // Positive ruleBroad inherits downward to both B_1atm and B_2atm
   assert.equal(snap.allGrounds("B_1atm", "+", ruleBroad).length, 1);
   // Counterexample on B_2atm triggers local -(Heat100 -> Boils) on B_2atm ONLY (zero leakage to B_1atm!)
-  assert.equal(snap.statusOf("B_2atm", ruleBroad), "Collision");
+  assert.equal(snap.localStatus("B_2atm", ruleBroad), "Collision");
   assert.equal(snap.allGrounds("B_1atm", "-", ruleBroad).length, 0);
-  assert.equal(snap.statusOf("B_1atm", ruleBroad), "Grounded");
+  assert.equal(snap.localStatus("B_1atm", ruleBroad), "Grounded");
 }
 
 function test_quarantine_upstream_obstruction_and_selective_survival(): void {
@@ -129,10 +129,10 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
   engine.observeNegative("B_all", boilsAt("2atm"), "w6_all");
 
   const snap1 = engine.evaluate([cook, genAll]);
-  assert.equal(snap1.statusOf("B_2atm", ruleBroad), "Collision");
+  assert.equal(snap1.localStatus("B_2atm", ruleBroad), "Collision");
   assert.equal(snap1.isObstructed("B_all", ruleBroad), true);
   assert.equal(snap1.isLive("B_all", "+", ruleBroad), false);
-  assert.equal(snap1.statusOf("B_all", genAll), "Collision");
+  assert.equal(snap1.localStatus("B_all", genAll), "Collision");
   assert.ok(snap1.revisionObligations().length >= 2);
 
   // Selective Quarantine: π1 loses Live authority, while π2 (w_emp) and Cook via π2 remain Live!
@@ -174,8 +174,8 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
 
   const snap2 = engine.evaluate([cook, genAll, gen1Atm]);
   // M2 check: (B_all, Gen_all) remains Excluded (-); narrowed Gen_1atm is Grounded (+)
-  assert.equal(snap2.statusOf("B_all", genAll), "Excluded");
-  assert.equal(snap2.statusOf("B_1atm", gen1Atm), "Grounded");
+  assert.equal(snap2.localStatus("B_all", genAll), "Excluded");
+  assert.equal(snap2.localStatus("B_1atm", gen1Atm), "Grounded");
   assert.equal(snap2.isLive("B_1atm", "+", cook), true);
   assert.equal(snap2.isCollisionFree(), true);
 }
@@ -204,24 +204,24 @@ function test_structural_rules_scoped_cut_and_horizontal_contraction(): void {
   assert.equal(snapOk.isLive("B12", "+", a), true);
   assert.equal(snapOk.isLive("B12", "+", c), true);
   assert.equal(snapOk.isLive("B12", "+", e), true);
-  assert.equal(snapOk.statusOf("B12", arbitraryNoise), "Open");
+  assert.equal(snapOk.localStatus("B12", arbitraryNoise), "Open");
 
   // Counterexample -A on B12 refutes (X → A), obstructing B2 and preventing ghost +A on B12;
   // Scoped Cut still blocks E and No Explosion holds (arbitraryNoise stays Open).
   engine.observeNegative("B12", a, "refute_a");
   const snapBlocked = engine.evaluate([e, arbitraryNoise]);
-  assert.equal(snapBlocked.statusOf("B12", implies(x, a)), "Collision");
+  assert.equal(snapBlocked.localStatus("B12", implies(x, a)), "Collision");
   assert.equal(snapBlocked.isObstructed("B2", implies(x, a)), true);
-  assert.equal(snapBlocked.statusOf("B12", a), "Excluded");
+  assert.equal(snapBlocked.localStatus("B12", a), "Excluded");
   assert.equal(snapBlocked.isLive("B12", "+", e), false);
-  assert.equal(snapBlocked.statusOf("B12", arbitraryNoise), "Open");
+  assert.equal(snapBlocked.localStatus("B12", arbitraryNoise), "Open");
 
   // Direct base +A on B12 collides node A itself while still blocking E via Scoped Cut
   engine.observePositive("B12", a, "w_a_direct");
   const snapDirect = engine.evaluate([e, arbitraryNoise]);
-  assert.equal(snapDirect.statusOf("B12", a), "Collision");
+  assert.equal(snapDirect.localStatus("B12", a), "Collision");
   assert.equal(snapDirect.isLive("B12", "+", e), false);
-  assert.equal(snapDirect.statusOf("B12", arbitraryNoise), "Open");
+  assert.equal(snapDirect.localStatus("B12", arbitraryNoise), "Open");
 }
 
 function test_connective_and_quantifier_polarity_rules_with_cover_gluing(): void {
@@ -297,31 +297,31 @@ function test_connective_and_quantifier_polarity_rules_with_cover_gluing(): void
     existP,
   ]);
 
-  assert.equal(snap.statusOf("Z", bot), "Excluded");
+  assert.equal(snap.localStatus("Z", bot), "Excluded");
   assert.equal(snap.allGrounds("Z", "+", bot).length, 0);
-  assert.equal(snap.statusOf("Z", green), "Excluded");
-  assert.equal(snap.statusOf("Z", flip(red)), "Excluded");
-  assert.equal(snap.statusOf("Z", structImposs(sqCircle)), "Grounded");
-  assert.equal(snap.statusOf("Z", sqCircle), "Excluded");
+  assert.equal(snap.localStatus("Z", green), "Excluded");
+  assert.equal(snap.localStatus("Z", flip(red)), "Excluded");
+  assert.equal(snap.localStatus("Z", structImposs(sqCircle)), "Grounded");
+  assert.equal(snap.localStatus("Z", sqCircle), "Excluded");
   assert.equal(snap.allGrounds("Z", "+", sqCircle).length, 0);
 
   // D2 disjunction and ∨E gluing succeed; LEM on Open item is refused
-  assert.equal(snap.statusOf("Z", disj), "Grounded");
+  assert.equal(snap.localStatus("Z", disj), "Grounded");
   assert.equal(snap.isLive("Z", "+", disj), true);
-  assert.equal(snap.statusOf("Z", isInt), "Grounded");
+  assert.equal(snap.localStatus("Z", isInt), "Grounded");
   assert.equal(snap.isLive("Z", "+", isInt), true);
-  assert.equal(snap.statusOf("Z", lemOpen), "Open");
+  assert.equal(snap.localStatus("Z", lemOpen), "Open");
 
   // Conjunction on Even holds (+IsEven and inherited +IsInt); on Odd IsEven is Open so conjunction is Open
-  assert.equal(snap.statusOf("Even", conjEvenInt), "Grounded");
-  assert.equal(snap.statusOf("Odd", conjEvenInt), "Open");
+  assert.equal(snap.localStatus("Even", conjEvenInt), "Grounded");
+  assert.equal(snap.localStatus("Odd", conjEvenInt), "Open");
 
   // Non-vacuous conditional: -A alone does not witness +(A → C)
-  assert.equal(snap.statusOf("Z", implies(negAOnly, isInt)), "Open");
+  assert.equal(snap.localStatus("Z", implies(negAOnly, isInt)), "Open");
 
   // Quantifiers: concrete witness n2 -> +∃; concrete counterexample n1 -> -∀
-  assert.equal(snap.statusOf("Z", existP), "Grounded");
-  assert.equal(snap.statusOf("Z", univP), "Excluded");
+  assert.equal(snap.localStatus("Z", existP), "Grounded");
+  assert.equal(snap.localStatus("Z", univP), "Excluded");
 }
 
 function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_symmetric_conflict(): void {
@@ -338,9 +338,9 @@ function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_sy
   eFlip.observeNegative("B", c, "w_nc");
 
   const snapFlip = eFlip.evaluate([a, c]);
-  assert.equal(snapFlip.statusOf("B", a), "Collision");
+  assert.equal(snapFlip.localStatus("B", a), "Collision");
   assert.equal(snapFlip.isLive("B", "+", a), false);
-  assert.equal(snapFlip.statusOf("B", c), "Excluded");
+  assert.equal(snapFlip.localStatus("B", c), "Excluded");
   assert.equal(snapFlip.isLive("B", "-", c), true);
   assert.equal(snapFlip.allGrounds("B", "+", c).length, 0);
 
@@ -355,9 +355,9 @@ function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_sy
   eSup.observeNegative("B_all", c, "w_nc");
 
   const snapSup = eSup.evaluate([a, c]);
-  assert.equal(snapSup.statusOf("B_sub", a), "Collision");
+  assert.equal(snapSup.localStatus("B_sub", a), "Collision");
   assert.equal(snapSup.isObstructed("B_all", a), true);
-  assert.equal(snapSup.statusOf("B_all", c), "Excluded");
+  assert.equal(snapSup.localStatus("B_all", c), "Excluded");
   assert.equal(snapSup.isLive("B_all", "-", c), true);
   assert.equal(snapSup.allGrounds("B_all", "+", c).length, 0);
   assert.equal(
@@ -387,9 +387,9 @@ function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_sy
   eSub.observeNegative("B_1atm", boils, "w_nb1");
 
   const snapSub = eSub.evaluate([rule, boils]);
-  assert.equal(snapSub.statusOf("B_2atm", rule), "Collision");
+  assert.equal(snapSub.localStatus("B_2atm", rule), "Collision");
   assert.equal(snapSub.isObstructed("B_all", rule), true);
-  assert.equal(snapSub.statusOf("B_1atm", boils), "Excluded");
+  assert.equal(snapSub.localStatus("B_1atm", boils), "Excluded");
   assert.equal(snapSub.isLive("B_1atm", "-", boils), true);
   assert.equal(snapSub.allGrounds("B_1atm", "+", boils).length, 0);
 
@@ -413,14 +413,14 @@ function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_sy
   eRein.observePositive("B_1", implies(ice, cold), "w_rule2");
 
   const snapRein = eRein.evaluate([heatToBoils, boils, ice, cold]);
-  assert.equal(snapRein.statusOf("B_2", heatToBoils), "Collision");
+  assert.equal(snapRein.localStatus("B_2", heatToBoils), "Collision");
   assert.equal(snapRein.isObstructed("B_all", heatToBoils), true);
-  assert.equal(snapRein.statusOf("B_1", ice), "Grounded");
+  assert.equal(snapRein.localStatus("B_1", ice), "Grounded");
   assert.equal(snapRein.isLive("B_1", "+", ice), true);
-  assert.equal(snapRein.statusOf("B_1", boils), "Excluded");
+  assert.equal(snapRein.localStatus("B_1", boils), "Excluded");
   assert.equal(snapRein.isLive("B_1", "-", boils), true);
   assert.equal(snapRein.allGrounds("B_1", "+", boils).length, 0);
-  assert.equal(snapRein.statusOf("B_1", cold), "Grounded");
+  assert.equal(snapRein.localStatus("B_1", cold), "Grounded");
   assert.equal(snapRein.isLive("B_1", "+", cold), true);
 
   // Part D: Symmetric mutual conflict (+A, +C, A ⊥ C) preserves Collision on both
@@ -432,8 +432,8 @@ function test_stratified_quarantine_eliminates_ghost_collisions_and_preserves_sy
   eSym.observePositive("B", c, "wc");
 
   const snapSym = eSym.evaluate([a, c]);
-  assert.equal(snapSym.statusOf("B", a), "Collision");
-  assert.equal(snapSym.statusOf("B", c), "Collision");
+  assert.equal(snapSym.localStatus("B", a), "Collision");
+  assert.equal(snapSym.localStatus("B", c), "Collision");
   assert.equal(snapSym.isLive("B", "+", a), false);
   assert.equal(snapSym.isLive("B", "+", c), false);
 }
@@ -456,10 +456,10 @@ function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
   engine.observePositive("B", structImposs(structImposs(a2)), "w_imp2");
 
   const snap1 = engine.evaluate([a1, a2, structImposs(a2)]);
-  assert.equal(snap1.statusOf("B", a1), "Excluded");
+  assert.equal(snap1.localStatus("B", a1), "Excluded");
   assert.equal(snap1.isLive("B", "-", a1), true);
-  assert.equal(snap1.statusOf("B", structImposs(a2)), "Excluded");
-  assert.equal(snap1.statusOf("B", a2), "Open");
+  assert.equal(snap1.localStatus("B", structImposs(a2)), "Excluded");
+  assert.equal(snap1.localStatus("B", a2), "Open");
   assert.equal(snap1.allGrounds("B", "+", a2).length, 0);
 
   // Conflicting +(A3 → ⊥) and +A3 puts (B, A3 → ⊥) into Collision. imposs-excl and the
@@ -473,9 +473,9 @@ function test_bottom_non_witnessing_guard_and_imposs_contraposition(): void {
   eConf.observePositive("B", a3, "w_a3");
 
   const snapConf = eConf.evaluate([a3, structImposs(a3), bottom()]);
-  assert.equal(snapConf.statusOf("B", structImposs(a3)), "Collision");
+  assert.equal(snapConf.localStatus("B", structImposs(a3)), "Collision");
   assert.equal(snapConf.allGrounds("B", "+", bottom()).length, 0);
-  assert.equal(snapConf.statusOf("B", bottom()), "Collision");
+  assert.equal(snapConf.localStatus("B", bottom()), "Collision");
   assert.equal(snapConf.authorityOf("B", "+", bottom()), null);
   assert.equal(snapConf.isLive("B", "+", bottom()), false);
 }
@@ -498,17 +498,17 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   e.observeNegative("B", y, "wny");
 
   const snap = e.evaluate([a, c, x, y, flip(y)]);
-  assert.equal(snap.statusOf("B", a), "Collision");
+  assert.equal(snap.localStatus("B", a), "Collision");
   assert.equal(snap.isLive("B", "+", a), false);
-  assert.equal(snap.statusOf("B", c), "Collision");
+  assert.equal(snap.localStatus("B", c), "Collision");
   assert.equal(snap.isLive("B", "+", c), false);
   assert.equal(snap.allGrounds("B", "+", x).length, 0);
   assert.equal(snap.allGrounds("B", "+", y).length, 0);
   // The symmetric conflict leaves +A and +C Undetermined, so +X and +Y are possible but never
   // present: (B, Y) and (B, ~Y) read Collision (item 14, G4b) and -Y is not Live.
-  assert.equal(snap.statusOf("B", y), "Collision");
+  assert.equal(snap.localStatus("B", y), "Collision");
   assert.equal(snap.isLive("B", "-", y), false);
-  assert.equal(snap.statusOf("B", flip(y)), "Collision");
+  assert.equal(snap.localStatus("B", flip(y)), "Collision");
   assert.equal(snap.isLive("B", "+", flip(y)), false);
 
   // Part B: 2-hop mutual symmetric conflict cycle (+A, +(A→C), C ⊥_B D, +D, +(D→E), E ⊥_B A)
@@ -526,13 +526,13 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   eCycle.observeNegative("B", y, "wny");
 
   const snapCycle = eCycle.evaluate([a, c, d, eItem, x, y]);
-  assert.equal(snapCycle.statusOf("B", a), "Collision");
+  assert.equal(snapCycle.localStatus("B", a), "Collision");
   assert.equal(snapCycle.isLive("B", "+", a), false);
-  assert.equal(snapCycle.statusOf("B", d), "Collision");
+  assert.equal(snapCycle.localStatus("B", d), "Collision");
   assert.equal(snapCycle.isLive("B", "+", d), false);
   assert.equal(snapCycle.allGrounds("B", "+", x).length, 0);
   assert.equal(snapCycle.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapCycle.statusOf("B", y), "Collision");
+  assert.equal(snapCycle.localStatus("B", y), "Collision");
   assert.equal(snapCycle.isLive("B", "-", y), false);
 
   // Part C (Bug B): Reverse conditional +(Y → C) must NOT hijack {A, C, Y} into a single source SCC
@@ -546,13 +546,13 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   eRevC.observePositive("B", implies(y, c), "wyc");
 
   const snapRevC = eRevC.evaluate([a, c, x, y]);
-  assert.equal(snapRevC.statusOf("B", a), "Collision");
+  assert.equal(snapRevC.localStatus("B", a), "Collision");
   assert.equal(snapRevC.isLive("B", "+", a), false);
-  assert.equal(snapRevC.statusOf("B", c), "Collision");
+  assert.equal(snapRevC.localStatus("B", c), "Collision");
   assert.equal(snapRevC.isLive("B", "+", c), false);
   assert.equal(snapRevC.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevC.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevC.statusOf("B", y), "Collision");
+  assert.equal(snapRevC.localStatus("B", y), "Collision");
   assert.equal(snapRevC.isLive("B", "-", y), false);
 
   // Part D (Bug B self-cyclic variant): +(Y → ~A) must NOT merge Y into {A, C}
@@ -566,13 +566,13 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   eRevNotA.observePositive("B", implies(y, flip(a)), "wyna");
 
   const snapRevNotA = eRevNotA.evaluate([a, c, x, y, flip(a)]);
-  assert.equal(snapRevNotA.statusOf("B", a), "Collision");
+  assert.equal(snapRevNotA.localStatus("B", a), "Collision");
   assert.equal(snapRevNotA.isLive("B", "+", a), false);
-  assert.equal(snapRevNotA.statusOf("B", c), "Collision");
+  assert.equal(snapRevNotA.localStatus("B", c), "Collision");
   assert.equal(snapRevNotA.isLive("B", "+", c), false);
   assert.equal(snapRevNotA.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevNotA.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevNotA.statusOf("B", y), "Collision");
+  assert.equal(snapRevNotA.localStatus("B", y), "Collision");
   assert.equal(snapRevNotA.isLive("B", "-", y), false);
 
   // Part E (Bug B subset-minimal variant): +(Y → ~C) has ancestors {A, Y} ⊋ {A} and must NOT hijack {A, C}
@@ -586,13 +586,13 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   eRevNotC.observePositive("B", implies(y, flip(c)), "wync");
 
   const snapRevNotC = eRevNotC.evaluate([a, c, x, y, flip(c)]);
-  assert.equal(snapRevNotC.statusOf("B", a), "Collision");
+  assert.equal(snapRevNotC.localStatus("B", a), "Collision");
   assert.equal(snapRevNotC.isLive("B", "+", a), false);
-  assert.equal(snapRevNotC.statusOf("B", c), "Collision");
+  assert.equal(snapRevNotC.localStatus("B", c), "Collision");
   assert.equal(snapRevNotC.isLive("B", "+", c), false);
   assert.equal(snapRevNotC.allGrounds("B", "+", x).length, 0);
   assert.equal(snapRevNotC.allGrounds("B", "+", y).length, 0);
-  assert.equal(snapRevNotC.statusOf("B", y), "Collision");
+  assert.equal(snapRevNotC.localStatus("B", y), "Collision");
   assert.equal(snapRevNotC.isLive("B", "-", y), false);
 
   // Part F (Cleanup #4a): Collided (+A and -A) must NOT refute +(A → C) via counter-implies
@@ -602,8 +602,8 @@ function test_symmetric_conflict_zero_ghost_leakage_across_multihop_mp(): void {
   eCollAnt.observePositive("B", implies(a, c), "wac");
   eCollAnt.observeNegative("B", c, "wnc");
   const snapCollAnt = eCollAnt.evaluate([a, c, implies(a, c)]);
-  assert.equal(snapCollAnt.statusOf("B", a), "Collision");
-  assert.equal(snapCollAnt.statusOf("B", implies(a, c)), "Grounded");
+  assert.equal(snapCollAnt.localStatus("B", a), "Collision");
+  assert.equal(snapCollAnt.localStatus("B", implies(a, c)), "Grounded");
   assert.equal(snapCollAnt.isLive("B", "+", implies(a, c)), true);
 }
 

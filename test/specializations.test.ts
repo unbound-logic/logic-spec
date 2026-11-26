@@ -41,7 +41,7 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
 
   const lemItem = or(aClaim, flip(aClaim));
   // Direct UL-Core D2 cover disjunction already witnesses +(A ∨ ~A) on B!
-  assert.equal(eCov.evaluate([lemItem]).statusOf("B", lemItem), "Grounded");
+  assert.equal(eCov.evaluate([lemItem]).localStatus("B", lemItem), "Grounded");
 
   const clCov = evaluateClassicalSpecialization(eCov, "B", [aClaim], [lemItem]);
   assert.equal(clCov.ok, true);
@@ -74,7 +74,7 @@ function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   const aImpliesC = implies(aClaim, cClaim);
   // In UL-Core, -A ∧ -C leaves (A → C) Open and does not fire MP to produce +C
   const coreSnap = eAtomic.evaluate([aImpliesC, flip(pClaim)]);
-  assert.equal(coreSnap.statusOf("B_star", aImpliesC), "Open");
+  assert.equal(coreSnap.localStatus("B_star", aImpliesC), "Open");
   assert.equal(coreSnap.isLive("B_star", "+", cClaim), false);
 
   const clAtomic = evaluateClassicalSpecialization(
