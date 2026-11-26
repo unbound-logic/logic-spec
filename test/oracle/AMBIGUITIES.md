@@ -2,7 +2,7 @@
 
 The oracle in [`pi-sigma.ts`](pi-sigma.ts) implements the evaluation program `Π(Σ)` of [`spec/core.md`](../../spec/core.md) §5 item 14 from the specification alone, without consulting the reference kernel. Where item 14 is ambiguous or underspecified, the oracle follows the reading closest to the text. Each entry below quotes the sentence relied on, states the reading chosen, and names the alternative, so the differential comparison with the kernel can separate oracle readings from kernel deviations.
 
-The maintainer ruled on every reading after the differential comparison with the kernel (`audit-spec-kernel-coupling` in [`docs/design-review.md`](../../docs/design-review.md), revised 2026-11-26), and item 14 as amended in `main` commit `7b36043` ratifies them "as written there, except where this item now states otherwise". A3, A6 and A13 were amended by item 14: their original readings are kept below as superseded, followed by the amended reading the oracle now follows. Every other entry is ratified as recorded; its status line notes where item 14 now states the reading itself. Each entry is `[Decided]` (AGENTS.md §2 item 5). The code cites these entries as `A1` … `A21`.
+The maintainer ruled on every reading after the differential comparison with the kernel (`audit-spec-kernel-coupling` in [`docs/design-review.md`](../../docs/design-review.md), revised 2026-11-26), and item 14 as amended in `main` commit `7b36043` ratifies them "as written there, except where this item now states otherwise". A3, A6 and A13 were amended by item 14: their original readings are kept below as superseded, followed by the amended reading the oracle now follows. Every other entry is ratified as recorded; its status line notes where item 14 now states the reading itself. Each of `A1` … `A21` is `[Decided]` (AGENTS.md §2 item 5). Entries `A22` … `A25` record the oracle's readings of item 14 as amended in `main` commit `9c0fd4d`; they stay `[Exploratory]` until the maintainer rules on them. The code cites these entries as `A1` … `A25`.
 
 ## Universe
 
@@ -14,7 +14,7 @@ The maintainer ruled on every reading after the differential comparison with the
 - Alternative: only user-declared boundaries; `⊤_B` would then never hold a record.
 
 **A2. Items tracked by `Σ`.** `[Decided]`
-- Status: ratified; item 14 now defines the tracked items this way, adding the items of recorded theorems, which the oracle's state description does not carry (A15).
+- Status: ratified; item 14 now defines the tracked items this way, adding the items of recorded theorems, which the oracle's state description does not carry (A15). Since `9c0fd4d`, item 14 also tracks `⊥` (A22) and the items of past transitions (A23).
 - Text: "`U(Σ, Q)` is the set of items tracked by `Σ` and the items of `Q`".
 - Ambiguity: "tracked" is not defined.
 - Reading: the item of every observation, both sides of every incompatibility `A ⊥_B C`, and for every structural collapse `B ⊓ [A] = ⊥_B` both `A` and `A → ⊥`, since the Structural row concludes `(B, +, A → ⊥)` and a conclusion outside `U(Σ, Q)` has no atom.
@@ -128,3 +128,26 @@ The maintainer ruled on every reading after the differential comparison with the
 - Status: ratified for absent records. The Reporting section was then revised by G4b: a record is present only when its `rec` atom is true, `(B, A)` is in `Collision` exactly when `coll(B, A)` is true or undefined, and otherwise its status follows its present records; an absent record, now one whose `rec` atom is false or undefined, has no authority. The coincidence stated below therefore holds between `coll` and the `rec` atoms being true or undefined, no longer between `coll` and present records; a symmetric conflict now reads `Collision` with its undefined record absent. Tested in `test_oracle_symmetric_incompatibility_conflict` and `test_oracle_undefined_record_is_possible_but_not_present`.
 - Text: "The authority of a present record is …" and "`(B, A)` is in `Collision` when `coll(B, A)` is true or undefined".
 - Reading: an absent record (its `rec` atom false) has no authority, reported as `null`. The local status `Collision` (both records present) and the `coll` reading coincide, because `coll(B, A)` is true or undefined exactly when both `rec` atoms are; every such slot carries `Rev(B, A)`.
+
+## Readings of item 14 as amended in `9c0fd4d`
+
+**A22. `⊥` is a tracked root in every state.** `[Exploratory]`
+- Text: "The items **tracked** by `Σ` are `⊥` and every item named by a transition in the history of `Σ`".
+- Reading: the oracle adds `⊥` to the tracked items of every state, so `U(Σ, Q)` always contains `⊥` and the Structural row gives `(B, -, ⊥)` on every `B ∈ 𝔅(Σ)`, `⊤_B` included (A1). A state with no observations has the universe `{⊥}`. `⊥` has no sub-items and no congruence rewrites, so it adds nothing else. Tested in `test_oracle_bottom_is_always_tracked`.
+
+**A23. Items of past transitions are passed as `historyItems`.** `[Exploratory]`
+- Text: "every item named by a transition in the history of `Σ`, retracted ones included: … A retracted observation stops supplying a record but keeps its item in the universe".
+- Ambiguity: the oracle's input describes only the transitions in force, so it cannot see the history.
+- Reading: `PiState` takes an optional `historyItems?: readonly Item[]`, the items named by past transitions that are no longer in force (a retracted observation, and once `Withdraw` is specified, a withdrawn incompatibility or collapse). They are tracked like the items of current transitions, so they and their closure belong to `U(Σ, Q)`, but they supply no Base record and no constraint; rules still give them records derived from current grounds. The oracle derives no item from them: the caller lists every item a past transition named, so a past collapse of `A` contributes both `A` and `A → ⊥`. Items already tracked by the current state may be repeated; duplicates are ignored. Tested in `test_oracle_retracted_observation_keeps_its_item`.
+- Alternative: a structured history (`{ observations, incompatibilities, collapses }` of past transitions) from which the oracle derives the tracked items itself.
+
+**A24. A closure listed for `⊥_B` is ignored, not rejected.** `[Exploratory]`
+- Text: item 7, "`CloseDomain(D)`: Register in `C_B`, for a boundary `D ≠ ⊥_B`, …"; item 14, `∀` generic and the `∃` exclusion require "`CloseDomain(D)` in `C_B`, `D ≠ ⊥_B`".
+- Ambiguity: item 7 now makes `CloseDomain(⊥_B)` unregistrable, so a state listing it is not reachable; A16 rejects other unreachable states.
+- Reading: the oracle still accepts `⊥_B` in `closedDomains` and lets item 14's side condition `D ≠ ⊥_B` make it ground nothing (A13, tested in `test_oracle_vacuous_grounding_requires_non_bottom_domain`). This keeps the oracle's result defined on any state the differential test generates.
+- Alternative: reject such a state, as A16 does for `+⊥` and undeclared boundaries.
+
+**A25. `Dom(D)` is read from the boundary system.** `[Exploratory]`
+- Text: item 6, "**Domain Monotonicity**: whenever `B' ⊑ B`, `Dom(B') ⊆ Dom(B)`; … a boundary with several parents admits only handles common to all of them".
+- Reading: the oracle takes `Dom(D)` from `BoundarySystem.handlesOf(D)` and does not enforce monotonicity itself, so quantifier instances, structural reflexivity and congruence rewrites follow whatever the boundary system admits. At `9c0fd4d`, `defineBoundary` without explicit handles gives a boundary the union of its parents' handles, and explicit handles are not checked against the parents; until the boundary system enforces item 6, a state built that way can give the oracle a domain that item 6 excludes.
+- Alternative: the oracle checks monotonicity over `𝔅(Σ)` and rejects a violating state (A16).
