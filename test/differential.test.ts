@@ -3,7 +3,8 @@
  * oracle of the evaluation program Π(Σ) (test/oracle/pi-sigma.ts, spec/core.md §5 item 14).
  *
  * Each seeded state uses the boundaries B, B1 ⊑ B and B2 ⊑ B (plus ⊤_B) in a random topology
- * (a diamond with B12 ⊑ B1, B2, siblings of unknown overlap, or declared disjoint siblings),
+ * (a diamond with B12 ⊑ B1, B2, an ambiguous diamond with a second maximal common sub-boundary
+ * B12b, siblings of unknown overlap, or declared disjoint siblings),
  * sometimes with an unrelated C, a sub-boundary X ⊑ B whose overlap with B1 and B2 is declared
  * disjoint, settled by a registered common sub-boundary, or left unknown, and a nested D1 ⊑ B1.
  * States carry monotone random handle sets, positive and negative observations (some later
@@ -14,6 +15,8 @@
  * agree on U(Σ, Q); for every slot of 𝔅(Σ) × U(Σ, Q) (the queried slots included) on the local
  * status, the authority of each polarity, obstruction and the revision obligations; on the
  * OverlapUnknown and cover obligations; and on the ⊆-minimal witnessed covers of every boundary.
+ * Where a meet the program needs is ambiguous, both must report an error (core.md §5 item 14,
+ * Role); where no rule needs it, both must evaluate.
  * Recorded theorems and reflection values are not generated, since the oracle omits those two
  * rows (AMBIGUITIES.md A15).
  *
@@ -147,6 +150,7 @@ type RandomState = {
   readonly historyItems: Item[];
   /** The kind of the constraint withdrawn, if any. */
   readonly withdrawn: string | undefined;
+  readonly ambiguous: boolean;
 };
 
 function handleSpec(id: string): HandleSpec {
@@ -169,11 +173,16 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   // Random topology (core.md §2 item 4): the diamond with a registered common sub-boundary B12,
   // siblings B1 and B2 whose overlap is unknown, or siblings declared disjoint; and sometimes an
   // unrelated top-level boundary C, whose overlap with the B family is unknown.
-  const topology = rng.pick(["diamond", "unknown-siblings", "disjoint-siblings"] as const);
+  const topology = rng.pick(["diamond", "ambiguous-diamond", "unknown-siblings", "disjoint-siblings"] as const);
   const names: string[] = ["B", "B1", "B2"];
-  if (topology === "diamond") {
+  if (topology === "diamond" || topology === "ambiguous-diamond") {
     bs.defineBoundary("B12", { parents: ["B1", "B2"], handles: domB12.map(handleSpec) });
     names.push("B12");
+  }
+  if (topology === "ambiguous-diamond") {
+    // A second maximal common sub-boundary makes B1 ⊓ B2 ambiguous (core.md §2 item 4).
+    bs.defineBoundary("B12b", { parents: ["B1", "B2"], handles: domB12.map(handleSpec) });
+    names.push("B12b");
   } else if (topology === "disjoint-siblings") {
     bs.declareDisjoint("B1", "B2");
   }
@@ -209,6 +218,9 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     }
   }
 
+  // Half of the ambiguous states track no implication, so no rule needs the ambiguous meet.
+  const implicationFree = topology === "ambiguous-diamond" && rng.bool(0.5);
+
   const engine = new InquiryEngine(bs);
   const coverIds: string[] = [];
   if (rng.bool(0.45)) {
@@ -243,7 +255,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   const quantifier = (depth: number): Item => {
     const domain = boundary();
     const body =
-      depth > 0 && rng.bool(0.3)
+      !implicationFree && depth > 0 && rng.bool(0.3)
         ? implies(unary("P", "x"), unary("Q", "x"))
         : rng.bool(0.25)
           ? flip(unary(rng.pick(["P", "Q"] as const), "x"))
@@ -266,7 +278,9 @@ function randomState(rng: Rng, profile: Profile): RandomState {
       case 2:
         return or(compound(depth - 1), compound(depth - 1));
       case 3:
-        return implies(compound(depth - 1), rng.bool(0.15) ? bottom() : compound(depth - 1));
+        return implicationFree
+          ? baseAtom()
+          : implies(compound(depth - 1), rng.bool(0.15) ? bottom() : compound(depth - 1));
       default:
         return baseAtom();
     }
@@ -287,7 +301,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
 
   const observationCount = rng.int(2, 7);
   for (let i = 0; i < observationCount; i++) {
-    const item = rng.bool(profile.conditional)
+    const item = !implicationFree && rng.bool(profile.conditional)
       ? implies(baseAtom(), rng.bool(0.1) ? bottom() : baseAtom())
       : rng.bool(0.2)
         ? compound(1)
@@ -334,7 +348,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   }
 
   const collapses: (PiCollapse & { readonly id: string })[] = [];
-  if (rng.bool(0.2)) {
+  if (!implicationFree && rng.bool(0.2)) {
     const c = { boundary: boundary(), item: baseAtom() };
     collapses.push({ ...c, id: engine.addStructuralCollapse(c.boundary, c.item) });
   }
@@ -396,6 +410,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     queries,
     historyItems,
     withdrawn,
+    ambiguous: topology === "ambiguous-diamond",
   };
 }
 
@@ -412,20 +427,48 @@ type Coverage = {
   unverifiedCovers: number;
   withdrawals: number;
   allValidCoverStates: number;
+  ambiguousErrors: number;
+  ambiguousEvaluated: number;
 };
 
 /** Assert kernel/oracle agreement on one state and accumulate what it exercised. */
 function compareState(state: RandomState, ctx: string, coverage: Coverage): void {
-  const snap = state.engine.evaluate(state.queries);
-  const model = evaluatePi({
-    boundaries: state.boundaries,
-    observations: state.observations,
-    incompatibilities: state.incompatibilities,
-    collapses: state.collapses,
-    closedDomains: state.closedDomains,
-    queries: state.queries,
-    historyItems: state.historyItems,
-  });
+  // An ambiguous meet the program needs is an error in both; one that nothing needs is in neither.
+  const attempt = <T>(run: () => T): { readonly value?: T; readonly error?: string } => {
+    try {
+      return { value: run() };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const kernel = attempt(() => state.engine.evaluate(state.queries));
+  const oracle = attempt(() =>
+    evaluatePi({
+      boundaries: state.boundaries,
+      observations: state.observations,
+      incompatibilities: state.incompatibilities,
+      collapses: state.collapses,
+      closedDomains: state.closedDomains,
+      queries: state.queries,
+      historyItems: state.historyItems,
+    }),
+  );
+  if (kernel.error !== undefined || oracle.error !== undefined) {
+    assert.ok(
+      kernel.error !== undefined && oracle.error !== undefined,
+      `${ctx} kernel and oracle both report an error or neither does (kernel: ${kernel.error ?? "none"}; oracle: ${oracle.error ?? "none"})`,
+    );
+    assert.match(kernel.error, /ambiguous/i, `${ctx} kernel error is an ambiguous meet`);
+    assert.match(oracle.error, /ambiguous/i, `${ctx} oracle error is an ambiguous meet`);
+    coverage.ambiguousErrors += 1;
+    coverage.states += 1;
+    return;
+  }
+  const snap = kernel.value as ReturnType<InquiryEngine["evaluate"]>;
+  const model = oracle.value as ReturnType<typeof evaluatePi>;
+  if (state.ambiguous) {
+    coverage.ambiguousEvaluated += 1;
+  }
 
   // A retracted observation supplies no record but keeps its item in U(Σ, Q).
   const kernelKeys = new Set(snap.universe().map(itemKey));
@@ -554,6 +597,8 @@ function runSuite(suiteId: number, name: string, defaultCount: number, profile: 
     unverifiedCovers: 0,
     withdrawals: 0,
     allValidCoverStates: 0,
+    ambiguousErrors: 0,
+    ambiguousEvaluated: 0,
   };
   const { seeds, replay } = suiteSeeds(suiteId, defaultCount);
   for (const seed of seeds) {
@@ -577,6 +622,8 @@ function test_differential_general_states(): void {
     assert.ok(coverage.unverifiedCovers > 0, "[suite=general] some registered cover is unverified");
     assert.ok(coverage.withdrawals > 0, "[suite=general] some state withdraws a constraint");
     assert.ok(coverage.allValidCoverStates > 0, "[suite=general] some state has only valid registered covers");
+    assert.ok(coverage.ambiguousEvaluated > 0, "[suite=general] some state with an ambiguous meet evaluates");
+    assert.ok(coverage.ambiguousErrors > 0, "[suite=general] some state needs an ambiguous meet");
   }
 }
 

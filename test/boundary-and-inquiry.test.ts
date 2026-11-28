@@ -110,6 +110,108 @@ function test_registered_meet_is_the_greatest_lower_bound(): void {
   );
 }
 
+function test_identifiers_are_unique_for_the_life_of_an_inquiry(): void {
+  // audit-identifier-reuse (R11): an identifier names one observation or theorem, also after
+  // Retract, so reuse can no longer erase an observation under monotoneOnly.
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  const P = atom("P");
+  const Q = atom("Q");
+  const X = atom("X");
+  const Y = atom("Y");
+  const mono = new InquiryEngine(b, { monotoneOnly: true });
+  mono.observeNegative("B", P, "w1");
+  assert.throws(() => mono.observePositive("B", Q, "w1"), /already used/);
+  assert.equal(mono.evaluate([P]).localStatus("B", P), "Excluded");
+  mono.recordTheorem("B", "+", X, "t1");
+  assert.throws(() => mono.recordTheorem("B", "+", Y, "t1"), /already used/);
+  assert.equal(mono.evaluate([X]).localStatus("B", X), "Grounded");
+  const e = new InquiryEngine(b);
+  e.observePositive("B", P, "w1");
+  e.retract("w1");
+  assert.throws(() => e.observePositive("B", P, "w1"), /already used/);
+}
+
+function test_ambiguous_meets_are_errors_only_where_needed(): void {
+  // audit-eager-ambiguous-meet (R6): an ambiguous pair is an error only where item 14 needs its meet.
+  const lab = (): BoundarySystem => {
+    const b = new BoundarySystem();
+    b.defineBoundary("Lab");
+    b.defineBoundary("Field");
+    b.defineBoundary("M1", { parents: ["Lab", "Field"] });
+    b.defineBoundary("M2", { parents: ["Lab", "Field"] });
+    return b;
+  };
+  const P = atom("P");
+  const quiet = new InquiryEngine(lab());
+  quiet.observePositive("Lab", P, "w");
+  assert.equal(quiet.evaluate().localStatus("M1", P), "Grounded"); // no rule needs Lab ⊓ Field
+  const cut = new InquiryEngine(lab());
+  cut.observePositive("Lab", P, "w");
+  assert.throws(() => cut.evaluate([implies(P, atom("C"))]), /Scoped Cut needs the meet of/);
+  const crossed = new InquiryEngine(lab());
+  crossed.observePositive("Lab", P, "w");
+  crossed.observeNegative("Field", P, "nw");
+  assert.throws(() => crossed.evaluate(), /Ambiguous meet for "Lab" and "Field"/);
+
+  // A cover whose sub-boundaries all lie below a cell needs no meet of C1 and C2.
+  const c = new BoundarySystem();
+  c.defineBoundary("B");
+  c.defineBoundary("C1", { parents: ["B"] });
+  c.defineBoundary("C2", { parents: ["B"] });
+  c.defineBoundary("S", { parents: ["C1"] });
+  c.defineBoundary("T1", { parents: ["S", "C2"] });
+  c.defineBoundary("T2", { parents: ["S", "C2"] });
+  const id = c.registerCover("B", ["C1", "C2"]);
+  assert.deepEqual(c.coverValidity(id), { kind: "valid" });
+  // Where the ambiguous pair decides whether a sub-boundary leaves the cover unsettled, it is an error.
+  const d = new BoundarySystem();
+  d.defineBoundary("B");
+  d.defineBoundary("C1", { parents: ["B"] });
+  d.defineBoundary("C2", { parents: ["B"] });
+  d.declareDisjoint("C1", "C2");
+  d.defineBoundary("B3", { parents: ["B"] });
+  d.declareDisjoint("B3", "C2");
+  d.defineBoundary("N1", { parents: ["B3", "C1"] });
+  d.defineBoundary("N2", { parents: ["B3", "C1"] });
+  const decided = d.registerCover("B", ["C1", "C2"]);
+  assert.throws(() => d.coverValidity(decided), /Ambiguous meet/);
+}
+
+function test_m1_refuses_mistargeted_and_empty_refinements(): void {
+  // audit-m1-indirect-overblocking (R10, request checks): the target relation must occur in the
+  // universal, and a refinement must excise a handle.
+  const b = new BoundarySystem();
+  b.defineBoundary("Swan", {
+    nativeRelations: ["White", "Lake", "Big"],
+    handles: [
+      { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+      { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+    ],
+  });
+  b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+  b.defineBoundary("Swan_Same", { parents: ["Swan"] });
+  const rel = (name: string, h: string) => atom(name, [{ role: "subject", handle: h }]);
+  const auth = (h: string) => ({ handle: h, criterion: "I_Swan" });
+  const e = new InquiryEngine(b);
+  e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+  e.observePositive("Swan", rel("Lake", "swan_101"), "lake101", auth("swan_101"));
+  e.observeNegative("Swan", rel("Lake", "swan_402"), "lake402", auth("swan_402"));
+  const split = (to: string, target: string, criterion: string) =>
+    e.refineBoundary({
+      fromBoundary: "Swan",
+      toBoundary: to,
+      originalUniversal: forall("x", "Swan", rel("White", "x")),
+      targetRelation: target,
+      criterionItem: rel(criterion, "x"),
+    });
+  const mistargeted = split("Swan_Rest", "Big", "Lake");
+  assert.equal(mistargeted.ok ? "admitted" : mistargeted.violation, "M1-target-absent");
+  const empty = split("Swan_Same", "White", "Big");
+  assert.equal(empty.ok ? "admitted" : empty.violation, "M1-empty-excision");
+  assert.equal(split("Swan_Rest", "White", "Lake").ok, true);
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -1262,3 +1364,6 @@ test("overlap unknown records an obligation without collision", test_overlap_unk
 test("cover revalidation marks invalid and unverified covers", test_cover_revalidation_marks_invalid_and_unverified_covers);
 test("withdraw cancels constraints purely", test_withdraw_cancels_constraints_purely);
 test("registered meet is the greatest lower bound", test_registered_meet_is_the_greatest_lower_bound);
+test("identifiers are unique for the life of an inquiry", test_identifiers_are_unique_for_the_life_of_an_inquiry);
+test("ambiguous meets are errors only where needed", test_ambiguous_meets_are_errors_only_where_needed);
+test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted_and_empty_refinements);

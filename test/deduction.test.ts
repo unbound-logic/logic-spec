@@ -20,6 +20,64 @@ import {
   substituteHandle,
 } from "../src/syntax.ts";
 
+function test_eigenvariable_freshness_and_one_position_congruence(): void {
+  // audit-deduction-freshness-and-congruence (R8): a handle named only by a retracted observation
+  // is still tracked, so it is no fresh eigenvariable ...
+  const b = new BoundarySystem();
+  b.defineBoundary("D", { nativeRelations: ["R"], handles: [{ id: "t1", criterion: "I", kind: "structural" }] });
+  const e = new InquiryEngine(b);
+  const r = (x: string) => atom("R", [{ role: "arg", handle: x }]);
+  e.observePositive("D", r("ghost"), "wg");
+  e.retract("wg");
+  const res = verifyDerivation(e, {
+    kind: "forall-intro",
+    boundary: "D",
+    variable: "x",
+    domain: "D",
+    eigenvar: "ghost",
+    templateBody: implies(r("x"), r("x")),
+    body: {
+      kind: "implies-intro",
+      boundary: "D",
+      assumptionId: "h",
+      antecedent: r("ghost"),
+      body: { kind: "assume", assumptionId: "h", boundary: "D" },
+    },
+  });
+  assert.equal(res.ok ? "accepted" : res.violation, "eigenvariable-not-fresh");
+
+  // ... and equiv-subst rewrites one position at a time, to a handle of a declared boundary.
+  const c = new BoundarySystem();
+  c.defineBoundary("E", {
+    nativeRelations: ["Rel"],
+    handles: [
+      { id: "h0", criterion: "I(h0)", kind: "structural" },
+      { id: "h1", criterion: "I(h1)", kind: "structural" },
+    ],
+  });
+  const ee = new InquiryEngine(c);
+  const rel2 = (x: string, y: string) => atom("Rel", [{ role: "from", handle: x }, { role: "to", handle: y }]);
+  ee.observePositive("E", equiv("E", "h0", "h1"), "w_eq");
+  ee.observePositive("E", equiv("E", "h0", "nowhere"), "w_eq_free");
+  ee.observePositive("E", rel2("h0", "h0"), "w_rel");
+  const subst = (equivItem: ReturnType<typeof equiv>, position?: number) =>
+    verifyDerivation(ee, {
+      kind: "equiv-subst",
+      direction: "left-to-right",
+      equivProof: { kind: "live-ground", boundary: "E", polarity: "+", item: equivItem },
+      targetProof: { kind: "live-ground", boundary: "E", polarity: "+", item: rel2("h0", "h0") },
+      ...(position === undefined ? {} : { position }),
+    });
+  const both = subst(equiv("E", "h0", "h1"));
+  assert.equal(both.ok, false); // two occurrences: a position is required
+  const first = subst(equiv("E", "h0", "h1"), 0);
+  assert.equal(first.ok, true);
+  if (first.ok) {
+    assert.equal(itemKey(first.item), itemKey(rel2("h1", "h0")));
+  }
+  assert.equal(subst(equiv("E", "h0", "nowhere"), 0).ok, false); // no declared boundary admits "nowhere"
+}
+
 function test_standalone_cover_gluing_and_quarantine_propagation(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -1069,3 +1127,4 @@ test(
   "deduction quantifier domainConstraint enforcement",
   test_deduction_quantifier_domain_constraint_enforcement,
 );
+test("eigenvariable freshness and one-position congruence", test_eigenvariable_freshness_and_one_position_congruence);

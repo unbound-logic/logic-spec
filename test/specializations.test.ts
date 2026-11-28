@@ -7,7 +7,7 @@ import {
   verifyIntuitionisticSpecialization,
   verifyMinimalSpecialization,
 } from "../src/specializations.ts";
-import { and, atom, bottom, equiv, exists, flip, forall, implies, itemKey, or } from "../src/syntax.ts";
+import { and, atom, bottom, equiv, exists, flip, forall, implies, itemKey, or, type Item } from "../src/syntax.ts";
 
 function test_four_tier_deductive_spectrum_and_classical_recovery(): void {
   // Tier 2 & 3: UL-Minimal & UL-Intuitionistic (monotoneOnly + No-Gluts)
@@ -137,6 +137,57 @@ function test_classical_cover_requires_valid_cover_with_known_cell_overlaps(): v
   if (!unverified.ok) {
     assert.match(unverified.reason, /unverified/);
   }
+}
+
+function test_classical_check_covers_tracked_items_constraints_and_handles(): void {
+  // audit-classical-check-completeness (R9): the valuation must agree with every ground and
+  // constraint of Σ, every sub-item is checked, and the items name only handles of Dom(B*).
+  const run = (setup: (e: InquiryEngine) => void, atoms: readonly Item[], queries: readonly Item[]) => {
+    const b = new BoundarySystem();
+    b.defineBoundary("Bs", { nativeRelations: ["H"], handles: [{ id: "k", criterion: "I", kind: "structural" }] });
+    const e = new InquiryEngine(b, { monotoneOnly: true });
+    setup(e);
+    return evaluateClassicalSpecialization(e, "Bs", atoms, queries);
+  };
+  const P = atom("P");
+  const Q = atom("Q");
+  const A = atom("A");
+  const B = atom("B");
+  const C = atom("C");
+  const refused = (res: ReturnType<typeof run>, pattern: RegExp): void => {
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.match(res.reason, pattern);
+    }
+  };
+  // (a) A tracked compound outside the queries.
+  refused(run((e) => {
+    e.observeNegative("Bs", P, "np");
+    e.observeNegative("Bs", Q, "nq");
+    e.observePositive("Bs", implies(implies(P, Q), P), "w");
+  }, [P, Q], [implies(P, Q)]), /conflicts with existing "Grounded"/);
+  // (b) A registered incompatibility.
+  refused(run((e) => {
+    e.observeNegative("Bs", P, "np");
+    e.observeNegative("Bs", Q, "nq");
+    e.addIncompatibility("Bs", implies(P, Q), implies(Q, P));
+  }, [P, Q], [implies(P, Q)]), /both sides of the incompatibility/);
+  // (c) A conflict on a sub-item that a short-circuit used to skip.
+  refused(run((e) => {
+    e.observeNegative("Bs", A, "na");
+    e.observeNegative("Bs", B, "nb");
+    e.observeNegative("Bs", C, "nc");
+    e.observeNegative("Bs", implies(B, C), "nbc");
+  }, [A, B, C], [and(A, implies(B, C))]), /conflicts with existing "Excluded"/);
+  // (d) A handle outside Dom(B*).
+  const outside = atom("H", [{ role: "arg", handle: "zzz" }]);
+  refused(run((e) => e.observePositive("Bs", outside, "w"), [outside], [outside]), /\(C3\) requires the items to name only handles/);
+  // A consistent state still evaluates.
+  const ok = run((e) => {
+    e.observeNegative("Bs", P, "np");
+    e.observePositive("Bs", Q, "q");
+  }, [P, Q], [implies(P, Q)]);
+  assert.equal(ok.ok, true);
 }
 
 function test_classical_atomic_cover_2k_boolean_algebra_reporting(): void {
@@ -345,3 +396,4 @@ test(
   test_classical_specialization_requires_closed_nonempty_domains,
 );
 test("classical cover requires a valid cover with known cell overlaps", test_classical_cover_requires_valid_cover_with_known_cell_overlaps);
+test("classical check covers tracked items, constraints and handles", test_classical_check_covers_tracked_items_constraints_and_handles);
