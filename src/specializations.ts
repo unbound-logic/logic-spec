@@ -226,6 +226,63 @@ export function evaluateClassicalSpecialization(
     }
   }
 
+  // (C3): every handle the items name outside a quantifier belongs to Dom(B*) of every atomic cell,
+  // which also refuses unbound variables.
+  const freeHandles = (item: Item, bound: ReadonlySet<string>, out: Set<string>): void => {
+    switch (item.kind) {
+      case "atom":
+        for (const r of item.roles) {
+          if (!bound.has(r.handle)) {
+            out.add(r.handle);
+          }
+        }
+        return;
+      case "equiv":
+        for (const h of [item.left, item.right]) {
+          if (!bound.has(h)) {
+            out.add(h);
+          }
+        }
+        return;
+      case "flip":
+        freeHandles(item.inner, bound, out);
+        return;
+      case "and":
+      case "or":
+        freeHandles(item.left, bound, out);
+        freeHandles(item.right, bound, out);
+        return;
+      case "implies":
+        freeHandles(item.antecedent, bound, out);
+        freeHandles(item.consequent, bound, out);
+        return;
+      case "forall":
+      case "exists": {
+        const inner = new Set(bound).add(item.variable);
+        freeHandles(item.body, inner, out);
+        if (item.domainConstraint !== undefined) {
+          freeHandles(item.domainConstraint, inner, out);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  };
+  const named = new Set<string>();
+  for (const it of [...atoms, ...queryItems]) {
+    freeHandles(it, new Set(), named);
+  }
+  for (const cell of atomicCover) {
+    const outside = [...named].find((h) => engine.boundaries.getHandle(cell, h) === undefined);
+    if (outside !== undefined) {
+      return {
+        ok: false,
+        reason: `UL-Classical (C3) requires the items to name only handles of Dom("${cell}"); "${outside}" is not one.`,
+      };
+    }
+  }
+
   // Enforce No-Gaps on all base atoms and congruences reachable across atoms and queryItems.
   for (const cell of atomicCover) {
     for (const a of allGroundAtoms) {
@@ -262,61 +319,106 @@ export function evaluateClassicalSpecialization(
       }
       case "flip":
         return checkConsistent(evalOnAtomicCell(cell, item.inner) === "+" ? "-" : "+");
-      case "and":
-        return checkConsistent(
-          evalOnAtomicCell(cell, item.left) === "+" && evalOnAtomicCell(cell, item.right) === "+"
-            ? "+"
-            : "-",
-        );
-      case "or":
-        return checkConsistent(
-          evalOnAtomicCell(cell, item.left) === "+" || evalOnAtomicCell(cell, item.right) === "+"
-            ? "+"
-            : "-",
-        );
+      // Both sides and every instance are evaluated, so a conflicting ground on any sub-item is
+      // checked; nothing is short-circuited.
+      case "and": {
+        const left = evalOnAtomicCell(cell, item.left);
+        const right = evalOnAtomicCell(cell, item.right);
+        return checkConsistent(left === "+" && right === "+" ? "+" : "-");
+      }
+      case "or": {
+        const left = evalOnAtomicCell(cell, item.left);
+        const right = evalOnAtomicCell(cell, item.right);
+        return checkConsistent(left === "+" || right === "+" ? "+" : "-");
+      }
       case "implies": {
         // Under atomic-generated No-Gaps + No-Gluts closure, non-refuted conditionals close to +.
         const ant = evalOnAtomicCell(cell, item.antecedent);
         const con = evalOnAtomicCell(cell, item.consequent);
         return checkConsistent(ant === "+" && con === "-" ? "-" : "+");
       }
-      case "forall": {
-        const handles = engine.boundaries.handlesOf(item.domain);
-        for (const h of handles) {
-          if (item.domainConstraint !== undefined) {
-            const cInst = substituteHandle(item.domainConstraint, item.variable, h.id);
-            if (evalOnAtomicCell(cell, cInst) === "-") {
-              continue;
-            }
-          }
-          const inst = substituteHandle(item.body, item.variable, h.id);
-          if (evalOnAtomicCell(cell, inst) === "-") {
-            return checkConsistent("-");
-          }
-        }
-        return checkConsistent("+");
-      }
+      case "forall":
       case "exists": {
-        const handles = engine.boundaries.handlesOf(item.domain);
-        for (const h of handles) {
-          if (item.domainConstraint !== undefined) {
-            const cInst = substituteHandle(item.domainConstraint, item.variable, h.id);
-            if (evalOnAtomicCell(cell, cInst) === "-") {
-              continue;
-            }
-          }
-          const inst = substituteHandle(item.body, item.variable, h.id);
-          if (evalOnAtomicCell(cell, inst) === "+") {
-            return checkConsistent("+");
+        let some = false;
+        let every = true;
+        for (const h of engine.boundaries.handlesOf(item.domain)) {
+          const inDomain =
+            item.domainConstraint === undefined ||
+            evalOnAtomicCell(cell, substituteHandle(item.domainConstraint, item.variable, h.id)) === "+";
+          const value = evalOnAtomicCell(cell, substituteHandle(item.body, item.variable, h.id));
+          if (inDomain) {
+            some ||= value === "+";
+            every &&= value === "+";
           }
         }
-        return checkConsistent("-");
+        return checkConsistent((item.kind === "forall" ? every : some) ? "+" : "-");
       }
       case "refl":
       case "ref":
         throw new Error(`UL-Classical requires level n = 0 closed formulas; found "${item.kind}".`);
     }
   };
+
+  // (C4), (C6): the valuation agrees with every ground of Σ, not only the queried items. Every
+  // level-0 item of U(Σ, Q) built from the considered atoms is checked, and every incompatibility
+  // and structural collapse in force on a boundary above a cell.
+  const consideredKeys = new Set(groundAtomMap.keys());
+  const considered = (item: Item): boolean => {
+    switch (item.kind) {
+      case "atom":
+      case "equiv":
+        return consideredKeys.has(itemKey(item));
+      case "bottom":
+        return true;
+      case "flip":
+        return considered(item.inner);
+      case "and":
+      case "or":
+        return considered(item.left) && considered(item.right);
+      case "implies":
+        return considered(item.antecedent) && considered(item.consequent);
+      case "forall":
+      case "exists": {
+        const dom = engine.boundaries.handlesOf(item.domain);
+        if (!engine.isDomainClosed(item.domain) || dom.length === 0) {
+          return false;
+        }
+        if (!atomicCover.every((cell) => dom.every((h) => engine.boundaries.getHandle(cell, h.id) !== undefined))) {
+          return false;
+        }
+        return dom.every(
+          (h) =>
+            considered(substituteHandle(item.body, item.variable, h.id)) &&
+            (item.domainConstraint === undefined ||
+              considered(substituteHandle(item.domainConstraint, item.variable, h.id))),
+        );
+      }
+      default:
+        return false;
+    }
+  };
+  const trackedItems = snap.universe().filter(considered);
+  for (const cell of atomicCover) {
+    for (const it of trackedItems) {
+      evalOnAtomicCell(cell, it);
+    }
+    for (const inc of engine.incompatibilitiesInForce()) {
+      if (!engine.boundaries.refines(cell, inc.boundary) || !considered(inc.left) || !considered(inc.right)) {
+        continue;
+      }
+      if (evalOnAtomicCell(cell, inc.left) === "+" && evalOnAtomicCell(cell, inc.right) === "+") {
+        conflictReason ??= `UL-Classical valuation gives "+" to both sides of the incompatibility ${itemKey(inc.left)} ⊥ ${itemKey(inc.right)} on atomic cell "${cell}".`;
+      }
+    }
+    for (const col of engine.collapsesInForce()) {
+      if (engine.boundaries.refines(cell, col.boundary) && considered(col.item) && evalOnAtomicCell(cell, col.item) !== "-") {
+        conflictReason ??= `UL-Classical valuation gives "+" to ${itemKey(col.item)}, which a structural collapse excludes on atomic cell "${cell}".`;
+      }
+    }
+  }
+  if (conflictReason !== undefined) {
+    return { ok: false, reason: conflictReason };
+  }
 
   // On a k-cell cover {B*_i} ▷ B, UL-Classical recovers the product Boolean algebra 2^k:
   // distinguish uniformly "+" (globally grounded), uniformly "-" (globally excluded), and "split".

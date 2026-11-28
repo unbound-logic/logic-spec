@@ -93,6 +93,8 @@ export type M1Result =
         | "M1-contingent-excision"
         | "M1-unwitnessed-proxy"
         | "M1-unbound-criterion"
+        | "M1-target-absent"
+        | "M1-empty-excision"
         | "M2-not-refuted";
       readonly reason: string;
     };
@@ -466,6 +468,9 @@ export class InquiryEngine {
   readonly #constraintKinds = new Map<string, ConstraintKind>();
   /** Identifiers ever given to a constraint; Withdraw does not free them for reuse. */
   readonly #usedConstraintIds = new Set<string>();
+  /** Identifiers ever given to a base observation or a theorem; Retract does not free them. */
+  readonly #usedBaseIds = new Set<string>();
+  readonly #usedTheoremIds = new Set<string>();
   #constraintCounter = 0;
   readonly #refinements: RecordedRefinement[] = [];
   readonly #trackedItems = new Map<string, Item>();
@@ -546,6 +551,10 @@ export class InquiryEngine {
       );
     }
     this.boundaries.nonEmptySubBoundaries(boundary);
+    if (this.#usedTheoremIds.has(theoremId)) {
+      throw new Error(`Theorem identifier "${theoremId}" is already used in this inquiry.`);
+    }
+    this.#usedTheoremIds.add(theoremId);
     this.#track(item);
     for (const dep of requiredGrounds) {
       this.#track(dep.item);
@@ -563,9 +572,18 @@ export class InquiryEngine {
     this.#captureStage();
   }
 
-  /** Collect every handle identifier mentioned anywhere in Σ or registered boundaries. */
+  /**
+   * Collect every handle identifier mentioned anywhere in Σ or registered boundaries, including
+   * those named only by items Σ still tracks: retracted observations, withdrawn constraints and
+   * refinements (core.md §5 item 14).
+   */
   mentionedHandles(): ReadonlySet<string> {
     const out = new Set<string>();
+    for (const item of this.#trackedItems.values()) {
+      for (const h of collectHandles(item)) {
+        out.add(h);
+      }
+    }
     for (const obs of this.#baseObservations.values()) {
       for (const h of collectHandles(obs.item)) {
         out.add(h);
@@ -691,6 +709,16 @@ export class InquiryEngine {
     return [...this.#closures.values()].includes(domain);
   }
 
+  /** The incompatibilities A ⊥_B C in force in C_B. */
+  incompatibilitiesInForce(): readonly IncompatibilityConstraint[] {
+    return [...this.#incompatibilities];
+  }
+
+  /** The structural collapses B ⊓ [A] = ⊥_B in force in C_B. */
+  collapsesInForce(): readonly { readonly id: string; readonly boundary: string; readonly item: Item }[] {
+    return [...this.#structuralCollapses];
+  }
+
   /** The kind of the constraint `constraintId` in force in C_B, or undefined. */
   constraintKind(constraintId: string): ConstraintKind | undefined {
     return this.#constraintKinds.get(constraintId);
@@ -799,6 +827,24 @@ export class InquiryEngine {
       throw new Error(
         `Invalid refinement: "${req.toBoundary}" must be a non-empty sub-boundary of "${req.fromBoundary}".`,
       );
+    }
+
+    // The request must name a relation of the universal, and the refinement must excise a handle:
+    // RefineBoundary narrows the regime past a counterexample (core.md §2 item 7).
+    if (!collectRelations(req.originalUniversal).has(req.targetRelation)) {
+      return {
+        ok: false,
+        violation: "M1-target-absent",
+        reason: `The target relation "${req.targetRelation}" does not occur in the universal ${itemKey(req.originalUniversal)}.`,
+      };
+    }
+    const keptHandles = new Set(this.boundaries.handlesOf(req.toBoundary).map((h) => h.id));
+    if (this.boundaries.handlesOf(req.fromBoundary).every((h) => keptHandles.has(h.id))) {
+      return {
+        ok: false,
+        violation: "M1-empty-excision",
+        reason: `RefineBoundary(${req.fromBoundary} → ${req.toBoundary}) excises no handle of Dom(${req.fromBoundary}).`,
+      };
     }
 
     const beforeSnap = this.evaluate([req.originalUniversal]);
@@ -1051,16 +1097,17 @@ export class InquiryEngine {
       for (let j = i + 1; j < boundaries.length; j++) {
         const left = boundaries[i] as string;
         const right = boundaries[j] as string;
-        if (bounds.meetStatus(left, right).kind !== "unknown") {
+        // The overlap of a pair is needed only when the pair holds opposite present records (item 14).
+        const crossed = universe.filter(
+          (item) =>
+            (probe.hasRecord(left, "+", item) && probe.hasRecord(right, "-", item)) ||
+            (probe.hasRecord(left, "-", item) && probe.hasRecord(right, "+", item)),
+        );
+        if (crossed.length === 0 || bounds.meetStatus(left, right).kind !== "unknown") {
           continue;
         }
-        for (const item of universe) {
-          const crossed =
-            (probe.hasRecord(left, "+", item) && probe.hasRecord(right, "-", item)) ||
-            (probe.hasRecord(left, "-", item) && probe.hasRecord(right, "+", item));
-          if (crossed) {
-            overlapObligations.push({ left, right, itemKey: itemKey(item) });
-          }
+        for (const item of crossed) {
+          overlapObligations.push({ left, right, itemKey: itemKey(item) });
         }
       }
     }
@@ -1148,6 +1195,11 @@ export class InquiryEngine {
     handleAuth?: HandleAuth,
   ): void {
     this.boundaries.nonEmptySubBoundaries(boundary);
+    if (this.#usedBaseIds.has(baseId)) {
+      throw new Error(
+        `Base identifier "${baseId}" is already used in this inquiry; identifiers name one observation for the life of the inquiry, also after Retract.`,
+      );
+    }
     if (handleAuth !== undefined) {
       if (!this.boundaries.isAdmissibleHandle(boundary, handleAuth.handle, handleAuth.criterion)) {
         throw new Error(
@@ -1157,6 +1209,7 @@ export class InquiryEngine {
     }
     this.#track(item);
     const key = itemKey(item);
+    this.#usedBaseIds.add(baseId);
     this.#baseObservations.set(baseId, { baseId, boundary, polarity, item, key });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Observe${polarity}(${boundary}, ${key}, ${baseId})`);
@@ -1414,7 +1467,16 @@ function evaluatePi(input: PiInput): PiReport {
     }
   }
 
-  // Registered covers closed under the item 5 axioms stand in for witnessed covers.
+  // Scoped Cut needs the meet of every pair of 𝔅(Σ) once U(Σ, Q) holds an implication (item 14,
+  // Role), so an ambiguous pair is then an error; otherwise no rule consults it.
+  if (meetErrors.size > 0 && universe.some((it) => it.kind === "implies")) {
+    const [key, message] = [...meetErrors.entries()][0] as [number, string];
+    throw new Error(
+      `Π(Σ): Scoped Cut needs the meet of "${boundaries[Math.floor(key / nb)]}" and "${boundaries[key % nb]}", which is ambiguous (${message}).`,
+    );
+  }
+
+  // The witnessed covers of item 5.
   const coversOf: { readonly names: readonly string[]; readonly cells: readonly number[] }[][] =
     boundaries.map((b) =>
       bounds.witnessedCoversOf(b).map((names) => ({
@@ -1594,7 +1656,6 @@ function evaluatePi(input: PiInput): PiReport {
   });
 
   /** Scoped Cut instances that need an ambiguous meet, checked against the program's reach. */
-  const ambiguousCuts: { readonly key: number; readonly antecedent: number; readonly conditional: number }[] = [];
 
   universe.forEach((item, a) => {
     switch (item.kind) {
@@ -1667,14 +1728,7 @@ function evaluatePi(input: PiInput): PiReport {
               continue;
             }
             if (m === MEET_AMBIGUOUS) {
-              if (antecedent !== undefined) {
-                ambiguousCuts.push({
-                  key: b1 * nb + b2,
-                  antecedent: slotOf(b1, antecedent),
-                  conditional: slotOf(b2, a),
-                });
-              }
-              continue;
+              continue; // unreachable: an ambiguous pair with an implication is reported above
             }
             emit(m, "+", consequent, [lv(b1, "+", antecedent), lv(b2, "+", a)], { rule: "mp" });
           }
@@ -1983,19 +2037,6 @@ function evaluatePi(input: PiInput): PiReport {
     obs: new Uint8Array(nS),
   };
   let over = gamma(under.obs);
-
-  // An omitted Scoped Cut instance (ambiguous meet) can fire only if its premises are reachable
-  // when no slot is obstructed; then the program needs the meet and the kernel reports it.
-  for (const cut of ambiguousCuts) {
-    if (
-      over.truth[liveAtom("+", cut.antecedent)] === 1 &&
-      over.truth[liveAtom("+", cut.conditional)] === 1
-    ) {
-      throw new Error(
-        `Π(Σ): Scoped Cut needs the meet of "${boundaryOf(cut.antecedent)}" and "${boundaryOf(cut.conditional)}", which is ambiguous (${meetErrors.get(cut.key) ?? "ambiguous meet"}).`,
-      );
-    }
-  }
 
   const sameTruth = (x: Uint8Array, y: Uint8Array): boolean => {
     for (let i = 0; i < x.length; i++) {

@@ -135,6 +135,8 @@ export type ProofNode =
       readonly equivProof: ProofNode;
       readonly targetProof: ProofNode;
       readonly direction: "left-to-right" | "right-to-left";
+      /** The argument position rewritten; required when the handle occurs more than once. */
+      readonly position?: number;
     }
   | { readonly kind: "refl-intro"; readonly boundary: string; readonly reflItem: Item }
   | { readonly kind: "ex-falso-bottom"; readonly bottomProof: ProofNode; readonly target: Item };
@@ -1106,12 +1108,31 @@ function verifyRoot(
         }
         const fromHandle = node.direction === "left-to-right" ? eqRes.item.left : eqRes.item.right;
         const toHandle = node.direction === "left-to-right" ? eqRes.item.right : eqRes.item.left;
+        // Congruence rewrites one occurrence at a time, to a handle of a domain of 𝔅(Σ)
+        // (core.md §2 item 6, §5 item 14).
+        if (!boundaries.nonEmptyBoundaries().some((b) => boundaries.getHandle(b, toHandle) !== undefined)) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason: `equiv-subst rewrites to "${toHandle}", which is the handle of no declared boundary.`,
+          };
+        }
+        const occurrences = tRes.item.roles.flatMap((r, i) => (r.handle === fromHandle ? [i] : []));
+        const position = node.position ?? (occurrences.length === 1 ? occurrences[0] : undefined);
+        if (position === undefined || !occurrences.includes(position)) {
+          return {
+            ok: false,
+            violation: "type-mismatch",
+            reason:
+              occurrences.length === 0
+                ? `equiv-subst finds no occurrence of "${fromHandle}" to rewrite.`
+                : `equiv-subst rewrites one occurrence at a time; "${fromHandle}" occurs at positions [${occurrences.join(", ")}], so name one with position.`,
+          };
+        }
         const rewritten: Item = {
           kind: "atom",
           relation: tRes.item.relation,
-          roles: tRes.item.roles.map((r) =>
-            r.handle === fromHandle ? { role: r.role, handle: toHandle } : r,
-          ),
+          roles: tRes.item.roles.map((r, i) => (i === position ? { role: r.role, handle: toHandle } : r)),
         };
         return {
           ok: true,

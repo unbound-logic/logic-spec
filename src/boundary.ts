@@ -345,6 +345,17 @@ export class BoundarySystem {
    * from declared ancestors; unknown otherwise. Several maximal common sub-boundaries throw.
    */
   meetStatus(a: string, b: string): MeetStatus {
+    const status = this.#meetOrAmbiguous(a, b);
+    if (status.kind === "ambiguous") {
+      throw new Error(
+        `Ambiguous meet for "${a}" and "${b}": candidates [${status.candidates.join(", ")}]; call defineMeet() or declareDisjoint().`,
+      );
+    }
+    return status;
+  }
+
+  /** meetStatus without the throw: an ambiguous pair is reported, for callers that may not need it. */
+  #meetOrAmbiguous(a: string, b: string): MeetStatus | { readonly kind: "ambiguous"; readonly candidates: readonly string[] } {
     this.#assertDefined(a);
     this.#assertDefined(b);
     if (a === BOT_BOUNDARY || b === BOT_BOUNDARY) {
@@ -383,9 +394,7 @@ export class BoundarySystem {
     if (maximal.length === 1 && maximal[0] !== undefined) {
       return { kind: "overlap", meet: maximal[0] };
     }
-    throw new Error(
-      `Ambiguous meet for "${a}" and "${b}": candidates [${maximal.join(", ")}]; call defineMeet() or declareDisjoint().`,
-    );
+    return { kind: "ambiguous", candidates: maximal };
   }
 
   /**
@@ -475,7 +484,7 @@ export class BoundarySystem {
     if (cover === undefined) {
       throw new Error(`No registered cover "${id}".`);
     }
-    return this.#assessCover(cover.target, cover.cells);
+    return this.#assessCover(cover.target, cover.cells, "full");
   }
 
   /** Validity of an arbitrary cover {cells} ▷ target against the current boundaries (item 5). */
@@ -484,24 +493,54 @@ export class BoundarySystem {
     for (const c of cells) {
       this.#assertDefined(c);
     }
-    return this.#assessCover(target, cells.filter((c) => c !== BOT_BOUNDARY));
+    return this.#assessCover(target, cells.filter((c) => c !== BOT_BOUNDARY), "full");
   }
 
-  #assessCover(target: string, cells: readonly string[]): CoverValidity {
+  /**
+   * Judge a cover (item 5), consulting a meet only where it decides the result (item 14, Role): an
+   * ambiguous pair never refutes a cover, so it matters only for a sub-boundary known to overlap no
+   * cell, and only when no sub-boundary refutes the cover. With "invalidity", only whether the
+   * cover is invalid is asked, which an ambiguous pair never decides.
+   */
+  #assessCover(target: string, cells: readonly string[], mode: "full" | "invalidity"): CoverValidity {
     if (target === BOT_BOUNDARY) {
       return { kind: "valid" };
     }
     const invalid: string[] = [];
     const unverified: string[] = [];
+    let undecided: { readonly sub: string; readonly cell: string; readonly candidates: readonly string[] } | undefined;
     for (const sub of this.nonEmptySubBoundaries(target)) {
-      const statuses = cells.map((c) => this.meetStatus(c, sub));
-      if (statuses.some((st) => st.kind === "overlap")) {
+      let overlap = false;
+      let unknown = false;
+      let ambiguous: { readonly cell: string; readonly candidates: readonly string[] } | undefined;
+      for (const c of cells) {
+        const st = this.#meetOrAmbiguous(c, sub);
+        if (st.kind === "overlap") {
+          overlap = true;
+          break;
+        }
+        if (st.kind === "unknown") {
+          unknown = true;
+        } else if (st.kind === "ambiguous") {
+          ambiguous ??= { cell: c, candidates: st.candidates };
+        }
+      }
+      if (overlap) {
         continue;
       }
-      (statuses.every((st) => st.kind === "disjoint") ? invalid : unverified).push(sub);
+      if (ambiguous !== undefined) {
+        undecided ??= { sub, ...ambiguous };
+      } else {
+        (unknown ? unverified : invalid).push(sub);
+      }
     }
     if (invalid.length > 0) {
       return { kind: "invalid", witnesses: invalid };
+    }
+    if (undecided !== undefined && mode === "full") {
+      throw new Error(
+        `Ambiguous meet for "${undecided.cell}" and "${undecided.sub}": candidates [${undecided.candidates.join(", ")}]; judging the cover of "${target}" needs it. Call defineMeet() or declareDisjoint().`,
+      );
     }
     return unverified.length > 0 ? { kind: "unverified", witnesses: unverified } : { kind: "valid" };
   }
@@ -528,7 +567,7 @@ export class BoundarySystem {
       covers.set(b, new Map([[coverSignature([b]), [b]]]));
       rejected.set(b, new Set());
     }
-    const admit = (b: string, cells: readonly string[]): boolean => {
+    const admit = (b: string, cells: readonly string[], registered = false): boolean => {
       const bCovers = covers.get(b);
       const bRejected = rejected.get(b);
       if (bCovers === undefined || bRejected === undefined) {
@@ -543,7 +582,8 @@ export class BoundarySystem {
           `Cover closure for "${b}" needs a cover of ${cells.length} cells, above the limit of ${MAX_COVER_CELLS}; refusing to truncate the witnessed covers.`,
         );
       }
-      const validity = this.#assessCover(b, cells).kind;
+      const mode = registered || options.verifiedOnly === true ? "full" : "invalidity";
+      const validity = this.#assessCover(b, cells, mode).kind;
       if (validity === "invalid" || (validity === "unverified" && options.verifiedOnly === true)) {
         bRejected.add(sig);
         return false;
@@ -553,7 +593,7 @@ export class BoundarySystem {
     };
     for (const { target: sup, cells } of this.#registeredCovers.values()) {
       if (sup !== BOT_BOUNDARY) {
-        admit(sup, cells);
+        admit(sup, cells, true);
       }
     }
 
@@ -600,12 +640,14 @@ export class BoundarySystem {
             if (sub === b) {
               continue;
             }
-            const statuses = cover.map((c) => this.meetStatus(c, sub));
-            if (statuses.some((st) => st.kind === "unknown")) {
+            const lazy = cover.map((c) => this.#meetOrAmbiguous(c, sub));
+            if (lazy.some((st) => st.kind === "unknown")) {
               continue;
             }
+            // Not blocked, so the base change needs every cell's meet with sub.
+            const statuses = cover.map((c, k) => (lazy[k]?.kind === "ambiguous" ? this.meetStatus(c, sub) : lazy[k]));
             const pulled = [
-              ...new Set(statuses.flatMap((st) => (st.kind === "overlap" ? [st.meet] : []))),
+              ...new Set(statuses.flatMap((st) => (st?.kind === "overlap" ? [st.meet] : []))),
             ];
             if (pulled.length === 0) {
               throw new Error(
