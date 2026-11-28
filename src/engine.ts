@@ -1067,6 +1067,14 @@ export class InquiryEngine {
         continue;
       }
       const priorSnap = this.#evaluateRecord(priorRecord, [it.targetItem]);
+      // A record whose authority is Undetermined at its stage gives the reflection no value, so the
+      // reflection stays Open (core.md §1 item 3; audit-reflection-authority-flattening).
+      if (
+        it.targetStatus === undefined &&
+        priorSnap.authorityOf(it.targetBoundary, it.targetPolarity, it.targetItem) === "Undetermined"
+      ) {
+        continue;
+      }
       const holds =
         it.targetStatus !== undefined
           ? priorSnap.localStatus(it.targetBoundary, it.targetItem) === it.targetStatus

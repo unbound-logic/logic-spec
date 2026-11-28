@@ -1204,6 +1204,16 @@ function verifyRoot(
           };
         }
         const priorSnap = engine.evaluateAtStage(targetStage, [targetItem]);
+        if (
+          targetStatus === undefined &&
+          priorSnap.authorityOf(targetBoundary, targetPolarity, targetItem) === "Undetermined"
+        ) {
+          return {
+            ok: false,
+            violation: "ground-not-live",
+            reason: `The authority of (${targetBoundary} ⊩${targetPolarity} ${itemKey(targetItem)}) at stage Σ_${targetStage} is Undetermined, so the reflection has no value.`,
+          };
+        }
         const holds =
           targetStatus !== undefined
             ? priorSnap.localStatus(targetBoundary, targetItem) === targetStatus
