@@ -72,6 +72,8 @@ export class BoundarySystem {
   readonly #handles = new Map<string, Map<string, HandleSpec>>();
   readonly #registeredCovers = new Map<string, RegisteredCover>();
   #coverCounter = 0;
+  /** Incremented by every change of the registry, so an inquiry can stage it (core.md §2 item 7). */
+  #version = 0;
   /** Up-sets under ⊑, declared and inferred (core.md §2 item 4); cleared when ⊑ can change. */
   readonly #upCache = new Map<string, ReadonlySet<string>>();
 
@@ -116,6 +118,7 @@ export class BoundarySystem {
       copy.#registeredCovers.set(id, { id, target: cover.target, cells: [...cover.cells] });
     }
     copy.#coverCounter = this.#coverCounter;
+    copy.#version = this.#version;
     return copy;
   }
 
@@ -212,6 +215,12 @@ export class BoundarySystem {
     this.#nativeRelations.set(id, rels);
     this.#handles.set(id, handleMap);
     this.#upCache.clear();
+    this.#version += 1;
+  }
+
+  /** The registry's version: it changes whenever a boundary, disjointness, meet or cover changes. */
+  get version(): number {
+    return this.#version;
   }
 
   /** Declare two boundaries disjoint (a ⊓ b = ⊥_B). */
@@ -220,6 +229,7 @@ export class BoundarySystem {
     this.#assertDefined(b);
     this.#assertCanBeDisjoint(a, b);
     this.#disjointPairs.add(pairKey(a, b));
+    this.#version += 1;
   }
 
   /** Explicitly register the meet boundary (a ⊓ b = meetId). */
@@ -245,6 +255,7 @@ export class BoundarySystem {
     this.#explicitMeets.set(key, meetId);
     this.#upCache.clear();
     if (meetId === BOT_BOUNDARY) {
+      this.#version += 1;
       return;
     }
     // A registered meet is the greatest lower bound of its pair (core.md §2 item 4): every boundary
@@ -260,6 +271,7 @@ export class BoundarySystem {
       this.#upCache.clear();
       throw new Error(`Cannot register "${meetId}" as the meet of "${a}" and "${b}": ${problem}`);
     }
+    this.#version += 1;
   }
 
   /**
@@ -460,12 +472,17 @@ export class BoundarySystem {
       throw new Error(`Cover identifier "${coverId}" is already registered.`);
     }
     this.#registeredCovers.set(coverId, { id: coverId, target, cells: nonEmptyCells });
+    this.#version += 1;
     return coverId;
   }
 
   /** Withdraw(c) for a cover: remove the registered cover `id`; false when none is registered. */
   withdrawCover(id: string): boolean {
-    return this.#registeredCovers.delete(id);
+    const removed = this.#registeredCovers.delete(id);
+    if (removed) {
+      this.#version += 1;
+    }
+    return removed;
   }
 
   /** The covers registered by WitnessCover and not withdrawn, in registration order. */

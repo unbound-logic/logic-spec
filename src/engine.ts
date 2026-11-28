@@ -479,6 +479,8 @@ export class InquiryEngine {
   readonly #usedBaseIds = new Set<string>();
   readonly #usedTheoremIds = new Set<string>();
   #constraintCounter = 0;
+  /** The boundary-system version the current stage captured. */
+  #boundaryVersion = -1;
   readonly #refinements: RecordedRefinement[] = [];
   readonly #trackedItems = new Map<string, Item>();
   readonly #stageArchive = new Map<number, StageRecord>();
@@ -493,11 +495,42 @@ export class InquiryEngine {
   }
 
   get stage(): number {
+    this.#syncBoundaries();
     return this.#stage;
   }
 
   get transitionLog(): readonly string[] {
+    this.#syncBoundaries();
     return this.#history;
+  }
+
+  /**
+   * Declare (core.md §2 item 7): a change of the boundary system made outside an inquiry transition
+   * becomes a stage of its own before the next transition or evaluation, so evaluate() and
+   * evaluateAtStage at the current stage agree. A cover registered directly on the boundary system
+   * becomes a constraint that Withdraw can name; one withdrawn there leaves the constraints.
+   */
+  #syncBoundaries(): void {
+    if (this.boundaries.version === this.#boundaryVersion) {
+      return;
+    }
+    const registered = new Set(this.boundaries.registeredCovers().map((c) => c.id));
+    for (const id of registered) {
+      if (!this.#constraintKinds.has(id)) {
+        if (this.#usedConstraintIds.has(id)) {
+          throw new Error(`The cover "${id}" registered on the boundary system reuses a constraint identifier of this inquiry.`);
+        }
+        this.#recordConstraintId(id, "cover");
+      }
+    }
+    for (const [id, kind] of this.#constraintKinds) {
+      if (kind === "cover" && !registered.has(id)) {
+        this.#constraintKinds.delete(id);
+      }
+    }
+    this.#stage += 1;
+    this.#history.push(`Σ${this.#stage}:Declare(boundaries)`);
+    this.#captureStage();
   }
 
   /** Add a base positive witness G+ on non-empty boundary B != ⊥_B. */
@@ -546,6 +579,7 @@ export class InquiryEngine {
     requiredGrounds: readonly GroundDependency[] = [],
     requiredCovers: readonly CoverDependency[] = [],
   ): void {
+    this.#syncBoundaries();
     if (boundary === BOT_BOUNDARY) {
       throw new Error(
         polarity === "+"
@@ -629,6 +663,7 @@ export class InquiryEngine {
    * remove a specific base leaf without creating any opposite polarity.
    */
   retract(baseId: string): boolean {
+    this.#syncBoundaries();
     if (this.monotoneOnly) {
       throw new Error("Retract is forbidden when monotoneOnly is enabled.");
     }
@@ -646,6 +681,7 @@ export class InquiryEngine {
    * when omitted), and return the identifier.
    */
   addIncompatibility(boundary: string, left: Item, right: Item, constraintId?: string): string {
+    this.#syncBoundaries();
     if (boundary === BOT_BOUNDARY) {
       throw new Error(`Cannot add material incompatibility on "${BOT_BOUNDARY}".`);
     }
@@ -665,6 +701,7 @@ export class InquiryEngine {
    * `constraintId` (a fresh one when omitted), and return the identifier.
    */
   addStructuralCollapse(boundary: string, item: Item, constraintId?: string): string {
+    this.#syncBoundaries();
     if (boundary === BOT_BOUNDARY) {
       throw new Error(`Cannot add structural collapse on "${BOT_BOUNDARY}".`);
     }
@@ -685,6 +722,7 @@ export class InquiryEngine {
    * may make the cover invalid or unverified (core.md §2 item 5); coverObligations reports it.
    */
   witnessCover(target: string, cells: readonly string[], constraintId?: string): string {
+    this.#syncBoundaries();
     const id = this.#nextConstraintId(constraintId);
     this.boundaries.registerCover(target, cells, id);
     this.#recordConstraintId(id, "cover");
@@ -701,6 +739,7 @@ export class InquiryEngine {
    * sub-boundaries.
    */
   closeDomain(domain: string, constraintId?: string): string {
+    this.#syncBoundaries();
     if (domain === BOT_BOUNDARY) {
       throw new Error(`CloseDomain requires a boundary D ≠ "${BOT_BOUNDARY}".`);
     }
@@ -730,6 +769,7 @@ export class InquiryEngine {
 
   /** The kind of the constraint `constraintId` in force in C_B, or undefined. */
   constraintKind(constraintId: string): ConstraintKind | undefined {
+    this.#syncBoundaries();
     return this.#constraintKinds.get(constraintId);
   }
 
@@ -739,6 +779,7 @@ export class InquiryEngine {
    * Σ. The items it named stay tracked. Returns false when no such constraint is in force.
    */
   withdraw(constraintId: string): boolean {
+    this.#syncBoundaries();
     if (this.monotoneOnly) {
       throw new Error("Withdraw is forbidden when monotoneOnly is enabled.");
     }
@@ -829,6 +870,7 @@ export class InquiryEngine {
    * and verifies that M2 preserves Excluded (-) on (fromBoundary, originalUniversal).
    */
   refineBoundary(req: M1RefinementRequest): M1Result {
+    this.#syncBoundaries();
     if (
       req.toBoundary === BOT_BOUNDARY ||
       !this.boundaries.refines(req.toBoundary, req.fromBoundary)
@@ -1019,6 +1061,7 @@ export class InquiryEngine {
 
   /** Evaluate Π(Σ) for the current Σ with the query set Q = extraItems. */
   evaluate(extraItems: readonly Item[] = []): EvaluationSnapshot {
+    this.#syncBoundaries();
     const currentRecord = this.#stageArchive.get(this.#stage);
     if (currentRecord === undefined) {
       throw new Error(`Missing archived inquiry stage ${this.#stage}.`);
@@ -1028,6 +1071,7 @@ export class InquiryEngine {
 
   /** Evaluate the frozen historical inquiry state at `stage` (0 <= stage <= current stage). */
   evaluateAtStage(stage: number, extraItems: readonly Item[] = []): EvaluationSnapshot {
+    this.#syncBoundaries();
     if (!Number.isInteger(stage) || stage < 0 || stage > this.#stage) {
       throw new Error(`Invalid stage ${stage}; expected integer in [0, ${this.#stage}].`);
     }
@@ -1211,6 +1255,7 @@ export class InquiryEngine {
     baseId: string,
     handleAuth?: HandleAuth,
   ): void {
+    this.#syncBoundaries();
     this.boundaries.nonEmptySubBoundaries(boundary);
     if (this.#usedBaseIds.has(baseId)) {
       throw new Error(
@@ -1268,6 +1313,7 @@ export class InquiryEngine {
       trackedItems: new Map(this.#trackedItems),
       boundarySnapshot: this.boundaries.clone(),
     });
+    this.#boundaryVersion = this.boundaries.version;
   }
 
   /** Track an item named by a transition; it stays tracked after a Retract (item 14). */
