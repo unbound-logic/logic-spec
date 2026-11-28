@@ -67,7 +67,7 @@ Rules for `decided` entries:
 
 ## 7. Open Design Problems
 
-No Phase 1 (Layers 1–8) question remains open. The entries below were found on 2026-11-25 by a Claude Code audit of `spec/` against the reference kernel at commit `785b74e`, using read-only probes. Implementation entries state a reproduction, with an executable snippet for each under [Audit Reproductions](design-review.md#audit-reproductions); claim and governance entries cite the passages concerned. The maintainer ratified a resolution for each on 2026-11-25 (`decided`); each closes as `done` once the specification and kernel changes land. `audit-metatheorem-overclaim` closed as `done` on 2026-11-26. `audit-universal-existential-import` was found later, during the maintainer's review of the MT-9 proof at commit `7fd4c6d`, and was ratified on 2026-11-26 (`decided`).
+No Phase 1 (Layers 1–8) question remains open. The entries below were found on 2026-11-25 by a Claude Code audit of `spec/` against the reference kernel at commit `785b74e`, using read-only probes. Implementation entries state a reproduction, with an executable snippet for each under [Audit Reproductions](design-review.md#audit-reproductions); claim and governance entries cite the passages concerned. The maintainer ratified a resolution for each on 2026-11-25 (`decided`); each closes as `done` once the specification and kernel changes land. `audit-metatheorem-overclaim` closed as `done` on 2026-11-26. `audit-universal-existential-import` was found later, during the maintainer's review of the MT-9 proof at commit `7fd4c6d`, and was ratified on 2026-11-26 (`decided`). The entries from `audit-unverified-cover-authority` on were raised by an external review of commit `dfa0fb9` on 2026-11-27 and reproduced against the kernel at commit `2713cba` with read-only probes (`audit-terminology-drift` also records drift found while checking it); they are `open`.
 
 | Key | Problem | Resolution | Status |
 | :--- | :--- | :--- | :--- |
@@ -79,10 +79,24 @@ No Phase 1 (Layers 1–8) question remains open. The entries below were found on
 | `audit-metatheorem-overclaim` | **MT-8 and MT-9 claim more than their proof sketches and the kernel's finite semantics support.** MT-8 in `metatheory.md` is titled "Soundness & Syntactic Completeness" and states that `UL-Intuitionistic` "yields Heyting Intuitionistic First-Order Logic (`NJ`) under finitary Beth-cover semantics", but its proof sketch shows only that Quarantine never triggers under `No-Gluts` and that `A ∨ ~A` and `(A → ⊥) → ⊥ ⊢ A` are not derivable on an `Open` item; it gives no completeness argument in any direction (every `NJ` theorem derivable, every derivable item an `NJ` theorem, or semantic completeness). The kernel evaluates over finite boundary systems with finite handle domains, and intuitionistic first-order logic is not complete for Kripke or Beth models on finite frames: the double-negation shift `∀x ¬¬A(x) → ¬¬∀x A(x)` holds in every such model yet is not provable in `NJ`, so a semantic completeness claim must either admit infinite structures or be restricted. MT-9 and `core.md` §4 item 13 present the `UL-Classical` result as classical first-order recovery and a "Tarskian classical first-order valuation", but it is defined only over a closed finite `Dom(B*)` or a finite atomic cover, which yields finite-domain classical semantics; validity over finite structures differs from first-order validity (Trakhtenbrot's theorem). The MT-9 proof also restates the truth tables through the `No-Gaps` closure of non-refuted conditionals, so it shows that closure is consistent rather than recovering classical logic independently. Affects MT-8, MT-9, core.md §4 item 13, and the scope sentence of `README.md`. | **Decided (Norman, 2026-11-25).** Split MT-8 into MT-8a (`Tested`): the proof checker implements the rule schemas of `NJ_min` and `NJ` and separates them by `⊥E`, and Quarantine never triggers under `No-Gluts`; and MT-8b (`Exploratory`): soundness of theorems recorded into the engine with respect to engine evaluation. Withdraw the completeness claim and record why: intuitionistic first-order logic is not complete for Kripke or Beth models on finite frames (double-negation shift). Rescope MT-9 and core.md §4 item 13 to finite-domain classical semantics: state the `UL-Classical` closure conditions explicitly, including the conditional closure and the finite-domain quantifier closure, and attach a written proof that the maintainer reviews before MT-9 becomes `Proved`. README's scope sentence follows. *Permits*: metatheorems whose scope matches the kernel's finite semantics. *Excludes*: completeness or full first-order recovery claimed without proof. *Rejected*: relabelling the v0.2.0 statements `Exploratory` without rescoping them (it would leave statements that fail on finite frames inside the normative text). **Reopen if:** a completeness proof for a stated semantics is supplied, or the kernel gains a semantics over infinite structures that the rescoped statements no longer describe. | done: [`metatheory.md` §5](../spec/metatheory.md#5-four-tier-specialization--finite-domain-classical-valuation) MT-8a, MT-8b, MT-9, MT-9b; [`core.md` §4](../spec/core.md#4-boundary-specialization-theorems) item 13; [`README.md`](../README.md) (commit "spec: adopt the claim status ladder, relabel claims, and rescope MT-8 and MT-9", commit "spec: revise MT-9 after review and add MT-9b", commit "docs: align README with the claim ladder, prove semantics, and CI") |
 | `audit-spec-kernel-coupling` | **The core `Live` / `Collision` semantics is defined by the kernel, not by the specification.** [core.md](../spec/core.md) §3 item 10 gates every transmissive rule on `Live`, while `Live` depends on `Collision`, which depends on the entries those rules produce; the item settles this circularity only by naming a mechanism ("realized via an alternating fixpoint over obstruction sets"), not by defining it. MT-1 in [metatheory.md](../spec/metatheory.md) proves a least-fixpoint result for an operator `F_Σ` that treats `Entries(Σ)` and `obstructed_Σ` as fixed inputs, which is not the semantics core.md §3 item 10 describes, and then states that the actual behavior is a Van Gelder alternating fixpoint with self-cyclic and subset-minimal ancestor filtering and source-SCC symmetric conflict locking, identified by kernel symbols (`defObstructed`, `mayPass`, `computeSourceSCCs`). The same document grounds other results in kernel internals (`#stageArchive`, `BoundarySystem.clone()`, `runClosure`, and `kind === "contingent"` for M1(ii)–(iii)). A second implementation written from core.md alone therefore cannot be checked against the reference kernel. MT-1 further records that cross-conflict mutual bridges between two distinct symmetric sources lie beyond single-source SCC isolation, while its audit table marks G-1, G-7 and G-15 `Resolved` and MT-1 carries `Consensus`. Affects core.md §3 items 8 and 10, MT-1, MT-2, MT-7, and G-1, G-7, G-15. | **Decided (Norman, 2026-11-25).** Define `Live` and `Collision` in core.md as the well-founded semantics (Van Gelder, Ross and Schlipf, 1991) of an explicit evaluation program `Π(Σ)`: rule schemas over atoms for ground entries, collisions, obstruction and authority, with negation only through obstruction, and with `B' ⊑ B` ranging over the boundaries declared in `Σ`. Transmission requires an entry that is true in the well-founded model (`Live`); `authority` is `Quarantined` when it is false and `Undetermined` when it is undefined; `Collision` is reported when the collision atom is true or undefined, so symmetric conflicts are recorded on both sides and transmit on neither. MT-1 is restated for `Π(Σ)`. A clean-room oracle written from core.md alone is compared with the kernel by differential fuzzing; the kernel either drops its SCC heuristics or is shown equivalent on that comparison, and every test whose expectation changes is decided by the maintainer. Kernel symbols leave the normative text for the reference-kernel map in README. **Refined (Norman, 2026-11-26, adopting the recommended options after review against the charter).** (G1) Positive conclusions, and exclusions inferred from positive evidence (incompatibility, `imposs-excl`), fire only from `Live` premises; the exclusion of a compound fires from the exclusion records of its components, while its context premises (the antecedent of a counterexample, domain membership `±δ`, cover cells) must be `Live`; every conclusion is `Live` only when all its premises are `Live` and its slot is unobstructed. (G2) `-∃` follows G1: for each handle, `Live -δ` or an exclusion record of the body, on a domain whose closure is witnessed ([audit-universal-existential-import](design-review.md#audit-universal-existential-import)). (G3) `Π(Σ)` is stated over facts `(B, ±, A)`, not provenance entries: a fact is `Live` when some rule instance with `Live` premises yields it and its slot is unobstructed, and provenance DAGs are witnesses of true atoms, not part of the semantics. (G4) A record counts as present when its atom is true or undefined, for local status and `Collision` alike; the authority axis carries the uncertainty, so a symmetric conflict reads `Collision` with `Undetermined` authority on both sides. (G5) The atom universe is finite: the tracked and queried items closed under sub-items, quantifier instances (body and `δ`) over `Dom(D)`, and congruence rewrites, with `~` applied only to tracked items. (G6) The kernel's iteration and cover-size bounds are not semantics: where they would truncate, the kernel reports non-convergence instead of returning a partial result. **Revised (Norman, 2026-11-26) after the differential comparison with the clean-room oracle of item 14.** (G4b, replacing G4) A record is present only when its atom is true; `Collision` is reported when the collision atom is true or undefined, so a possible conflict stays visible while no status rests on a merely possible record. Of the 21 readings of item 14 recorded by the oracle, A3 (a polarity flip nested in an item or a quantifier instance belongs to the universe), A6 (congruence rewrites one occurrence at a time, as item 6 states) and A13 (vacuous grounding requires `D ≠ ⊥_B`) were amended, and the rest were ratified as recorded. Across 1,500 random states, kernel and oracle diverged only where a conflict's resolution is undetermined under the well-founded semantics, which the SCC heuristics resolve skeptically. **Rulings (Norman, 2026-11-26) on the kernel alignment.** Tracked items include every item named by a transition in the history of `Σ`, retracted ones included, so M2's non-erasure stays observable; `⊥` is always tracked; a boundary with several parents defaults to the handles common to all of them; the kernel's new values for `(B, ⊥)` under a self-refuting pair of observations, for the multi-hop Scoped Cut scenario and for the matching MT-1 fuzz cases are accepted, and the fuzz invariant follows G4b. **Process (Norman, 2026-11-26).** A reading of the specification made by an implementation or an oracle becomes part of the specification only when it is written into `spec/`; it is never ratified by reference to a file under `test/` or `src/`. *Permits*: a second implementation that can be checked against the specification, and uniform treatment of every conflict shape, including cross-conflict bridges. *Excludes*: semantics defined by an algorithm's internal heuristics. *Rejected*: transcribing the current heuristics (self-contained on paper, but ad hoc, with the known bridge case left open and a novel construction to prove); stable-model semantics (a state may have no stable model or several, and skeptical reasoning is coNP-hard; the well-founded model is contained in every stable model, so the semantics can be strengthened later). **Reopen if:** the differential comparison finds a ratified worked example whose intended outcome the well-founded semantics cannot produce, or evaluating `Π(Σ)` becomes infeasible on the fuzzing workloads. | done: [README metatheory-to-kernel map](../README.md#metatheory-to-kernel-map); core.md §5 item 14 (commit "spec: define the evaluation program Π(Σ) and restate MT-1", commit "feat: evaluate Π(Σ) by its well-founded model in the reference kernel") |
 | `audit-universal-existential-import` | **The kernel ties both quantifiers to a non-empty domain, giving universals existential import, while the `UL-Classical` evaluator uses classical vacuous truth.** `core.md` §3 item 12 grounds `+∀(x : D ⊓ [δ]) A(x)` generically only "with at least one admissible `+δ(x)` witness", and the kernel's `forall-generic` rule in [`src/engine.ts`](../src/engine.ts) also requires a non-empty `Dom(D)`. A universal over an empty domain, or over a constraint no handle satisfies, therefore never becomes `Grounded`, and since `-∀` needs a concrete counterexample it stays `Open`. This is the existential import of Aristotelian logic, an inherited default that neither core.md nor [glossary.md](glossary.md) flags under the Anti-Inertia Audit of [AGENTS.md](../AGENTS.md) §2. Dually, the kernel's `exists-excl` rule also requires a non-empty `Dom(D)`, so an existential over an empty domain stays `Open` although the `-∃` clause of item 12 holds vacuously there; this is a kernel deviation from item 12, and when `Dom(D)` is non-empty but no handle satisfies `δ` the kernel does derive `-∃`. The `UL-Classical` evaluator in [`src/specializations.ts`](../src/specializations.ts) gives classical values instead: vacuous truth (`+`) for the universals and `-` for the existentials. Applying the quantifier closure (C7) of core.md §4 item 13 to an empty `D_δ` would contradict item 12 for universals, so v0.3.0 excludes that case through (C8); for existentials (C7) follows item 12, so MT-9 is unaffected. The maintainer must decide whether existential import for universals is intended, and then record it as a deliberate departure, or whether generic grounding should admit vacuous truth; either way the kernel's existential rule should follow item 12. Executable reproduction: R4 under [Audit Reproductions](design-review.md#audit-reproductions). | **Decided (Norman, 2026-11-26).** Exhaustiveness of a quantifier domain is witnessed, never assumed, as for covers and meets. A new `C_B` constraint `CloseDomain(D)`, registered by an inquiry transition and removable by `Withdraw`, records that the handles of `Dom(D)` at registration exhaust `D`. Enumerative generic grounding fires only on a closed domain: `+∀(x : D) A(x)` once every handle of `Dom(D)` carries `Live -δ` or else `Live +δ` with `Live +A`, and `-∃(x : D) A(x)` once every handle carries `Live -δ` or an exclusion record of `A`; the closure is a provenance leaf of both, so withdrawing it, or retracting any `-δ` exclusion, reopens them. With `D_δ := {w ∈ Dom(D) : Live +δ(w)}`, an empty `D_δ` yields vacuous truth grounded by the `-δ` exclusions and the closure, and an empty `Dom(D)` on a non-empty `D ≠ ⊥_B` yields vacuous truth grounded by the closure alone. On an unclosed domain, enumeration never grounds `+∀` or `-∃`; `+∀` then comes only from observation, schematic `∀I` or covers. `-∀` and `+∃` stay open-world: one witness suffices, with no closure. Three boundary rules apply. (1) A closure anchors the handle set it witnessed and becomes invalid, with a revision obligation, if `Dom(D)` changes, as covers do under [audit-cover-non-vacuity-drift](design-review.md#audit-cover-non-vacuity-drift). (2) Closure is a property of the quantifier domain `D`, not of the evaluation boundary, and does not pass to sub-boundaries `D' ⊑ D`, while a `+∀` ground still inherits downward across evaluation boundaries. (3) `UL-Classical` (C3) requires a witnessed closure and `Dom(D) ≠ ∅`, which `src/specializations.ts` checks together with `Dom(D) ⊆ Dom(B*)`; (C8) is withdrawn, MT-9 uses `min ∅ = 1` and `max ∅ = 0`, and MT-9 returns to `Tested` until the maintainer reviews the revised statement. The boundary system also enforces domain monotonicity, `Dom(D') ⊆ Dom(D)` whenever `D' ⊑ D` (core.md §2 item 6), which the eigenvariable typing of `∀E` (`eigenDom ⊑ D`) already presupposes: without it, a closed empty `D` with a handled sub-boundary would let `∀E` derive `+⊥` through a `∀I` box and violate MT-3. core.md §3 item 12 drops "with at least one admissible `+δ(x)` witness"; the kernel's `forall-generic` drops its admissible-witness requirement, and both enumerative rules require the closure and accept an empty `Dom(D)`. Impact measured at `6c490ea`: 2 of 40 tests rely on enumerative quantifier grounding and need a closure; no fixture violates monotonicity, and one fuzz negative test needs its error-check order adjusted. *Permits*: vacuous and non-vacuous universals and existential exclusions alike, backed by a witnessed and revisable exhaustiveness claim; the strong-negation duality `+∀x A ⟺ -∃x ~A` on every domain; classical recovery without a quantifier closure extension. *Excludes*: enumeration over an unwitnessed handle registry, empty or not; existential import as an unexamined default; sub-boundaries that add individuals their parent lacks. *Rejected*: symmetric existential import in `UL-Core` with a vacuous-truth closure in `UL-Classical` (approved and replaced earlier on 2026-11-26: a demonstrably empty `D_δ` is evidence, so import withholds well-founded grounds and needs a compensating closure); evidence-based vacuous truth over the registry as found (treats every handle registry as complete); vacuous truth for an empty `D_δ` but `Open` for an empty `Dom(D)` (separates the cases by emptiness alone, although a non-empty registry is just as unwitnessed); a definition-time `closedDomain` flag (an exhaustiveness claim must be withdrawable); allowing sub-boundaries to add handles and invalidating closures instead of enforcing monotonicity (would also require changing the eigenvariable typing of `∀E`). **Reopen if:** a ratified model needs a finer regime that introduces individuals its parent lacks, a ratified worked example relies on subalternation in `UL-Core`, or a closure-grounded vacuous result supports an immunization that M1 does not catch. | done: [`core.md`](../spec/core.md#2-boundary-algebra--inquiry-state-dynamics) §2 items 6 and 7 (domain monotonicity, `CloseDomain`, `Withdraw`), §3 item 12, §4 item 13 (C3), §5 item 14; [`metatheory.md`](../spec/metatheory.md) MT-9 (commit "spec: specify domain closure and the kernel-alignment rulings", commit "feat: evaluate Π(Σ) by its well-founded model in the reference kernel", commit "feat: enforce domain monotonicity and refuse truncated cover closures", commit "feat: require closed non-empty quantifier domains for UL-Classical (C3)", commit "feat: re-validate covers and withdraw constraints from C_B") |
+| `audit-unverified-cover-authority` | **An unverified cover still witnesses, so `No-Gluts` depends on the query set.** `core.md` §2 item 5 lets an unverified cover witness cover-witnessed disjunction and Cover-Gluing. Reproduction: `C1, C2 ⊑ B` declared disjoint, `WitnessCover({C1, C2} ▷ B)`, and `B3 ⊑ B` of unknown overlap with both cells; `Observe⁺(C1, P)`, `Observe⁺(C2, Q)`, `Observe⁻(B3, P)`, `Observe⁻(B3, Q)`. With `Q = ∅` nothing collides (two `OverlapUnknown` obligations and the cover's obligation are recorded); querying `P ∨ Q` grounds it on `B` through the unverified cover, the record inherits to `B3`, and `(B3, P ∨ Q)` collides with no atom colliding anywhere, the pattern of R2. `isCollisionFree`, and with it the `No-Gluts` checks of the specializations and of the proof checker, then varies with `Q`. A valid cover cannot do this: every sub-boundary is known to overlap a cell, so the conflict already collides on atoms. In tension with `CHARTER.md` Principles 3 and 4. Revisits the unverified case of [`audit-cover-non-vacuity-drift`](design-review.md#audit-cover-non-vacuity-drift). Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 2). Executable reproduction: R5 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-eager-ambiguous-meet` | **The kernel throws on ambiguous meets that nothing needs.** `core.md` §5 item 14 (Role) reports an error where "a meet the program needs is ambiguous", and the oracle reads that lazily (readings A31 and A35 in `test/oracle/AMBIGUITIES.md`). `src/engine.ts` calls `meetStatus` for every pair of boundaries while collecting `OverlapUnknown` obligations, so `evaluate()` throws whenever any pair is ambiguous, even with no implication tracked and no opposite records; `#assessCover` in `src/boundary.ts` computes the meet of every cell with a sub-boundary before checking whether one cell is already known to overlap it, so the validity check of a cover whose sub-boundaries all lie below cells throws. The differential suite builds no ambiguous topology, so kernel and oracle are not compared there. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 3). Executable reproduction: R6 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-theorem-dependency-gaps` | **Recorded theorems keep authority their derivations no longer have.** The `Theorem` row of `core.md` §5 item 14 makes a recorded theorem depend on the base observations it names and the grounds it requires. (a) `or-cover-intro` and `cover-glue` in `src/deduction.ts` record no dependency on the cover, so after `Withdraw` of the cover, or its invalidation, the theorem stays `Live`. (b) `live-ground` pins the base leaves of the first `Live` entry it finds, so the same facts observed in two orders react differently to `Retract` of one observation, against the Exchange of co-present `Live` grounds (§3 item 11). (c) A `UL-Intuitionistic` theorem admitted under `No-Gluts`, such as `(A ∧ (A → ⊥)) → C` by `ex-falso-bottom`, names nothing, so once later monotone observations break `No-Gluts` it turns an excluded `C` into `Collision`, the explosion §3 item 10 excludes from `UL-Core`. Affects `metatheory.md` MT-6 and MT-8b. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 4). Executable reproduction: R7 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-mt8b-statement` | **MT-8b is circular or false as worded.** `metatheory.md` MT-8b states that every accepted derivation, "once recorded into `Σ`", yields only grounds that evaluation of `Σ` licenses where its dependencies are `Live`. Read after recording, the `Theorem` row of `core.md` §5 item 14 licenses the recorded ground by construction, so the statement says nothing; read before recording, `Π(Σ)` has no `→I` and no schematic `∀I`, so `B ⊩⁺ (P → P)`, which the checker accepts on an empty `Σ`, is `Open` there, and the statement is false. MT-8b needs a statement with content, for instance that recording a verified derivation preserves MT-3, MT-4 and MT-6 and loses authority with any of its dependencies (see `audit-theorem-dependency-gaps`). Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 4). | - | open |
+| `audit-deduction-freshness-and-congruence` | **The proof checker's freshness and congruence differ from the evaluation program.** `forall-intro` and `exists-elim` check eigenvariable freshness against `mentionedHandles()`, which omits handles named only by retracted observations, withdrawn constraints, refinements and other tracked items, although `core.md` §5 item 14 keeps those items tracked. `equiv-subst` rewrites every occurrence of a handle at once and does not check that the new handle belongs to a domain of `𝔅(Σ)`, while §2 item 6 and item 14 rewrite one position at a time over registered handles (oracle readings A5 and A6). Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 4). Executable reproduction: R8 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-classical-check-completeness` | **The `UL-Classical` check accepts states that violate (C3), (C4) or (C6).** `evaluateClassicalSpecialization` in `src/specializations.ts` evaluates only the queried items, so a tracked compound such as `+((P → Q) → P)` with `-P` and `-Q` is never compared with `v(P → Q) = +`; it ignores registered incompatibilities and structural collapses, so both sides of `(P → Q) ⊥ (Q → P)` can receive `+`; `evalOnAtomicCell` short-circuits `∧`, `∨` and the quantifier loops, so a conflicting ground on a skipped sub-item is never checked; and handles named outside quantifiers are not checked against `Dom(B*)`, which (C3) asks for. Affects the kernel check behind MT-9, not its proof, and MT-9b. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 5). Executable reproduction: R9 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-m1-indirect-overblocking` | **M1(i)'s indirect-reference graph refuses independent criteria.** `core.md` §2 item 7 links, as one undirected graph, every pair of relations that occur together in an incompatibility, a structural collapse, or a conditional `Live` on any boundary. Two background conditionals with a shared consequence (`Lake(x) → Alive(x)`, `White(x) → Alive(x)`) then connect `Lake` to `White` and refuse a refinement by `Lake` as `M1-circular`, although `Lake` neither aliases nor depends on `White`; conditionals on unrelated boundaries count as well. `refineBoundary` also admits a `targetRelation` that does not occur in the universal, and a refinement that excises no handle. Revisits the M1(i) part of [`audit-m1-criterion-decoupling`](design-review.md#audit-m1-criterion-decoupling). Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 6). Executable reproduction: R10 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-identifier-reuse` | **Reusing an observation or theorem identifier silently replaces the earlier entry.** `#addBaseObservation` and `recordTheorem` in `src/engine.ts` overwrite an entry with the same identifier, and `retract` frees an identifier for reuse, unlike constraint identifiers, which are never reused. Under `monotoneOnly`, where `Retract` is refused, observing again under an earlier identifier erases the earlier observation, bypassing that refusal and the non-erasure of M2. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 7). Executable reproduction: R11 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-free-handle-policy` | **Observations may name handles outside the boundary's domain.** `observePositive` and `observeNegative` make `HandleAuth` optional and do not check that the handles of the item belong to `Dom(B)`, so unregistered handles enter `U(Σ, Q)`, the proof checker rewrites them by `equiv-subst`, and the `UL-Classical` check accepts them (R9, part d). `core.md` §2 item 6 does not say whether `Observe±(B, A)` is many-sorted, with the handles of `A` in `Dom(B)` and authenticated under `I_B`, or follows a free logic. A ruling should measure first how many fixtures name handles outside their boundary's domain. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 7). | - | open |
+| `audit-boundary-mutation-staging` | **Boundary edits bypass the inquiry stages.** `defineBoundary`, `declareDisjoint`, `defineMeet` and `registerCover` change the boundary system without a transition of `core.md` §2 item 7, so `evaluate()`, which reads the live boundary system, and `evaluateAtStage` at the current stage, which reads the snapshot taken at the last transition, disagree; and a cover registered directly cannot be withdrawn through `Withdraw`. Item 14's `𝔅(Σ)`, "the non-empty boundaries declared in `Σ`", leaves open whether boundary declarations are transitions. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 8). Executable reproduction: R12 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-reflection-authority-flattening` | **A stage-indexed reflection reads an `Undetermined` record as excluded.** The kernel gives a reflection the value `+` when its target record is `Live` at the frozen stage and `-` otherwise, so an `Undetermined` authority becomes `Excluded`: a definite answer where `core.md` §5 item 14 reports an undetermined one, against `CHARTER.md` Principle 4. §1 item 3 does not say which value a reflection on an `Undetermined` record takes. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 8). Executable reproduction: R13 under [Audit Reproductions](design-review.md#audit-reproductions). | - | open |
+| `audit-unexecuted-syntax` | **Stage-less reflection and recursive references have syntax but no evaluation.** `core.md` §1 items 2 and 3 admit stage-less `Refl_k(J)` and `ref(name)`. The kernel leaves stage-less reflection permanently `Open`, the proof checker refuses it, and `ref` is checked statically by `checkRecursiveDefinitionSystem` but unfolded nowhere. The specification should say which of them belong only to a formal layer and which execute, or give them evaluation rules. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 8). | - | open |
+| `audit-oracle-readings-promotion` | **Load-bearing oracle readings exist only under `test/`.** The clean-room oracle records its readings A22–A39 of `core.md` §2 items 4, 5 and 7 and §5 item 14 in `test/oracle/AMBIGUITIES.md`, all `[Exploratory]`, and the kernel agrees with them on the differential suite. Under the process ruling of [`audit-spec-kernel-coupling`](design-review.md#audit-spec-kernel-coupling), a reading becomes specification only when written into `spec/`. Each reading needs a ruling, and the load-bearing ones need to be written into §2 and item 14 before v0.3.0. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 9). | - | open |
+| `audit-terminology-drift` | **Descriptive text lags the ratified semantics.** In `docs/glossary.md`, `Inference Quarantine` still cites source-SCC conflict locking instead of `Π(Σ)` and the two status axes, `Pure Cancellation (Retract)` omits `Withdraw`, `Boundary-Scoped Quantifiers` omits `CloseDomain`, and `Structural Anti-Immunization (M1)` lists M1(i)–(iii) without M1(iv) (external review, pre-freeze checklist item 10). In `core.md`, the Scoped Cut of §3 item 11 and the Meet Collision Corollary of item 9 still read the meet condition as `B₁ ⊓ B₂ ≠ ⊥_B`, where item 4 and item 14 now ask for a known overlap (found while checking the review). | - | open |
 
 ### Audit Reproductions
 
-Each snippet reproduces the kernel behavior cited by an implementation entry above, at the commit that entry names (`785b74e` for R1–R3, `7fd4c6d` for R4). Each is self-contained: save it as a `.ts` file in the repository root and run `node <file>.ts` with the Node version `npm test` uses (Node 22+ with type stripping). Every assertion records the current, defective behavior, so a snippet that starts failing means the behavior has changed.
+Each snippet reproduces the kernel behavior cited by an implementation entry above, at the commit that entry names (`785b74e` for R1–R3, `7fd4c6d` for R4, `2713cba` for R5–R13). Each is self-contained: save it as a `.ts` file in the repository root and run `node <file>.ts` with the Node version `npm test` uses (Node 22+ with type stripping). Every assertion records the current, defective behavior, so a snippet that starts failing means the behavior has changed.
 
 #### R1: M1 accepts a criterion that the excised counterexample satisfies
 
@@ -232,4 +246,369 @@ if (cl.ok) {
   assert.equal(pol(someEmpty), "-");
   assert.equal(pol(someRestricted), "-");
 }
+```
+
+#### R5: An unverified cover makes `No-Gluts` depend on the query set
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, or } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("B");
+b.defineBoundary("C1", { parents: ["B"] });
+b.defineBoundary("C2", { parents: ["B"] });
+b.declareDisjoint("C1", "C2");
+b.defineBoundary("B3", { parents: ["B"] }); // its overlap with C1 and with C2 is unknown
+const e = new InquiryEngine(b);
+e.witnessCover("B", ["C1", "C2"]);
+const P = atom("P");
+const Q = atom("Q");
+e.observePositive("C1", P, "p1");
+e.observePositive("C2", Q, "q2");
+e.observeNegative("B3", P, "np3");
+e.observeNegative("B3", Q, "nq3");
+
+const plain = e.evaluate();
+assert.equal(plain.coverObligations()[0]?.validity, "unverified");
+assert.equal(plain.isCollisionFree(), true); // Q = ∅: no collision
+const queried = e.evaluate([or(P, Q)]);
+assert.equal(queried.localStatus("B", or(P, Q)), "Grounded"); // through the unverified cover
+assert.equal(queried.localStatus("B3", or(P, Q)), "Collision");
+assert.equal(queried.isCollisionFree(), false); // querying P ∨ Q creates a collision
+```
+
+#### R6: Evaluation and cover validity throw on ambiguous meets that nothing needs
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom } from "./src/syntax.ts";
+
+// Evaluation: Lab ⊓ Field is ambiguous, yet no implication is tracked and no opposite records exist.
+const b = new BoundarySystem();
+b.defineBoundary("Lab");
+b.defineBoundary("Field");
+b.defineBoundary("M1", { parents: ["Lab", "Field"] });
+b.defineBoundary("M2", { parents: ["Lab", "Field"] });
+const e = new InquiryEngine(b);
+e.observePositive("Lab", atom("P"), "w");
+assert.throws(() => e.evaluate(), /Ambiguous meet for "Lab" and "Field"/);
+
+// Cover validity: every sub-boundary of B lies below a cell, so no meet decides anything, yet the
+// check computes the ambiguous meet of C1 and C2.
+const c = new BoundarySystem();
+c.defineBoundary("B");
+c.defineBoundary("C1", { parents: ["B"] });
+c.defineBoundary("C2", { parents: ["B"] });
+c.defineBoundary("S", { parents: ["C1"] });
+c.defineBoundary("T1", { parents: ["S", "C2"] });
+c.defineBoundary("T2", { parents: ["S", "C2"] });
+const id = c.registerCover("B", ["C1", "C2"]);
+assert.throws(() => c.coverValidity(id), /Ambiguous meet/);
+```
+
+#### R7: Recorded theorems outlive their cover, depend on observation order, and explode after `No-Gluts` breaks
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { admitVerifiedDerivation } from "./src/deduction.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { and, atom, bottom, implies, or } from "./src/syntax.ts";
+
+const P = atom("P");
+const Q = atom("Q");
+
+// (a) A theorem proved through a cover keeps its authority after Withdraw of the cover.
+{
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("C1", { parents: ["B"] });
+  b.defineBoundary("C2", { parents: ["B"] });
+  b.declareDisjoint("C1", "C2");
+  const e = new InquiryEngine(b);
+  const cover = e.witnessCover("B", ["C1", "C2"]);
+  e.observePositive("C1", P, "p1");
+  e.observePositive("C2", Q, "q2");
+  const res = admitVerifiedDerivation(e, {
+    kind: "or-cover-intro",
+    boundary: "B",
+    left: P,
+    right: Q,
+    cellProofs: [
+      { cell: "C1", proof: { kind: "live-ground", boundary: "C1", polarity: "+", item: P } },
+      { cell: "C2", proof: { kind: "live-ground", boundary: "C2", polarity: "+", item: Q } },
+    ],
+  }, "thm");
+  assert.equal(res.ok, true);
+  e.withdraw(cover);
+  assert.equal(e.evaluate([or(P, Q)]).isLive("B", "+", or(P, Q)), true);
+}
+
+// (b) live-ground pins the first Live entry: the same facts in two orders react differently to Retract.
+{
+  const run = (order: readonly string[]): string => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    const e = new InquiryEngine(b);
+    for (const id of order) {
+      e.observePositive("B", P, id);
+    }
+    admitVerifiedDerivation(e, {
+      kind: "implies-intro",
+      boundary: "B",
+      assumptionId: "h",
+      antecedent: Q,
+      body: { kind: "live-ground", boundary: "B", polarity: "+", item: P },
+    }, "thm");
+    e.retract("w1");
+    return e.evaluate([implies(Q, P)]).localStatus("B", implies(Q, P));
+  };
+  assert.equal(run(["w1", "w2"]), "Open");
+  assert.equal(run(["w2", "w1"]), "Grounded");
+}
+
+// (c) A UL-Intuitionistic ex-falso theorem names nothing, so after monotone growth breaks No-Gluts
+// it turns an excluded C into Collision.
+{
+  const A = atom("A");
+  const C = atom("C");
+  const build = (withTheorem: boolean): string => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    const e = new InquiryEngine(b, { monotoneOnly: true });
+    if (withTheorem) {
+      const h = { kind: "assume", assumptionId: "h", boundary: "B" } as const;
+      const res = admitVerifiedDerivation(e, {
+        kind: "implies-intro",
+        boundary: "B",
+        assumptionId: "h",
+        antecedent: and(A, implies(A, bottom())),
+        body: {
+          kind: "ex-falso-bottom",
+          target: C,
+          bottomProof: {
+            kind: "implies-elim",
+            premise: { kind: "and-elim", pair: h, side: "left" },
+            conditional: { kind: "and-elim", pair: h, side: "right" },
+          },
+        },
+      }, "thm", "UL-Intuitionistic");
+      assert.equal(res.ok, true);
+    }
+    e.observePositive("B", A, "wa");
+    e.observePositive("B", implies(A, bottom()), "wna");
+    e.observeNegative("B", C, "wnc");
+    return e.evaluate([C]).localStatus("B", C);
+  };
+  assert.equal(build(false), "Excluded");
+  assert.equal(build(true), "Collision");
+}
+```
+
+#### R8: Eigenvariable freshness ignores handles named only by a retracted observation
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { admitVerifiedDerivation } from "./src/deduction.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, implies, itemKey } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("D", { nativeRelations: ["R"], handles: [{ id: "t1", criterion: "I", kind: "structural" }] });
+const e = new InquiryEngine(b);
+const r = (x: string) => atom("R", [{ role: "arg", handle: x }]);
+e.observePositive("D", r("ghost"), "wg");
+e.retract("wg"); // R(ghost) stays tracked (core.md §5 item 14)
+assert.ok(e.evaluate().universe().map(itemKey).includes(itemKey(r("ghost"))));
+const res = admitVerifiedDerivation(e, {
+  kind: "forall-intro",
+  boundary: "D",
+  variable: "x",
+  domain: "D",
+  eigenvar: "ghost", // not fresh with respect to Σ's tracked items
+  templateBody: implies(r("x"), r("x")),
+  body: {
+    kind: "implies-intro",
+    boundary: "D",
+    assumptionId: "h",
+    antecedent: r("ghost"),
+    body: { kind: "assume", assumptionId: "h", boundary: "D" },
+  },
+}, "thm");
+assert.equal(res.ok, true);
+```
+
+#### R9: The `UL-Classical` check misses tracked compounds, constraints, short-circuited conflicts and foreign handles
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { evaluateClassicalSpecialization } from "./src/specializations.ts";
+import { and, atom, implies, type Item } from "./src/syntax.ts";
+
+const run = (setup: (e: InquiryEngine) => void, atoms: readonly Item[], queries: readonly Item[]): string[] | null => {
+  const b = new BoundarySystem();
+  b.defineBoundary("Bs", { nativeRelations: ["H"], handles: [{ id: "k", criterion: "I", kind: "structural" }] });
+  const e = new InquiryEngine(b, { monotoneOnly: true });
+  setup(e);
+  const res = evaluateClassicalSpecialization(e, "Bs", atoms, queries);
+  return res.ok ? [...res.results.values()].map((v) => v.polarity) : null;
+};
+const [P, Q, A, B, C] = ["P", "Q", "A", "B", "C"].map((n) => atom(n));
+
+// (a) A tracked compound outside the queries: +((P → Q) → P) with -P and -Q, yet v(P → Q) = +.
+assert.deepEqual(run((e) => {
+  e.observeNegative("Bs", P, "np");
+  e.observeNegative("Bs", Q, "nq");
+  e.observePositive("Bs", implies(implies(P, Q), P), "w");
+}, [P, Q], [implies(P, Q)]), ["+"]);
+// (b) A registered incompatibility (P → Q) ⊥ (Q → P), yet both receive +.
+assert.deepEqual(run((e) => {
+  e.observeNegative("Bs", P, "np");
+  e.observeNegative("Bs", Q, "nq");
+  e.addIncompatibility("Bs", implies(P, Q), implies(Q, P));
+}, [P, Q], [implies(P, Q), implies(Q, P)]), ["+", "+"]);
+// (c) Short-circuit: with A excluded, the observed -(B → C) is never compared with v(B → C) = +.
+assert.deepEqual(run((e) => {
+  e.observeNegative("Bs", A, "na");
+  e.observeNegative("Bs", B, "nb");
+  e.observeNegative("Bs", C, "nc");
+  e.observeNegative("Bs", implies(B, C), "nbc");
+}, [A, B, C], [and(A, implies(B, C))]), ["-"]);
+// (d) A handle outside Dom(B*) is accepted although (C3) asks for handles of Dom(B*).
+const outside = atom("H", [{ role: "arg", handle: "zzz" }]);
+assert.deepEqual(run((e) => e.observePositive("Bs", outside, "w"), [outside], [outside]), ["+"]);
+```
+
+#### R10: M1(i) refuses an independent criterion through a shared consequence; empty and mistargeted refinements pass
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, forall, implies } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("Swan", {
+  nativeRelations: ["White", "Lake", "Alive", "Big"],
+  handles: [
+    { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
+    { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
+  ],
+});
+b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+b.defineBoundary("Swan_Same", { parents: ["Swan"] });
+const rel = (name: string, h: string) => atom(name, [{ role: "subject", handle: h }]);
+const auth = (h: string) => ({ handle: h, criterion: "I_Swan" });
+const base = (): InquiryEngine => {
+  const e = new InquiryEngine(b);
+  e.observeNegative("Swan", rel("White", "swan_402"), "obs_black", auth("swan_402"));
+  e.observePositive("Swan", rel("Lake", "swan_101"), "lake101", auth("swan_101"));
+  e.observeNegative("Swan", rel("Lake", "swan_402"), "lake402", auth("swan_402"));
+  return e;
+};
+const split = (e: InquiryEngine, to: string, target: string, criterion: string) =>
+  e.refineBoundary({
+    fromBoundary: "Swan",
+    toBoundary: to,
+    originalUniversal: forall("x", "Swan", rel("White", "x")),
+    targetRelation: target,
+    criterionItem: rel(criterion, "x"),
+  });
+
+// The criterion Lake is admitted on its own ...
+assert.equal(split(base(), "Swan_Rest", "White", "Lake").ok, true);
+// ... and refused once two background conditionals share a consequence.
+const e = base();
+e.observePositive("Swan", implies(rel("Lake", "swan_101"), rel("Alive", "swan_101")), "c1");
+e.observePositive("Swan", implies(rel("White", "swan_101"), rel("Alive", "swan_101")), "c2");
+const r = split(e, "Swan_Rest", "White", "Lake");
+assert.equal(r.ok ? "admitted" : r.violation, "M1-circular");
+// A target relation absent from the universal, and a refinement that excises nothing, are admitted.
+assert.equal(split(base(), "Swan_Rest", "Big", "Lake").ok, true);
+assert.equal(split(base(), "Swan_Same", "White", "Big").ok, true);
+```
+
+#### R11: Reusing an identifier erases an observation under `monotoneOnly`, and overwrites a theorem
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("B");
+const e = new InquiryEngine(b, { monotoneOnly: true });
+const [P, Q, X, Y] = ["P", "Q", "X", "Y"].map((n) => atom(n));
+
+e.observeNegative("B", P, "w1");
+assert.equal(e.evaluate([P]).localStatus("B", P), "Excluded");
+assert.throws(() => e.retract("w1"), /forbidden/); // Retract is refused under monotoneOnly ...
+e.observePositive("B", Q, "w1"); // ... but reusing the identifier erases the exclusion
+assert.equal(e.evaluate([P]).localStatus("B", P), "Open");
+
+e.recordTheorem("B", "+", X, "t1");
+e.recordTheorem("B", "+", Y, "t1"); // the theorem identifier is overwritten as well
+assert.equal(e.evaluate([X]).localStatus("B", X), "Open");
+```
+
+#### R12: Direct boundary edits split `evaluate` from `evaluateAtStage`, and directly registered covers cannot be withdrawn
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, or } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("B");
+b.defineBoundary("C1", { parents: ["B"] });
+b.defineBoundary("C2", { parents: ["B"] });
+b.declareDisjoint("C1", "C2");
+const e = new InquiryEngine(b);
+e.witnessCover("B", ["C1", "C2"]);
+const PQ = or(atom("P"), atom("Q"));
+e.observePositive("C1", atom("P"), "p1");
+e.observePositive("C2", atom("Q"), "q2");
+// Direct boundary edits are no inquiry transition: the stage does not advance.
+const stage = e.stage;
+b.defineBoundary("B3", { parents: ["B"] });
+b.declareDisjoint("B3", "C1");
+b.declareDisjoint("B3", "C2");
+assert.equal(e.stage, stage);
+assert.equal(e.evaluate([PQ]).localStatus("B", PQ), "Open"); // the live boundary system
+assert.equal(e.evaluateAtStage(stage, [PQ]).localStatus("B", PQ), "Grounded"); // the stage snapshot
+// A cover registered directly on the boundary system cannot be withdrawn through the engine.
+const direct = b.registerCover("C1", ["C1"]);
+assert.equal(e.withdraw(direct), false);
+```
+
+#### R13: A reflection on an `Undetermined` record reads `Excluded`
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, refl } from "./src/syntax.ts";
+
+const b = new BoundarySystem();
+b.defineBoundary("B");
+const e = new InquiryEngine(b);
+const [P, Q, X] = ["P", "Q", "X"].map((n) => atom(n));
+e.observePositive("B", P, "wp");
+e.observePositive("B", Q, "wq");
+e.addIncompatibility("B", P, Q); // a symmetric conflict: the authority of +P is undetermined
+const t = e.stage;
+assert.equal(e.evaluateAtStage(t, [P]).authorityOf("B", "+", P), "Undetermined");
+e.observePositive("B", X, "later");
+const reflection = refl(1, "B", "+", P, t);
+assert.equal(e.evaluate([reflection]).localStatus("B", reflection), "Excluded"); // read as not Live
 ```
