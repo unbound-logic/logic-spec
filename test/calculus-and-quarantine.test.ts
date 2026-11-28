@@ -122,11 +122,12 @@ function test_quarantine_upstream_obstruction_and_selective_survival(): void {
   b.declareDisjoint("B_1atm", "B_2atm");
 
   const engine = new InquiryEngine(b);
-  const heat100 = atom("Heat100", [{ role: "substance", handle: "h2o" }]);
-  const boils = atom("Boils", [{ role: "substance", handle: "h2o" }]);
+  // Nullary: water and pasta are no individuals of the pressure regimes B_all ranges over.
+  const heat100 = atom("Heat100");
+  const boils = atom("Boils");
   const heatAt = (p: string) => atom("HeatedAt", [{ role: "pressure", handle: p }]);
   const boilsAt = (p: string) => atom("BoilsAt", [{ role: "pressure", handle: p }]);
-  const cook = atom("Cook", [{ role: "item", handle: "pasta" }]);
+  const cook = atom("Cook");
   const ruleBroad = implies(heat100, boils);
   const ruleCook = implies(boils, cook);
   const genAll = forall("p", "B_all", implies(heatAt("p"), boilsAt("p")));

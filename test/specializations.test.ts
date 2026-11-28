@@ -181,7 +181,7 @@ function test_classical_check_covers_tracked_items_constraints_and_handles(): vo
   }, [A, B, C], [and(A, implies(B, C))]), /conflicts with existing "Excluded"/);
   // (d) A handle outside Dom(B*).
   const outside = atom("H", [{ role: "arg", handle: "zzz" }]);
-  refused(run((e) => e.observePositive("Bs", outside, "w"), [outside], [outside]), /\(C3\) requires the items to name only handles/);
+  refused(run(() => undefined, [outside], [outside]), /\(C3\) requires the items to name only handles/);
   // A consistent state still evaluates.
   const ok = run((e) => {
     e.observeNegative("Bs", P, "np");

@@ -22,14 +22,14 @@ import {
 } from "../src/syntax.ts";
 
 function test_eigenvariable_freshness_and_one_position_congruence(): void {
-  // audit-deduction-freshness-and-congruence (R8): a handle named only by a retracted observation
-  // is still tracked, so it is no fresh eigenvariable ...
+  // audit-deduction-freshness-and-congruence (R8): a handle named only by a withdrawn constraint is
+  // still tracked, so it is no fresh eigenvariable ...
   const b = new BoundarySystem();
   b.defineBoundary("D", { nativeRelations: ["R"], handles: [{ id: "t1", criterion: "I", kind: "structural" }] });
   const e = new InquiryEngine(b);
   const r = (x: string) => atom("R", [{ role: "arg", handle: x }]);
-  e.observePositive("D", r("ghost"), "wg");
-  e.retract("wg");
+  const inc = e.addIncompatibility("D", r("ghost"), r("t1"));
+  e.withdraw(inc); // R(ghost) stays tracked (core.md §5 item 14)
   const res = verifyDerivation(e, {
     kind: "forall-intro",
     boundary: "D",
@@ -59,7 +59,7 @@ function test_eigenvariable_freshness_and_one_position_congruence(): void {
   const ee = new InquiryEngine(c);
   const rel2 = (x: string, y: string) => atom("Rel", [{ role: "from", handle: x }, { role: "to", handle: y }]);
   ee.observePositive("E", equiv("E", "h0", "h1"), "w_eq");
-  ee.observePositive("E", equiv("E", "h0", "nowhere"), "w_eq_free");
+  ee.recordTheorem("E", "+", equiv("E", "h0", "nowhere"), "t_free"); // observations cannot name it
   ee.observePositive("E", rel2("h0", "h0"), "w_rel");
   const subst = (equivItem: ReturnType<typeof equiv>, position?: number) =>
     verifyDerivation(ee, {
@@ -639,7 +639,9 @@ function test_schematic_forall_intro_eigenvariable_soundness_on_open_domains(): 
   assert.equal(exElim.ok, true);
 
   // 4. Eigenvariable escape & freshness adversarial tests (all must be rejected!)
-  engine.observePositive("D", white("swan_1"), "w_swan");
+  // Observations are many-sorted, so a handle that Σ names but no boundary registers comes from a
+  // constraint.
+  engine.addIncompatibility("D", white("swan_1"), q("swan_1"));
 
   // 4a) Reusing handle mentioned in Σ (swan_1)
   const badSigmaReuse = verifyDerivation(engine, {

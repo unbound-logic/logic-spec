@@ -242,6 +242,29 @@ function test_unverified_cover_keeps_no_gluts_query_conservative(): void {
   assert.equal(queried.localStatus("B3", or(P, Q)), "Excluded");
 }
 
+function test_observations_are_many_sorted(): void {
+  // audit-free-handle-policy: every handle an observed item names belongs to Dom(B); ⊤_B admits the
+  // handles of every declared boundary; HandleAuth still authenticates a handle under I_B.
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "contingent" as const });
+  const b = new BoundarySystem();
+  b.defineBoundary("Swan", { nativeRelations: ["White"], handles: [h("s1"), h("s2")] });
+  b.defineBoundary("Lake", { handles: [h("l1")] });
+  const white = (x: string) => atom("White", [{ role: "subject", handle: x }]);
+  const e = new InquiryEngine(b);
+  e.observePositive("Swan", white("s1"), "w1");
+  assert.throws(() => e.observePositive("Swan", white("l1"), "w2"), /Many-sorted observation: handle "l1"/);
+  assert.throws(() => e.observeNegative("Swan", white("ghost"), "w3"), /not in Dom\("Swan"\)/);
+  assert.throws(() => e.observePositive("Swan", equiv("Swan", "s1", "l1"), "w4"), /handle "l1"/);
+  // Bound variables are not handles of the item.
+  e.observePositive("Swan", forall("x", "Swan", white("x")), "w5");
+  // ⊤_B admits the handles of every declared boundary, and nothing else.
+  e.observePositive(TOP_BOUNDARY, white("l1"), "w6");
+  assert.throws(() => e.observePositive(TOP_BOUNDARY, white("ghost"), "w7"), /not in Dom/);
+  // HandleAuth still checks the criterion of an admitted handle.
+  assert.throws(() => e.observePositive("Swan", white("s2"), "w8", { handle: "s2", criterion: "wrong" }), /Anti-Equivocation/);
+  assert.equal(e.evaluate([white("s1")]).localStatus("Swan", white("s1")), "Grounded");
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -364,7 +387,7 @@ function test_coreference_multi_granularity_and_anti_equivocation(): void {
 function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   // Part A: Pure Cancellation Retract returns to Open without fabricating opposite polarity
   const b0 = new BoundarySystem();
-  b0.defineBoundary("B");
+  b0.defineBoundary("B", { handles: [{ id: "planet_x", criterion: "I(planet_x)", kind: "contingent" }] });
   const e0 = new InquiryEngine(b0);
   const planet = atom("Exists", [{ role: "body", handle: "planet_x" }]);
   e0.observeNegative("B", planet, "dust_artifact");
@@ -1412,3 +1435,4 @@ test("identifiers are unique for the life of an inquiry", test_identifiers_are_u
 test("ambiguous meets are errors only where needed", test_ambiguous_meets_are_errors_only_where_needed);
 test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted_and_empty_refinements);
 test("unverified cover keeps No-Gluts query-conservative", test_unverified_cover_keeps_no_gluts_query_conservative);
+test("observations are many-sorted", test_observations_are_many_sorted);

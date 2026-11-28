@@ -38,6 +38,7 @@ import {
   and,
   atom,
   bottom,
+  collectHandles,
   equiv,
   exists,
   flip,
@@ -45,6 +46,7 @@ import {
   implies,
   itemKey,
   or,
+  substituteHandle,
   type Item,
   type Polarity,
 } from "../src/syntax.ts";
@@ -332,9 +334,28 @@ function randomState(rng: Rng, profile: Profile): RandomState {
 
   const observed: { readonly id: string; readonly observation: PiObservation }[] = [];
   let next = 0;
-  const observe = (b: string, polarity: Polarity, item: Item): void => {
+  // Observations are many-sorted (core.md §2 item 6): a handle outside Dom(b) is replaced by a
+  // handle of Dom(b), or, when Dom(b) is empty, the item by a nullary atom.
+  const sorted = (b: string, item: Item): Item => {
+    const domain =
+      b === TOP_BOUNDARY
+        ? [...new Set(bs.nonEmptyBoundaries().flatMap((x) => bs.handlesOf(x).map((h) => h.id)))]
+        : bs.handlesOf(b).map((h) => h.id);
+    let out = item;
+    for (const h of collectHandles(item)) {
+      if (!domain.includes(h)) {
+        if (domain.length === 0) {
+          return atom(rng.pick(NULLARY));
+        }
+        out = substituteHandle(out, h, rng.pick(domain));
+      }
+    }
+    return out;
+  };
+  const observe = (b: string, polarity: Polarity, raw: Item): void => {
     next += 1;
     const id = `w${next}`;
+    const item = sorted(b, raw);
     if (polarity === "+") {
       engine.observePositive(b, item, id);
     } else {
