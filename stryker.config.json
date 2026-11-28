@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node --test \"test/*.test.ts\""
+  },
+  "mutate": ["src/**/*.ts"],
+  "coverageAnalysis": "off",
+  "reporters": ["clear-text", "progress", "json", "html"],
+  "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
+  "htmlReporter": { "fileName": "reports/mutation/mutation.html" },
+  "thresholds": { "high": 80, "low": 60, "break": null },
+  "timeoutMS": 120000,
+  "tempDirName": ".stryker-tmp",
+  "ignorePatterns": [".wt", "reports", ".stryker-tmp"]
+}

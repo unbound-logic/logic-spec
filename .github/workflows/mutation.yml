@@ -1,0 +1,83 @@
+name: mutation
+
+# Kernel mutation testing with Stryker, started by hand. The mutation score is a reported metric,
+# not a gate (audit-evidence-label-integrity in docs/design-review.md): it shows which kernel
+# changes the test suite fails to notice. Shards run in parallel; the report job sums them.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - { name: boundary, mutate: "src/boundary.ts" }
+          - { name: deduction, mutate: "src/deduction.ts" }
+          - { name: engine-1, mutate: "src/engine.ts:1-1150" }
+          - { name: engine-2, mutate: "src/engine.ts:1151-9999" }
+          - { name: specializations-syntax, mutate: "src/specializations.ts,src/syntax.ts" }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx stryker run --mutate "${{ matrix.shard.mutate }}" --concurrency 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-${{ matrix.shard.name }}
+          path: reports/mutation/
+
+  report:
+    needs: mutate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: shards
+      - name: Summarize the mutation score
+        run: |
+          cat > summary.mjs <<'EOF'
+          import fs from "node:fs";
+          import path from "node:path";
+          const rows = new Map();
+          for (const shard of fs.readdirSync("shards")) {
+            const file = path.join("shards", shard, "mutation.json");
+            if (!fs.existsSync(file)) continue;
+            const report = JSON.parse(fs.readFileSync(file, "utf8"));
+            for (const [name, entry] of Object.entries(report.files)) {
+              const row = rows.get(name) ?? { killed: 0, timeout: 0, survived: 0, other: 0 };
+              for (const m of entry.mutants) {
+                if (m.status === "Killed") row.killed += 1;
+                else if (m.status === "Timeout") row.timeout += 1;
+                else if (m.status === "Survived" || m.status === "NoCoverage") row.survived += 1;
+                else row.other += 1;
+              }
+              rows.set(name, row);
+            }
+          }
+          const score = (r) => {
+            const valid = r.killed + r.timeout + r.survived;
+            return valid === 0 ? "n/a" : `${((100 * (r.killed + r.timeout)) / valid).toFixed(2)}%`;
+          };
+          const total = { killed: 0, timeout: 0, survived: 0, other: 0 };
+          const lines = ["## Kernel mutation score", "", "| File | Score | Killed | Timeout | Survived | Errors |", "| :--- | ---: | ---: | ---: | ---: | ---: |"];
+          for (const [name, r] of [...rows].sort()) {
+            for (const k of Object.keys(total)) total[k] += r[k];
+            lines.push(`| ${name} | ${score(r)} | ${r.killed} | ${r.timeout} | ${r.survived} | ${r.other} |`);
+          }
+          lines.push(`| **All** | **${score(total)}** | ${total.killed} | ${total.timeout} | ${total.survived} | ${total.other} |`);
+          console.log(lines.join("\n"));
+          EOF
+          node summary.mjs >> "$GITHUB_STEP_SUMMARY"
+          node summary.mjs

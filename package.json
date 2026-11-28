@@ -13,11 +13,13 @@
     "spec-guard": "spec-guard",
     "spec-guard:prove": "spec-guard prove",
     "spec-guard:claims": "spec-guard claims",
-    "verify": "npm run typecheck && npm test && npm run spec-graph && npm run spec-guard && npm run spec-guard:prove && npm run spec-guard:claims"
+    "verify": "npm run typecheck && npm test && npm run spec-graph && npm run spec-guard && npm run spec-guard:prove && npm run spec-guard:claims",
+    "mutation": "stryker run"
   },
   "devDependencies": {
     "@spec-family/spec-graph": "0.26.0",
     "@spec-family/spec-guard": "0.35.0",
+    "@stryker-mutator/core": "10.1.1",
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0"
   }
