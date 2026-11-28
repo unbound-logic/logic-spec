@@ -511,11 +511,21 @@ export class InquiryEngine {
    * Declare (core.md §2 item 7): a change of the boundary system made outside an inquiry transition
    * becomes a stage of its own before the next transition or evaluation, so evaluate() and
    * evaluateAtStage at the current stage agree. A cover registered directly on the boundary system
-   * becomes a constraint that Withdraw can name; one withdrawn there leaves the constraints.
+   * becomes a constraint that Withdraw can name; one withdrawn there leaves the constraints. Under
+   * monotoneOnly a Declare may only add to Σ: edits that revoke a constraint are refused, and stay
+   * refused until the boundary system restores it.
    */
   #syncBoundaries(): void {
     if (this.boundaries.version === this.#boundaryVersion) {
       return;
+    }
+    if (this.monotoneOnly) {
+      const revoked = this.#revocation();
+      if (revoked !== undefined) {
+        throw new Error(
+          `Declare is forbidden when monotoneOnly is enabled: the boundary edits since stage ${this.#stage} ${revoked} (core.md §2 item 7). Restore it on the boundary system before the next transition or evaluation.`,
+        );
+      }
     }
     const registered = new Set(this.boundaries.registeredCovers().map((c) => c.id));
     for (const id of registered) {
@@ -534,6 +544,53 @@ export class InquiryEngine {
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Declare(boundaries)`);
     this.#captureStage();
+  }
+
+  /**
+   * The first constraint of C_B that the boundary edits since the current stage revoke, or
+   * undefined (audit-declare-monotone-revocation): a registered cover they withdraw, a cover
+   * witnessed at the current stage that they leave unwitnessed, or a closure they invalidate by
+   * changing the domain it witnessed. A new Collision revokes nothing; No-Gluts governs it.
+   */
+  #revocation(): string | undefined {
+    const before = this.#stageArchive.get(this.#stage)?.boundarySnapshot;
+    if (before === undefined) {
+      return undefined;
+    }
+    const now = this.boundaries;
+    const sig = (cells: readonly string[]): string => [...cells].sort().join("\0");
+    const current = new Map(now.registeredCovers().map((c) => [c.id, c]));
+    for (const c of before.registeredCovers()) {
+      const after = current.get(c.id);
+      if (after === undefined || after.target !== c.target || sig(after.cells) !== sig(c.cells)) {
+        return `withdraw the cover "${c.id}"`;
+      }
+    }
+    for (const target of before.nonEmptyBoundaries()) {
+      let witnessed: readonly (readonly string[])[];
+      try {
+        witnessed = before.witnessedCoversOf(target);
+      } catch {
+        continue; // the current stage could not judge these covers, so none of them grounds anything
+      }
+      let kept: Set<string>;
+      try {
+        kept = new Set(now.witnessedCoversOf(target).map(sig));
+      } catch (err) {
+        return `leave the covers of "${target}" unjudged: ${(err as Error).message}`;
+      }
+      const lost = witnessed.find((cells) => !kept.has(sig(cells)));
+      if (lost !== undefined) {
+        return `leave the cover {${lost.join(", ")}} ▷ ${target} unwitnessed`;
+      }
+    }
+    for (const [id, closure] of this.#closures) {
+      const witnessedBefore = closure.handles === handleSignature(before, closure.domain);
+      if (witnessedBefore && closure.handles !== handleSignature(now, closure.domain)) {
+        return `change Dom("${closure.domain}"), which invalidates the closure "${id}"`;
+      }
+    }
+    return undefined;
   }
 
   /** Add a base positive witness G+ on non-empty boundary B != ⊥_B. */

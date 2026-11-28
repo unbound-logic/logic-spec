@@ -307,6 +307,84 @@ function test_boundary_edits_become_declare_stages(): void {
   assert.equal(e.constraintKind(other), undefined);
 }
 
+function test_monotone_declare_refuses_revocation(): void {
+  // audit-declare-monotone-revocation (R14): under monotoneOnly a Declare may only add to Σ. Boundary
+  // edits that withdraw or disable a constraint of C_B are refused until the boundary system
+  // restores it.
+  const P = atom("P");
+  const refused = /Declare is forbidden when monotoneOnly is enabled/;
+  const covered = (monotoneOnly: boolean) => {
+    const b = new BoundarySystem();
+    b.defineBoundary("T");
+    b.defineBoundary("C1", { parents: ["T"] });
+    b.defineBoundary("C2", { parents: ["T"] });
+    const e = new InquiryEngine(b, { monotoneOnly });
+    const id = e.witnessCover("T", ["C1", "C2"]);
+    e.observePositive("C1", P, "w1");
+    e.observePositive("C2", P, "w2");
+    assert.equal(e.evaluate([P]).localStatus("T", P), "Grounded"); // through the cover
+    return { b, e, id };
+  };
+
+  // Withdrawing a cover on the boundary system is Withdraw by another route.
+  const one = covered(true);
+  const stage = one.e.stage;
+  one.b.withdrawCover(one.id);
+  assert.throws(() => one.e.evaluate([P]), new RegExp(`withdraw the cover "${one.id}"`));
+  assert.throws(() => one.e.observePositive("C1", atom("R"), "w3"), refused);
+  assert.throws(() => one.e.stage, refused);
+  // Registering the same cover again restores it, and the edits form one Declare stage.
+  one.b.registerCover("T", ["C1", "C2"], one.id);
+  assert.equal(one.e.evaluate([P]).localStatus("T", P), "Grounded");
+  assert.equal(one.e.stage, stage + 1);
+  assert.match(one.e.transitionLog.at(-1) ?? "", /Declare/);
+
+  // A new sub-boundary of the target, of unknown overlap with both cells, leaves the cover
+  // unwitnessed; a boundary below it and a cell settles the overlap and restores the witness.
+  const two = covered(true);
+  two.b.defineBoundary("X", { parents: ["T"] });
+  assert.throws(() => two.e.evaluate([P]), /leave the cover \{C1, C2\} ▷ T unwitnessed/);
+  two.b.defineBoundary("Y", { parents: ["X", "C1"] });
+  assert.equal(two.e.evaluate([P]).localStatus("T", P), "Grounded");
+  // Without monotoneOnly the same edit is an ordinary Declare.
+  const free = covered(false);
+  free.b.defineBoundary("X", { parents: ["T"] });
+  assert.equal(free.e.evaluate([P]).localStatus("T", P), "Open");
+
+  // A registered meet whose inferred refinements give the cover's target a new sub-boundary.
+  const b = new BoundarySystem();
+  b.defineBoundary("A");
+  b.defineBoundary("Bb");
+  b.defineBoundary("M", { parents: ["A", "Bb"] });
+  b.defineBoundary("C1", { parents: ["M"] });
+  const e = new InquiryEngine(b, { monotoneOnly: true });
+  e.witnessCover("M", ["C1"]);
+  e.observePositive("C1", P, "w1");
+  b.defineBoundary("X", { parents: ["A", "Bb"] }); // admitted: M keeps its sub-boundaries
+  assert.equal(e.evaluate([P]).localStatus("M", P), "Grounded");
+  b.defineMeet("A", "Bb", "M");
+  assert.throws(() => e.evaluate([P]), /leave the cover \{C1\} ▷ M unwitnessed/);
+
+  // Additions are admitted: a disjointness, a boundary outside every cover's target, a new cover.
+  const three = covered(true);
+  three.b.declareDisjoint("C1", "C2");
+  three.b.defineBoundary("Z");
+  const extra = three.b.registerCover("C1", ["C1"]);
+  assert.equal(three.e.evaluate([P]).localStatus("T", P), "Grounded");
+  assert.equal(three.e.constraintKind(extra), "cover");
+
+  // A closure of ⊤_B is invalidated by a Declare that widens Dom(⊤_B) (audit-top-domain-quantifiers).
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const d = new BoundarySystem();
+  d.defineBoundary("D", { handles: [h("h1")] });
+  const m = new InquiryEngine(d, { monotoneOnly: true });
+  const closure = m.closeDomain(TOP_BOUNDARY);
+  d.defineBoundary("D_sub", { parents: ["D"] }); // adds no handle
+  assert.equal(m.isDomainClosed(TOP_BOUNDARY), true);
+  d.defineBoundary("F", { handles: [h("h3")] });
+  assert.throws(() => m.isDomainClosed(TOP_BOUNDARY), new RegExp(`invalidates the closure "${closure}"`));
+}
+
 function test_top_domain_ranges_over_every_declared_handle(): void {
   // audit-top-domain-quantifiers (R15): Dom(⊤_B) is the union of the declared domains, for
   // quantifiers as for observations, and a closure gates enumeration only over the handle set it
@@ -1563,4 +1641,5 @@ test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted
 test("unverified cover keeps No-Gluts query-conservative", test_unverified_cover_keeps_no_gluts_query_conservative);
 test("observations are many-sorted", test_observations_are_many_sorted);
 test("boundary edits become Declare stages", test_boundary_edits_become_declare_stages);
+test("monotone Declare refuses revocation", test_monotone_declare_refuses_revocation);
 test("top domain ranges over every declared handle", test_top_domain_ranges_over_every_declared_handle);
