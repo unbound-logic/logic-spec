@@ -39,7 +39,9 @@
  * closure starts from the valid registered covers only (A33, A36, A37), and let an ambiguous meet
  * stop Scoped Cut only for an instance whose Live premises are true in the least model of the
  * program read with every obs atom false and the instances over ambiguous pairs left out (A31,
- * A40).
+ * A40). Items 6 and 7 as amended for audit-top-domain-quantifiers make Dom(⊤_B) the union of the
+ * declared domains, which handlesOf returns, and let a closure gate enumeration only while Dom(D)
+ * keeps the handle set it witnessed; the caller passes only the closures in force (A14, A25, A42).
  */
 
 import { BOT_BOUNDARY, type BoundarySystem, type MeetStatus } from "../../src/boundary.ts";
@@ -978,6 +980,7 @@ export function evaluatePi(state: PiState): PiModel {
       case "forall":
       case "exists": {
         const constraint = item.domainConstraint;
+        // Dom(⊤_B) is the union of the declared domains (A42).
         const instances = bs.handlesOf(item.domain).map((h) => ({
           body: idx(substituteHandle(item.body, item.variable, h.id)),
           delta:
