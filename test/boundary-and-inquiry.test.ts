@@ -89,6 +89,18 @@ function test_registered_meet_is_the_greatest_lower_bound(): void {
     () => e.defineBoundary("S", { parents: ["P", "Q"], handles: [h("y")] }),
     /Domain monotonicity violation: handle "y" of "S" is not in Dom\("M"\)/,
   );
+  // A meet that would make two distinct boundaries refine each other is refused: for a comparable
+  // pair the meet is the smaller one, and a common sub-boundary above the meet would equal it.
+  const c = new BoundarySystem();
+  c.defineBoundary("Big");
+  c.defineBoundary("Small", { parents: ["Big"] });
+  c.defineBoundary("Tiny", { parents: ["Small"] });
+  assert.throws(() => c.defineMeet("Big", "Small", "Tiny"), /refine each other/);
+  c.defineBoundary("Other");
+  c.defineBoundary("Shared", { parents: ["Big", "Other"] });
+  c.defineBoundary("Inner", { parents: ["Shared"] });
+  assert.throws(() => c.defineMeet("Big", "Other", "Inner"), /refine each other/);
+  assert.equal(c.refines("Shared", "Inner"), false);
   // A boundary below a meet and below a boundary declared disjoint from it is refused.
   e.defineBoundary("Z", { handles: [h("x")] });
   e.declareDisjoint("M", "Z");

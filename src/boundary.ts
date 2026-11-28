@@ -267,7 +267,10 @@ export class BoundarySystem {
     }
   }
 
-  /** The first boundary whose up-set breaks domain monotonicity or holds a disjoint pair. */
+  /**
+   * The first boundary whose up-set breaks domain monotonicity, holds a disjoint pair, or holds a
+   * distinct boundary that refines it back (two names for one boundary).
+   */
   #inferredRefinementProblem(): string | undefined {
     for (const x of this.#defined) {
       if (x === BOT_BOUNDARY || x === TOP_BOUNDARY) {
@@ -278,6 +281,9 @@ export class BoundarySystem {
       for (const y of up) {
         if (y === x || y === TOP_BOUNDARY) {
           continue;
+        }
+        if (this.#up(y).has(x)) {
+          return `"${x}" and "${y}" would refine each other, naming one boundary twice.`;
         }
         const outside = [...dom.keys()].find((h) => this.#handles.get(y)?.has(h) !== true);
         if (outside !== undefined) {
