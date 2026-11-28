@@ -265,6 +265,48 @@ function test_observations_are_many_sorted(): void {
   assert.equal(e.evaluate([white("s1")]).localStatus("Swan", white("s1")), "Grounded");
 }
 
+function test_boundary_edits_become_declare_stages(): void {
+  // audit-boundary-mutation-staging (R12): editing the boundary system outside a transition is a
+  // Declare stage, so evaluate() and evaluateAtStage at the current stage agree.
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("C1", { parents: ["B"] });
+  b.defineBoundary("C2", { parents: ["B"] });
+  b.declareDisjoint("C1", "C2");
+  const e = new InquiryEngine(b);
+  e.witnessCover("B", ["C1", "C2"]);
+  const P = atom("P");
+  const Q = atom("Q");
+  const PQ = or(P, Q);
+  e.observePositive("C1", P, "p1");
+  e.observePositive("C2", Q, "q2");
+  const before = e.stage;
+  b.defineBoundary("B3", { parents: ["B"] });
+  b.declareDisjoint("B3", "C1");
+  b.declareDisjoint("B3", "C2");
+  assert.equal(e.evaluate([PQ]).localStatus("B", PQ), "Open");
+  assert.equal(e.stage, before + 1); // the three edits form one Declare stage
+  assert.match(e.transitionLog.at(-1) ?? "", /Declare/);
+  assert.equal(e.evaluateAtStage(e.stage, [PQ]).localStatus("B", PQ), "Open");
+  assert.equal(e.evaluateAtStage(before, [PQ]).localStatus("B", PQ), "Grounded"); // the earlier stage keeps its snapshot
+  e.evaluate();
+  assert.equal(e.stage, before + 1); // no change, no stage
+
+  // A cover registered directly on the boundary system is a constraint that Withdraw can name, and
+  // one withdrawn there leaves the constraints.
+  b.defineBoundary("D1", { parents: ["C1"] });
+  b.defineBoundary("D2", { parents: ["C1"] });
+  b.declareDisjoint("D1", "D2");
+  const direct = b.registerCover("C1", ["D1", "D2"]);
+  assert.equal(e.constraintKind(direct), "cover");
+  assert.equal(e.withdraw(direct), true);
+  assert.equal(b.registeredCovers().some((c) => c.id === direct), false);
+  const other = b.registerCover("C1", ["D1", "D2"]);
+  assert.equal(e.constraintKind(other), "cover");
+  b.withdrawCover(other);
+  assert.equal(e.constraintKind(other), undefined);
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -1436,3 +1478,4 @@ test("ambiguous meets are errors only where needed", test_ambiguous_meets_are_er
 test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted_and_empty_refinements);
 test("unverified cover keeps No-Gluts query-conservative", test_unverified_cover_keeps_no_gluts_query_conservative);
 test("observations are many-sorted", test_observations_are_many_sorted);
+test("boundary edits become Declare stages", test_boundary_edits_become_declare_stages);
