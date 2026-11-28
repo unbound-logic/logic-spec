@@ -921,7 +921,7 @@ export class InquiryEngine {
     // M1(i), indirect reference: δ's relations must not reach the target relation through the
     // relation-dependency graph of C_B (incompatibilities, structural collapses) and the Live
     // conditionals of Σ.
-    const link = this.#indirectLink(criterionRels, req.targetRelation, beforeSnap);
+    const link = this.#indirectLink(req.criterionItem, req.targetRelation, req.fromBoundary, beforeSnap);
     if (link !== undefined) {
       return {
         ok: false,
@@ -1193,49 +1193,82 @@ export class InquiryEngine {
   }
 
   /**
-   * The first relation of `criterionRels` that reaches `targetRelation` in the relation-dependency
-   * graph built from the registered incompatibilities and structural collapses and from the
-   * conditionals that are Live on some boundary in `snap`; undefined when none does.
+   * M1(i), indirect reference (core.md §2 item 7): the relation of `criterion` from which
+   * `+targetRelation` is reachable along the inferences item 14 fires, over literals (a relation
+   * with a polarity): from the antecedent to the consequent of a conditional Live on `boundary` or
+   * a boundary above it, and from one side of an incompatibility registered there to the exclusion
+   * of the other. Shared consequences and shared exclusions do not link relations. Undefined when
+   * no relation of the criterion reaches it.
    */
   #indirectLink(
-    criterionRels: ReadonlySet<string>,
+    criterion: Item,
     targetRelation: string,
+    boundary: string,
     snap: EvaluationSnapshot,
   ): string | undefined {
+    const literals = (item: Item, positive: boolean, out: Set<string>): Set<string> => {
+      switch (item.kind) {
+        case "atom":
+          out.add(`${positive ? "+" : "-"}${item.relation}`);
+          break;
+        case "flip":
+          literals(item.inner, !positive, out);
+          break;
+        case "and":
+        case "or":
+          literals(item.left, positive, out);
+          literals(item.right, positive, out);
+          break;
+        case "implies":
+          literals(item.antecedent, !positive, out);
+          literals(item.consequent, positive, out);
+          break;
+        case "forall":
+        case "exists":
+          literals(item.body, positive, out);
+          break;
+        default:
+          break;
+      }
+      return out;
+    };
+    const lits = (item: Item): Set<string> => literals(item, true, new Set());
+    const negated = (set: ReadonlySet<string>): Set<string> =>
+      new Set([...set].map((l) => (l.startsWith("+") ? `-${l.slice(1)}` : `+${l.slice(1)}`)));
     const graph = new Map<string, Set<string>>();
-    const connect = (rels: ReadonlySet<string>): void => {
-      for (const a of rels) {
+    const connect = (from: ReadonlySet<string>, to: ReadonlySet<string>): void => {
+      for (const a of from) {
         const set = graph.get(a) ?? new Set<string>();
-        for (const b of rels) {
-          if (a !== b) {
-            set.add(b);
-          }
+        for (const b of to) {
+          set.add(b);
         }
         graph.set(a, set);
       }
     };
+    const inScope = (b: string): boolean => this.boundaries.refines(boundary, b);
     for (const inc of this.#incompatibilities) {
-      connect(new Set([...collectRelations(inc.left), ...collectRelations(inc.right)]));
+      if (inScope(inc.boundary)) {
+        connect(lits(inc.left), negated(lits(inc.right)));
+        connect(lits(inc.right), negated(lits(inc.left)));
+      }
     }
-    for (const sc of this.#structuralCollapses) {
-      connect(collectRelations(sc.item));
-    }
-    const bounds = this.boundaries.nonEmptyBoundaries();
-    const conditionals = buildUniverse(this.boundaries, bounds, [
+    const bounds = this.boundaries.nonEmptyBoundaries().filter(inScope);
+    const conditionals = buildUniverse(this.boundaries, this.boundaries.nonEmptyBoundaries(), [
       ...this.#trackedItems.values(),
     ]).filter((it) => it.kind === "implies");
     for (const imp of conditionals) {
       if (imp.kind === "implies" && bounds.some((b) => snap.isLive(b, "+", imp))) {
-        connect(new Set([...collectRelations(imp.antecedent), ...collectRelations(imp.consequent)]));
+        connect(lits(imp.antecedent), lits(imp.consequent));
       }
     }
-    for (const start of criterionRels) {
-      const seen = new Set<string>([start]);
-      const queue = [start];
+    const goal = `+${targetRelation}`;
+    for (const startLit of lits(criterion)) {
+      const seen = new Set<string>([startLit]);
+      const queue = [startLit];
       while (queue.length > 0) {
         const cur = queue.shift() as string;
-        if (cur === targetRelation) {
-          return start;
+        if (cur === goal) {
+          return startLit.slice(1);
         }
         for (const next of graph.get(cur) ?? []) {
           if (!seen.has(next)) {
