@@ -29,6 +29,75 @@ function test_boundary_meet_semilattice_and_non_witnessing_bottom(): void {
   );
 }
 
+function test_registered_meet_is_the_greatest_lower_bound(): void {
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+
+  // A boundary defined below both members of a pair lies below their registered meet, so Bpp
+  // cannot be declared disjoint from M, and the base change {M} ▷ Bp of the valid cover
+  // {C1, C2} ▷ B stays valid (clean-room oracle reading A39).
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("C1", { parents: ["B"] });
+  b.defineBoundary("C2", { parents: ["B"] });
+  b.declareDisjoint("C1", "C2");
+  b.defineBoundary("Bp", { parents: ["B"] });
+  b.declareDisjoint("Bp", "C2");
+  b.defineBoundary("M", { parents: ["Bp", "C1"] });
+  b.defineMeet("Bp", "C1", "M");
+  b.defineBoundary("Bpp", { parents: ["Bp"] });
+  b.defineBoundary("N", { parents: ["Bpp", "C1"] });
+  assert.equal(b.refines("N", "M"), true);
+  assert.deepEqual(b.meetStatus("Bpp", "M"), { kind: "overlap", meet: "N" });
+  assert.throws(() => b.declareDisjoint("Bpp", "M"), /common non-empty sub-boundaries/);
+  const cov = b.registerCover("B", ["C1", "C2"]);
+  assert.deepEqual(b.coverValidity(cov), { kind: "valid" });
+  assert.equal(b.isWitnessedCover("Bp", ["M"]), true);
+  assert.deepEqual(b.judgeCover("Bp", ["M"]), { kind: "valid" });
+
+  // Registering a meet settles an ambiguity: the maximal common sub-boundaries lie below it.
+  const a = new BoundarySystem();
+  a.defineBoundary("Lab");
+  a.defineBoundary("Field");
+  a.defineBoundary("M1", { parents: ["Lab", "Field"] });
+  a.defineBoundary("M2", { parents: ["Lab", "Field"] });
+  assert.throws(() => a.meetStatus("Lab", "Field"), /Ambiguous meet/);
+  a.defineBoundary("M", { parents: ["Lab", "Field"] });
+  a.defineMeet("Lab", "Field", "M");
+  assert.deepEqual(a.meetStatus("Lab", "Field"), { kind: "overlap", meet: "M" });
+  assert.equal(a.refines("M1", "M"), true);
+  assert.equal(a.refines("M2", "M"), true);
+  assert.deepEqual(a.meetStatus("M1", "M2"), { kind: "unknown" });
+
+  // Inferred refinements obey domain monotonicity (item 6): a meet whose domain misses a handle of
+  // a common sub-boundary is refused, and a later boundary below both members takes its default
+  // handles from the meet as well, or is refused with a handle outside it.
+  const d = new BoundarySystem();
+  d.defineBoundary("P", { handles: [h("x"), h("y")] });
+  d.defineBoundary("Q", { handles: [h("x"), h("y")] });
+  d.defineBoundary("Wide", { parents: ["P", "Q"], handles: [h("x"), h("y")] });
+  d.defineBoundary("Narrow", { parents: ["P", "Q"], handles: [h("x")] });
+  assert.throws(() => d.defineMeet("P", "Q", "Narrow"), /domain monotonicity/);
+  assert.equal(d.refines("Wide", "Narrow"), false);
+  const e = new BoundarySystem();
+  e.defineBoundary("P", { handles: [h("x"), h("y")] });
+  e.defineBoundary("Q", { handles: [h("x"), h("y")] });
+  e.defineBoundary("M", { parents: ["P", "Q"], handles: [h("x")] });
+  e.defineMeet("P", "Q", "M");
+  e.defineBoundary("R", { parents: ["P", "Q"] });
+  assert.deepEqual(e.handlesOf("R").map((x) => x.id), ["x"]);
+  assert.throws(
+    () => e.defineBoundary("S", { parents: ["P", "Q"], handles: [h("y")] }),
+    /Domain monotonicity violation: handle "y" of "S" is not in Dom\("M"\)/,
+  );
+  // A boundary below a meet and below a boundary declared disjoint from it is refused.
+  e.defineBoundary("Z", { handles: [h("x")] });
+  e.declareDisjoint("M", "Z");
+  assert.throws(
+    () => e.defineBoundary("W", { parents: ["P", "Q", "Z"], handles: [h("x")] }),
+    /below disjoint boundaries "M" and "Z"/,
+  );
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -1180,3 +1249,4 @@ test("meet status is three-valued", test_meet_status_is_three_valued);
 test("overlap unknown records an obligation without collision", test_overlap_unknown_records_obligation_without_collision);
 test("cover revalidation marks invalid and unverified covers", test_cover_revalidation_marks_invalid_and_unverified_covers);
 test("withdraw cancels constraints purely", test_withdraw_cancels_constraints_purely);
+test("registered meet is the greatest lower bound", test_registered_meet_is_the_greatest_lower_bound);

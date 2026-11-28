@@ -199,6 +199,9 @@ function randomState(rng: Rng, profile: Profile): RandomState {
       } else if (r < 0.65) {
         bs.defineBoundary(`X${cell}`, { parents: ["X", cell] });
         names.push(`X${cell}`);
+        if (rng.bool(0.5)) {
+          bs.defineMeet("X", cell, `X${cell}`);
+        }
       }
     }
     if (names.includes("D1") && rng.bool(0.4) && bs.meetStatus("X", "D1").kind === "unknown") {
@@ -408,6 +411,7 @@ type Coverage = {
   invalidCovers: number;
   unverifiedCovers: number;
   withdrawals: number;
+  allValidCoverStates: number;
 };
 
 /** Assert kernel/oracle agreement on one state and accumulate what it exercised. */
@@ -516,6 +520,20 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
       .sort();
     assert.deepEqual(kernelCovers, oracleCovers, `${ctx} minimal witnessed covers of ${b}`);
   }
+  // With every registered cover valid, every witnessed cover is valid (item 5): registered meets are
+  // greatest lower bounds, and disjoint boundaries share no non-empty sub-boundary (item 4).
+  if (state.boundaries.registeredCovers().length > 0 && snap.coverObligations().length === 0) {
+    for (const b of model.boundaries) {
+      for (const cells of state.boundaries.witnessedCoversOf(b)) {
+        assert.equal(
+          state.boundaries.judgeCover(b, cells).kind,
+          "valid",
+          `${ctx} {${cells.join(", ")}} ▷ ${b} derived from valid registered covers is valid`,
+        );
+      }
+    }
+    coverage.allValidCoverStates += 1;
+  }
   if (state.withdrawn !== undefined) {
     coverage.withdrawals += 1;
   }
@@ -535,6 +553,7 @@ function runSuite(suiteId: number, name: string, defaultCount: number, profile: 
     invalidCovers: 0,
     unverifiedCovers: 0,
     withdrawals: 0,
+    allValidCoverStates: 0,
   };
   const { seeds, replay } = suiteSeeds(suiteId, defaultCount);
   for (const seed of seeds) {
@@ -557,6 +576,7 @@ function test_differential_general_states(): void {
     assert.ok(coverage.invalidCovers > 0, "[suite=general] some registered cover is invalid");
     assert.ok(coverage.unverifiedCovers > 0, "[suite=general] some registered cover is unverified");
     assert.ok(coverage.withdrawals > 0, "[suite=general] some state withdraws a constraint");
+    assert.ok(coverage.allValidCoverStates > 0, "[suite=general] some state has only valid registered covers");
   }
 }
 

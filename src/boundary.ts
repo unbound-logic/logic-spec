@@ -77,6 +77,8 @@ export class BoundarySystem {
   readonly #handles = new Map<string, Map<string, HandleSpec>>();
   readonly #registeredCovers = new Map<string, RegisteredCover>();
   #coverCounter = 0;
+  /** Up-sets under ⊑, declared and inferred (core.md §2 item 4); cleared when ⊑ can change. */
+  readonly #upCache = new Map<string, ReadonlySet<string>>();
 
   constructor() {
     this.#parents.set(TOP_BOUNDARY, new Set());
@@ -152,6 +154,21 @@ export class BoundarySystem {
       }
     }
 
+    // The boundaries the new one will refine: its parents' up-sets, closed under the refinement a
+    // registered meet infers (core.md §2 item 4). A non-empty boundary below two disjoint ones is
+    // refused, as above for its declared parents.
+    const up = this.#computeUp(parentList);
+    for (const x of up) {
+      for (const y of up) {
+        if (x < y && this.#disjointPairs.has(pairKey(x, y))) {
+          throw new Error(
+            `Cannot define non-empty boundary "${id}" below disjoint boundaries "${x}" and "${y}" (one of them through a registered meet).`,
+          );
+        }
+      }
+    }
+    const constraining = [...up].filter((x) => x !== TOP_BOUNDARY);
+
     const rels = new Set<string>(config.nativeRelations ?? []);
     for (const p of parentList) {
       const parentRels = this.#nativeRelations.get(p);
@@ -168,10 +185,10 @@ export class BoundarySystem {
         handleMap.set(h.id, h);
       }
     } else {
-      // Default: the handles common to every declared parent (core.md §2 item 6), so a
-      // boundary with several parents admits only individuals all of them admit.
-      const declaredParents = parentList.filter((p) => p !== TOP_BOUNDARY);
-      const [first, ...rest] = declaredParents.map((p) => this.#handles.get(p) ?? new Map<string, HandleSpec>());
+      // Default: the handles common to every boundary it refines (core.md §2 item 6), its declared
+      // parents and the registered meets inferred above it, so a boundary with several parents
+      // admits only individuals all of them admit.
+      const [first, ...rest] = constraining.map((p) => this.#handles.get(p) ?? new Map<string, HandleSpec>());
       for (const [hid, spec] of first ?? new Map<string, HandleSpec>()) {
         if (
           rest.every((other) => other.has(hid)) &&
@@ -182,12 +199,9 @@ export class BoundarySystem {
       }
     }
 
-    // Domain monotonicity (core.md §2 item 6): Dom(D') ⊆ Dom(D) whenever D' ⊑ D. ⊤_B carries
-    // no handle registry, so only declared parents constrain the sub-boundary.
-    for (const p of parentList) {
-      if (p === TOP_BOUNDARY) {
-        continue;
-      }
+    // Domain monotonicity (core.md §2 item 6): Dom(D') ⊆ Dom(D) whenever D' ⊑ D, the inferred
+    // refinements included. ⊤_B carries no handle registry, so it constrains nothing.
+    for (const p of constraining) {
       const parentHandles = this.#handles.get(p);
       for (const hid of handleMap.keys()) {
         if (parentHandles?.has(hid) !== true) {
@@ -202,6 +216,7 @@ export class BoundarySystem {
     this.#parents.set(id, new Set(parentList));
     this.#nativeRelations.set(id, rels);
     this.#handles.set(id, handleMap);
+    this.#upCache.clear();
   }
 
   /** Declare two boundaries disjoint (a ⊓ b = ⊥_B). */
@@ -230,7 +245,52 @@ export class BoundarySystem {
         `Cannot register non-empty meet "${meetId}" for disjoint boundaries "${a}" and "${b}".`,
       );
     }
-    this.#explicitMeets.set(pairKey(a, b), meetId);
+    const key = pairKey(a, b);
+    const previous = this.#explicitMeets.get(key);
+    this.#explicitMeets.set(key, meetId);
+    this.#upCache.clear();
+    if (meetId === BOT_BOUNDARY) {
+      return;
+    }
+    // A registered meet is the greatest lower bound of its pair (core.md §2 item 4): every boundary
+    // below both a and b is inferred to lie below meetId. Refuse the meet when an inferred
+    // refinement breaks domain monotonicity (item 6) or puts a boundary below two disjoint ones.
+    const problem = this.#inferredRefinementProblem();
+    if (problem !== undefined) {
+      if (previous === undefined) {
+        this.#explicitMeets.delete(key);
+      } else {
+        this.#explicitMeets.set(key, previous);
+      }
+      this.#upCache.clear();
+      throw new Error(`Cannot register "${meetId}" as the meet of "${a}" and "${b}": ${problem}`);
+    }
+  }
+
+  /** The first boundary whose up-set breaks domain monotonicity or holds a disjoint pair. */
+  #inferredRefinementProblem(): string | undefined {
+    for (const x of this.#defined) {
+      if (x === BOT_BOUNDARY || x === TOP_BOUNDARY) {
+        continue;
+      }
+      const up = this.#up(x);
+      const dom = this.#handles.get(x) ?? new Map<string, HandleSpec>();
+      for (const y of up) {
+        if (y === x || y === TOP_BOUNDARY) {
+          continue;
+        }
+        const outside = [...dom.keys()].find((h) => this.#handles.get(y)?.has(h) !== true);
+        if (outside !== undefined) {
+          return `"${x}" would refine "${y}", but its handle "${outside}" is not in Dom("${y}") (domain monotonicity).`;
+        }
+        for (const z of up) {
+          if (y < z && this.#disjointPairs.has(pairKey(y, z))) {
+            return `"${x}" would lie below the disjoint boundaries "${y}" and "${z}".`;
+          }
+        }
+      }
+    }
+    return undefined;
   }
 
   #assertCanBeDisjoint(a: string, b: string): void {
@@ -269,25 +329,7 @@ export class BoundarySystem {
     if (sup === BOT_BOUNDARY || sub === TOP_BOUNDARY) {
       return false;
     }
-    const visited = new Set<string>();
-    const stack = [sub];
-    while (stack.length > 0) {
-      const cur = stack.pop();
-      if (cur === undefined || visited.has(cur)) {
-        continue;
-      }
-      visited.add(cur);
-      if (cur === sup) {
-        return true;
-      }
-      const ps = this.#parents.get(cur);
-      if (ps !== undefined) {
-        for (const p of ps) {
-          stack.push(p);
-        }
-      }
-    }
-    return false;
+    return this.#up(sub).has(sup);
   }
 
   /**
@@ -315,8 +357,8 @@ export class BoundarySystem {
     }
 
     // Disjoint if either pair or any pair of ancestors is declared disjoint.
-    for (const x of this.#ancestorsOf(a)) {
-      for (const y of this.#ancestorsOf(b)) {
+    for (const x of this.#up(a)) {
+      for (const y of this.#up(b)) {
         if (this.#disjointPairs.has(pairKey(x, y))) {
           return { kind: "disjoint" };
         }
@@ -428,6 +470,15 @@ export class BoundarySystem {
       throw new Error(`No registered cover "${id}".`);
     }
     return this.#assessCover(cover.target, cover.cells);
+  }
+
+  /** Validity of an arbitrary cover {cells} ▷ target against the current boundaries (item 5). */
+  judgeCover(target: string, cells: readonly string[]): CoverValidity {
+    this.#assertDefined(target);
+    for (const c of cells) {
+      this.#assertDefined(c);
+    }
+    return this.#assessCover(target, cells.filter((c) => c !== BOT_BOUNDARY));
   }
 
   #assessCover(target: string, cells: readonly string[]): CoverValidity {
@@ -629,8 +680,8 @@ export class BoundarySystem {
   }
 
   #hasDisjointAncestors(a: string, b: string): boolean {
-    for (const x of this.#ancestorsOf(a)) {
-      for (const y of this.#ancestorsOf(b)) {
+    for (const x of this.#up(a)) {
+      for (const y of this.#up(b)) {
         if (this.#disjointPairs.has(pairKey(x, y))) {
           return true;
         }
@@ -639,19 +690,49 @@ export class BoundarySystem {
     return false;
   }
 
-  #ancestorsOf(b: string): Set<string> {
+  /** The boundaries b refines, b included (cached). */
+  #up(b: string): ReadonlySet<string> {
+    let up = this.#upCache.get(b);
+    if (up === undefined) {
+      up = this.#computeUp([b]);
+      this.#upCache.set(b, up);
+    }
+    return up;
+  }
+
+  /**
+   * The seeds and every boundary above them by declared parents, closed under the inferred
+   * refinement of item 4: a set holding both members of a pair with a registered non-empty meet
+   * also holds the meet, and everything above it.
+   */
+  #computeUp(seeds: readonly string[]): Set<string> {
     const res = new Set<string>();
-    const stack = [b];
-    while (stack.length > 0) {
-      const cur = stack.pop();
-      if (cur === undefined || res.has(cur)) {
-        continue;
-      }
-      res.add(cur);
-      const ps = this.#parents.get(cur);
-      if (ps !== undefined) {
-        for (const p of ps) {
+    const climb = (start: string): void => {
+      const stack = [start];
+      while (stack.length > 0) {
+        const cur = stack.pop();
+        if (cur === undefined || res.has(cur)) {
+          continue;
+        }
+        res.add(cur);
+        for (const p of this.#parents.get(cur) ?? []) {
           stack.push(p);
+        }
+      }
+    };
+    for (const seed of seeds) {
+      climb(seed);
+    }
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const [key, meetId] of this.#explicitMeets) {
+        if (meetId === BOT_BOUNDARY || res.has(meetId)) {
+          continue;
+        }
+        const [a, b] = key.split("\0");
+        if (a !== undefined && b !== undefined && res.has(a) && res.has(b)) {
+          climb(meetId);
+          changed = true;
         }
       }
     }
