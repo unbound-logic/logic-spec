@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BoundarySystem } from "../src/boundary.ts";
-import { admitVerifiedDerivation, verifyDerivation } from "../src/deduction.ts";
+import { admitVerifiedDerivation, verifyDerivation, type DerivationResult, type ProofNode } from "../src/deduction.ts";
 import { InquiryEngine } from "../src/engine.ts";
 import {
   and,
@@ -18,6 +18,7 @@ import {
   ref,
   structImposs,
   substituteHandle,
+  type Item,
 } from "../src/syntax.ts";
 
 function test_eigenvariable_freshness_and_one_position_congruence(): void {
@@ -78,6 +79,226 @@ function test_eigenvariable_freshness_and_one_position_congruence(): void {
   assert.equal(subst(equiv("E", "h0", "nowhere"), 0).ok, false); // no declared boundary admits "nowhere"
 }
 
+/** Whether the record that theorem `theoremId` supplies for (boundary, +, item) is Live. */
+function theoremLive(e: InquiryEngine, theoremId: string, boundary: string, item: Item): boolean {
+  return e
+    .evaluate([item])
+    .liveGrounds(boundary, "+", item)
+    .some((g) => g.provenance.kind === "derived" && g.provenance.rule === "theorem" && g.provenance.baseLeaves.includes(`@thm:${theoremId}`));
+}
+
+function test_recorded_theorems_follow_their_dependencies(): void {
+  // audit-theorem-dependency-gaps (R7).
+  const P = atom("P");
+  const Q = atom("Q");
+  const PQ = or(P, Q);
+  const coverProof: ProofNode = {
+    kind: "or-cover-intro",
+    boundary: "B",
+    left: P,
+    right: Q,
+    cellProofs: [
+      { cell: "C1", proof: { kind: "live-ground", boundary: "C1", polarity: "+", item: P } },
+      { cell: "C2", proof: { kind: "live-ground", boundary: "C2", polarity: "+", item: Q } },
+    ],
+  };
+  const twoCells = (): { b: BoundarySystem; e: InquiryEngine; cover: string } => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    b.defineBoundary("C1", { parents: ["B"] });
+    b.defineBoundary("C2", { parents: ["B"] });
+    b.declareDisjoint("C1", "C2");
+    const e = new InquiryEngine(b);
+    const cover = e.witnessCover("B", ["C1", "C2"]);
+    e.observePositive("C1", P, "p1");
+    e.observePositive("C2", Q, "q2");
+    return { b, e, cover };
+  };
+
+  // (a) A theorem proved through a cover holds only while the cover is witnessed: Withdraw of the
+  // cover, or a sub-boundary that refutes it, disables the theorem.
+  const withdrawn = twoCells();
+  assert.equal(admitVerifiedDerivation(withdrawn.e, coverProof, "thm").ok, true);
+  assert.equal(theoremLive(withdrawn.e, "thm", "B", PQ), true);
+  withdrawn.e.withdraw(withdrawn.cover);
+  assert.equal(theoremLive(withdrawn.e, "thm", "B", PQ), false);
+  assert.equal(withdrawn.e.evaluate([PQ]).localStatus("B", PQ), "Open");
+  const refuted = twoCells();
+  assert.equal(admitVerifiedDerivation(refuted.e, coverProof, "thm").ok, true);
+  refuted.b.defineBoundary("B3", { parents: ["B"] });
+  refuted.b.declareDisjoint("B3", "C1");
+  refuted.b.declareDisjoint("B3", "C2");
+  assert.equal(theoremLive(refuted.e, "thm", "B", PQ), false);
+
+  // (b) live-ground cites the slot's authority, so two observations of P react to Retract of one of
+  // them alike in either order; a base observation the proof names is a dependency of its own.
+  const run = (order: readonly string[], named?: string): string => {
+    const b = new BoundarySystem();
+    b.defineBoundary("B");
+    const e = new InquiryEngine(b);
+    for (const id of order) {
+      e.observePositive("B", P, id);
+    }
+    const res = admitVerifiedDerivation(e, {
+      kind: "implies-intro",
+      boundary: "B",
+      assumptionId: "h",
+      antecedent: Q,
+      body: { kind: "live-ground", boundary: "B", polarity: "+", item: P, ...(named === undefined ? {} : { baseId: named }) },
+    }, "thm");
+    assert.equal(res.ok, true);
+    e.retract("w1");
+    return e.evaluate([implies(Q, P)]).localStatus("B", implies(Q, P));
+  };
+  assert.equal(run(["w1", "w2"]), "Grounded");
+  assert.equal(run(["w2", "w1"]), "Grounded");
+  assert.equal(run(["w1", "w2"], "w1"), "Open");
+  assert.equal(run(["w2", "w1"], "w1"), "Open");
+
+  // (c) An ex-falso derivation is verified under UL-Intuitionistic but not admitted, so later
+  // growth that breaks No-Gluts leaves an excluded C excluded.
+  const A = atom("A");
+  const C = atom("C");
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  const e = new InquiryEngine(b, { monotoneOnly: true });
+  const h = { kind: "assume", assumptionId: "h", boundary: "B" } as const;
+  const efq = admitVerifiedDerivation(e, {
+    kind: "implies-intro",
+    boundary: "B",
+    assumptionId: "h",
+    antecedent: and(A, implies(A, bottom())),
+    body: {
+      kind: "ex-falso-bottom",
+      target: C,
+      bottomProof: {
+        kind: "implies-elim",
+        premise: { kind: "and-elim", pair: h, side: "left" },
+        conditional: { kind: "and-elim", pair: h, side: "right" },
+      },
+    },
+  }, "thm", "UL-Intuitionistic");
+  assert.equal(efq.ok ? "admitted" : efq.violation, "mode-only-rule");
+  e.observePositive("B", A, "wa");
+  e.observePositive("B", implies(A, bottom()), "wna");
+  e.observeNegative("B", C, "wnc");
+  assert.equal(e.evaluate([C]).localStatus("B", C), "Excluded");
+}
+
+function test_fuzz_recorded_theorem_dependency_soundness(): void {
+  // MT-8b: a recorded UL-Core theorem's record is Live only while every base observation it names
+  // is in force, every cover it names is witnessed and every ground it requires is Live, and its
+  // authority does not depend on the order of observations.
+  let mult = Number.parseFloat(process.env.UL_FUZZ_MULTIPLIER ?? "1");
+  if (!Number.isFinite(mult) || mult <= 0) {
+    mult = 1;
+  }
+  const P = atom("P");
+  const Q = atom("Q");
+  const R = atom("R");
+  const X = atom("X");
+  const PQ = or(P, Q);
+  let checkedLive = 0;
+  let checkedDead = 0;
+  for (let seed = 1; seed <= Math.round(60 * mult); seed++) {
+    let state = (seed * 0x9e3779b1) >>> 0;
+    const next = (): number => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(state ^ (state >>> 15), 1 | state);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const coin = (p: number): boolean => next() < p;
+    const observations: { readonly id: string; readonly boundary: string; readonly item: Item }[] = [
+      { id: "p1", boundary: "C1", item: P },
+      ...(coin(0.5) ? [{ id: "p2", boundary: "C1", item: P }] : []),
+      { id: "q1", boundary: "C2", item: Q },
+      { id: "r1", boundary: "B", item: R },
+      ...(coin(0.5) ? [{ id: "r2", boundary: "B", item: R }] : []),
+    ];
+    const retracted = observations.filter(() => coin(0.35)).map((o) => o.id);
+    const withdrawCover = coin(0.3);
+    const refuteCover = coin(0.3);
+    const nameBase = coin(0.5);
+    const order = [...observations].sort(() => next() - 0.5);
+
+    const build = (obs: typeof observations) => {
+      const b = new BoundarySystem();
+      b.defineBoundary("B");
+      b.defineBoundary("C1", { parents: ["B"] });
+      b.defineBoundary("C2", { parents: ["B"] });
+      b.declareDisjoint("C1", "C2");
+      const e = new InquiryEngine(b);
+      const cover = e.witnessCover("B", ["C1", "C2"]);
+      for (const o of obs) {
+        e.observePositive(o.boundary, o.item, o.id);
+      }
+      const results = new Map<string, DerivationResult>();
+      results.set("tCover", admitVerifiedDerivation(e, {
+        kind: "or-cover-intro",
+        boundary: "B",
+        left: P,
+        right: Q,
+        cellProofs: [
+          { cell: "C1", proof: { kind: "live-ground", boundary: "C1", polarity: "+", item: P } },
+          { cell: "C2", proof: { kind: "live-ground", boundary: "C2", polarity: "+", item: Q } },
+        ],
+      }, "tCover"));
+      results.set("tGround", admitVerifiedDerivation(e, {
+        kind: "implies-intro",
+        boundary: "B",
+        assumptionId: "h",
+        antecedent: X,
+        body: { kind: "live-ground", boundary: "B", polarity: "+", item: R, ...(nameBase ? { baseId: "r1" } : {}) },
+      }, "tGround"));
+      for (const id of retracted) {
+        e.retract(id);
+      }
+      if (withdrawCover) {
+        e.withdraw(cover);
+      }
+      if (refuteCover) {
+        b.defineBoundary("Y", { parents: ["B"] });
+        b.declareDisjoint("Y", "C1");
+        b.declareDisjoint("Y", "C2");
+      }
+      return { b, e, results };
+    };
+    const targets = [
+      { id: "tCover", boundary: "B", item: PQ },
+      { id: "tGround", boundary: "B", item: implies(X, R) },
+    ];
+    const first = build(observations);
+    const second = build(order);
+    for (const t of targets) {
+      const res = first.results.get(t.id);
+      assert.ok(res !== undefined && res.ok, `seed ${seed}: ${t.id} admitted`);
+      if (!res.ok) {
+        continue;
+      }
+      const live = theoremLive(first.e, t.id, t.boundary, t.item);
+      // Authority does not depend on the order of observations.
+      assert.equal(theoremLive(second.e, t.id, t.boundary, t.item), live, `seed ${seed}: ${t.id} order invariance`);
+      if (!live) {
+        checkedDead += 1;
+        continue;
+      }
+      checkedLive += 1;
+      const snap = first.e.evaluate(res.requiredGrounds.map((g) => g.item));
+      for (const id of res.requiredBaseIds) {
+        assert.ok(!retracted.includes(id), `seed ${seed}: ${t.id} Live with its named observation ${id} retracted`);
+      }
+      for (const c of res.requiredCovers ?? []) {
+        assert.ok(first.b.isWitnessedCover(c.boundary, c.cells), `seed ${seed}: ${t.id} Live with its cover unwitnessed`);
+      }
+      for (const g of res.requiredGrounds) {
+        assert.ok(snap.isLive(g.boundary, g.polarity, g.item), `seed ${seed}: ${t.id} Live with a required ground not Live`);
+      }
+    }
+  }
+  assert.ok(checkedLive > 0 && checkedDead > 0, "both live and disabled theorems are exercised");
+}
+
 function test_standalone_cover_gluing_and_quarantine_propagation(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -119,7 +340,13 @@ function test_standalone_cover_gluing_and_quarantine_propagation(): void {
   if (gluedProof.ok) {
     assert.equal(gluedProof.boundary, "Z");
     assert.equal(gluedProof.polarity, "+");
-    assert.deepEqual(gluedProof.requiredBaseIds, ["w_ep", "w_op"]);
+    // The theorem depends on the cells' authority and on the cover, not on a chosen observation.
+    assert.deepEqual(gluedProof.requiredBaseIds, []);
+    assert.deepEqual(
+      gluedProof.requiredGrounds.map((g) => g.boundary).sort(),
+      ["Even", "Odd"],
+    );
+    assert.deepEqual(gluedProof.requiredCovers, [{ boundary: "Z", cells: ["Even", "Odd"] }]);
   }
 
   const badCoverProof = verifyDerivation(engine, {
@@ -607,10 +834,15 @@ function test_ul_minimal_vs_ul_intuitionistic_proof_theoretic_separation(): void
     assert.equal(minRejectContra.violation, "ex-falso-disallowed");
   }
 
-  // 3. UL-Intuitionistic admits both ⊥ → C and (A ∧ (A → ⊥)) → C cleanly
+  // 3. UL-Intuitionistic verifies both ⊥ → C and (A ∧ (A → ⊥)) → C, but ex falso lies outside
+  // UL-Core, so neither is admitted into Σ (core.md §3 item 10).
+  assert.equal(verifyDerivation(eMin, botToCProof, "UL-Intuitionistic").ok, true);
   const intBot = admitVerifiedDerivation(eMin, botToCProof, "thm_efq", "UL-Intuitionistic");
-  assert.equal(intBot.ok, true);
-  assert.equal(eMin.evaluate().isLive("B", "+", implies(bottom(), c)), true);
+  assert.equal(intBot.ok, false);
+  if (!intBot.ok) {
+    assert.equal(intBot.violation, "mode-only-rule");
+  }
+  assert.equal(eMin.evaluate([implies(bottom(), c)]).isLive("B", "+", implies(bottom(), c)), false);
 
   const intContra = verifyDerivation(eMin, exFalsoContraProof, "UL-Intuitionistic");
   assert.equal(intContra.ok, true);
@@ -939,7 +1171,7 @@ function test_deduction_quantifier_domain_constraint_enforcement(): void {
   assert.equal(validConstrainedElim.ok, true);
   if (validConstrainedElim.ok) {
     assert.equal(itemKey(validConstrainedElim.item), itemKey(inv("2")));
-    assert.equal(validConstrainedElim.requiredBaseIds.includes("w_nadd2"), true);
+    assert.ok(validConstrainedElim.requiredGrounds.some((g) => itemKey(g.item) === itemKey(flip(addId("2")))));
   }
 
   // Reject spurious constraintProof when universal has NO domainConstraint
@@ -1128,3 +1360,5 @@ test(
   test_deduction_quantifier_domain_constraint_enforcement,
 );
 test("eigenvariable freshness and one-position congruence", test_eigenvariable_freshness_and_one_position_congruence);
+test("recorded theorems follow their dependencies", test_recorded_theorems_follow_their_dependencies);
+test("fuzz recorded theorem dependency soundness (MT-8b)", test_fuzz_recorded_theorem_dependency_soundness);

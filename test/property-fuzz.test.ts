@@ -1468,8 +1468,10 @@ function test_fuzz_deduction_soundness_domain_constraint_and_capture_avoiding_su
     const admitted = admitVerifiedDerivation(e, combinedProof, `thm_${seed}`, "UL-Core");
     assert.equal(admitted.ok, true, `${ctx} valid combinedProof failed: ${!admitted.ok ? admitted.reason : ""}`);
     if (admitted.ok) {
-      assert.equal(admitted.requiredBaseIds.includes("w_ch0"), true, ctx);
-      assert.equal(admitted.requiredBaseIds.includes("w_qd1"), true, ctx);
+      // live-ground names no base observation (core.md §3 item 11): the theorem depends on the
+      // authority of the slots it cites, which the retractions below remove.
+      assert.deepEqual(admitted.requiredBaseIds, [], ctx);
+      assert.ok(admitted.requiredGrounds.length > 0, ctx);
       assert.equal(e.evaluate([admitted.item]).isLive("D", "+", admitted.item), true, ctx);
       if (!monotone) {
         e.observeNegative("D1", q("h0"), "refute_qd1");
