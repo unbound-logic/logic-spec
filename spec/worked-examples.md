@@ -13,7 +13,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 1. Multi-Regime Collision, Quarantine & `M2` Non-Erasure
 
-1. `Tested` **Boiling Point Under `1 atm` vs. `2 atm`** ([`core.md`](core.md) §2 items 4, 7; §3 items 8–12):
+1. `Tested` **WE-1: Boiling Point Under `1 atm` vs. `2 atm`** ([`core.md`](core.md) §2 items 4, 7; §3 items 8–12):
    - **Signature & Boundaries**:
      - `B_1atm ⊑ B_all`, `B_2atm ⊑ B_all`, with `B_1atm ⊓ B_2atm = ⊥_B` (disjoint regimes).
      - Items: regime-scoped `Heat100 := Heat100(substance: h2o)`, `Boils := Boils(substance: h2o)`, `Cook := CooksAt100C(item: pasta)`, `Rule_broad := Heat100 → Boils`, `Rule_cook := Boils → Cook`; paired with parameter-indexed schema `HeatedAt(p) := HeatedAt(pressure: p)`, `BoilsAt(p) := BoilsAt(pressure: p)`, and `Gen_all := ∀(p : B_all) (HeatedAt(p) → BoilsAt(p))`.
@@ -61,7 +61,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 2. `M1` Anti-Immunization & Anti-Equivocation (`ℝ \ {0}` vs. Swan `#402`)
 
-2. `Tested` **Admissible Algebraic Singularity (`ℝ \ {0}`) vs. Refused Contingent Excision (`swan_402`)** ([`core.md`](core.md) §2 items 6–7):
+2. `Tested` **WE-2: Admissible Algebraic Singularity (`ℝ \ {0}`) vs. Refused Contingent Excision (`swan_402`)** ([`core.md`](core.md) §2 items 6–7):
    - **Case 2A — Admissible Refinement (`ℝ \ {0}`)**:
      - Boundary `ℝ` carries field operations `+, ×` and the structurally defined relation `AddId(x) := ∀(y : ℝ) (y + x ≈_ℝ y)`.
      - Claim: `Gen_ℝ := ∀(x : ℝ) Invertible(x)` where `Invertible(x) := ∃(y : ℝ) (x × y ≈_ℝ 1)`.
@@ -89,7 +89,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 3. Adversarial Curry Paradox Attempts (All Blocked)
 
-3. `Tested` **Four Curry Attack Vectors Against Horizontal Contraction** ([`core.md`](core.md) §1 items 2–3; §3 items 11–12):
+3. `Tested` **WE-3: Four Curry Attack Vectors Against Horizontal Contraction** ([`core.md`](core.md) §1 items 2–3; §3 items 11–12):
    - Target arbitrary noise: `Z := MoonIsCheese`.
    - **Vector 1 — Direct Negative Recursion (`K := K → Z`)**:
      - `K` occurs to the left of `→` (non-strictly-positive). **Rejected at formation time by §1 item 3 (Strict Positivity).**
@@ -107,7 +107,7 @@ This document exercises [spec/core.md](core.md) end to end on four benchmark sce
 
 ## 4. `UL-Classical` Step-by-Step Boundary Recovery
 
-4. `Tested` **Derived Classical Theorems Under Closure Conditions** ([`core.md`](core.md) §4 item 13):
+4. `Tested` **WE-4: Derived Classical Theorems Under Closure Conditions** ([`core.md`](core.md) §4 item 13):
    - Assume `UL-Classical`: frozen `Σ`, atomic closed boundary `B* ≠ ⊥_B` (or witnessed finite atomic cover `{B*_1, ..., B*_k} ▷ B`), finest congruence `≈_{B*}`, `No-Gluts`, `No-Gaps`, and level `n = 0`.
    - **Derivation 4A — Non-Atomic Excluded Middle (`B ⊩⁺ (A ∨ ~A)`)**:
      1. For each atomic cell `B*_i` in `{B*_i} ▷ B`, `No-Gaps` yields either `B*_i ⊩⁺ A` or `B*_i ⊩⁻ A`.
