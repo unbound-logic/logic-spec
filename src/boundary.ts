@@ -703,28 +703,47 @@ export class BoundarySystem {
     return this.witnessedCoversOf(target).some((c) => coverSignature(c) === sig);
   }
 
-  /** Return all handles in Dom(boundary). */
+  /**
+   * Return all handles in Dom(boundary). ⊤_B keeps no handle registry: Dom(⊤_B) is the union of
+   * the domains of the declared boundaries (core.md §2 item 6), each handle given by the first
+   * boundary, in declaration order, that admits it.
+   */
   handlesOf(boundary: string): readonly HandleSpec[] {
     this.#assertDefined(boundary);
+    if (boundary === TOP_BOUNDARY) {
+      const union = new Map<string, HandleSpec>();
+      for (const b of this.#defined) {
+        for (const [id, spec] of this.#handles.get(b) ?? []) {
+          if (!union.has(id)) {
+            union.set(id, spec);
+          }
+        }
+      }
+      return [...union.values()];
+    }
     return [...(this.#handles.get(boundary)?.values() ?? [])];
   }
 
   /** Look up handle specification in Dom(boundary). */
   getHandle(boundary: string, handleId: string): HandleSpec | undefined {
     this.#assertDefined(boundary);
+    if (boundary === TOP_BOUNDARY) {
+      return this.handlesOf(boundary).find((h) => h.id === handleId);
+    }
     return this.#handles.get(boundary)?.get(handleId);
   }
 
-  /** Verify whether handleId ∈ Dom(boundary) and matches individuation criterion I_B if given. */
+  /**
+   * Verify whether handleId ∈ Dom(boundary) and matches individuation criterion I_B if given. On
+   * ⊤_B the criterion of any declared boundary that admits the handle matches.
+   */
   isAdmissibleHandle(boundary: string, handleId: string, suppliedCriterion?: string): boolean {
-    const spec = this.getHandle(boundary, handleId);
-    if (spec === undefined) {
-      return false;
-    }
-    if (suppliedCriterion !== undefined && spec.criterion !== suppliedCriterion) {
-      return false;
-    }
-    return true;
+    this.#assertDefined(boundary);
+    const registries = boundary === TOP_BOUNDARY ? [...this.#defined] : [boundary];
+    return registries.some((b) => {
+      const spec = this.#handles.get(b)?.get(handleId);
+      return spec !== undefined && (suppliedCriterion === undefined || spec.criterion === suppliedCriterion);
+    });
   }
 
   /** Return true iff `relation` is native to `boundary`. */

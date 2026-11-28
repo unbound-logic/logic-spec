@@ -299,7 +299,8 @@ function randomState(rng: Rng, profile: Profile): RandomState {
     return equiv(rng.pick(["B", "B1"] as const), handle(), handle());
   };
   const quantifier = (depth: number): Item => {
-    const domain = boundary();
+    // ⊤_B ranges over every declared handle (audit-top-domain-quantifiers).
+    const domain = rng.bool(0.15) ? TOP_BOUNDARY : boundary();
     const body =
       !implicationFree && depth > 0 && rng.bool(0.3)
         ? implies(unary("P", "x"), unary("Q", "x"))
@@ -335,12 +336,10 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   const observed: { readonly id: string; readonly observation: PiObservation }[] = [];
   let next = 0;
   // Observations are many-sorted (core.md §2 item 6): a handle outside Dom(b) is replaced by a
-  // handle of Dom(b), or, when Dom(b) is empty, the item by a nullary atom.
+  // handle of Dom(b), or, when Dom(b) is empty, the item by a nullary atom. Dom(⊤_B) is the union
+  // of the declared domains.
   const sorted = (b: string, item: Item): Item => {
-    const domain =
-      b === TOP_BOUNDARY
-        ? [...new Set(bs.nonEmptyBoundaries().flatMap((x) => bs.handlesOf(x).map((h) => h.id)))]
-        : bs.handlesOf(b).map((h) => h.id);
+    const domain = bs.handlesOf(b).map((h) => h.id);
     let out = item;
     for (const h of collectHandles(item)) {
       if (!domain.includes(h)) {
@@ -419,7 +418,7 @@ function randomState(rng: Rng, profile: Profile): RandomState {
   }
 
   const closures: { readonly domain: string; readonly id: string }[] = [];
-  for (const d of names) {
+  for (const d of [...names, TOP_BOUNDARY]) {
     if (rng.bool(profile.closure)) {
       closures.push({ domain: d, id: engine.closeDomain(d) });
     }

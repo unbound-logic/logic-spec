@@ -307,6 +307,50 @@ function test_boundary_edits_become_declare_stages(): void {
   assert.equal(e.constraintKind(other), undefined);
 }
 
+function test_top_domain_ranges_over_every_declared_handle(): void {
+  // audit-top-domain-quantifiers (R15): Dom(⊤_B) is the union of the declared domains, for
+  // quantifiers as for observations, and a closure gates enumeration only over the handle set it
+  // witnessed.
+  const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+  const Q = (x: string) => atom("Q", [{ role: "of", handle: x }]);
+  const all = forall("x", TOP_BOUNDARY, Q("x"));
+  const b = new BoundarySystem();
+  b.defineBoundary("D", { handles: [h("h1")] });
+  b.defineBoundary("E", { handles: [h("h2")] });
+  assert.deepEqual(b.handlesOf(TOP_BOUNDARY).map((x) => x.id).sort(), ["h1", "h2"]);
+  assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "h2", "I(h2)"), true);
+  assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "h2", "I(h1)"), false);
+  assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "ghost"), false);
+
+  const e = new InquiryEngine(b);
+  const closure = e.closeDomain(TOP_BOUNDARY);
+  const status = () => e.evaluate([all]).localStatus(TOP_BOUNDARY, all);
+  assert.equal(status(), "Open"); // not vacuous: h1 and h2 have no witness
+  e.observePositive(TOP_BOUNDARY, Q("h1"), "q1");
+  assert.equal(status(), "Open");
+  e.observePositive(TOP_BOUNDARY, Q("h2"), "q2");
+  assert.equal(status(), "Grounded");
+  // A Declare that widens Dom(⊤_B) invalidates the closure, which stays a constraint of C_B.
+  b.defineBoundary("F", { handles: [h("h3")] });
+  assert.equal(e.isDomainClosed(TOP_BOUNDARY), false);
+  assert.equal(e.constraintKind(closure), "closure");
+  e.observePositive(TOP_BOUNDARY, Q("h3"), "q3");
+  assert.equal(status(), "Open"); // the closure witnessed {h1, h2}, not {h1, h2, h3}
+  assert.equal(e.withdraw(closure), true);
+  e.closeDomain(TOP_BOUNDARY);
+  assert.equal(status(), "Grounded");
+  // A boundary that adds no handle leaves Dom(⊤_B), and so the closure, unchanged.
+  b.defineBoundary("D_sub", { parents: ["D"] });
+  assert.equal(e.isDomainClosed(TOP_BOUNDARY), true);
+
+  // A counterexample on ⊤_B excludes the universal, closed or not.
+  const c = new InquiryEngine(b.clone());
+  c.observeNegative(TOP_BOUNDARY, Q("h1"), "n1");
+  assert.equal(c.evaluate([all]).localStatus(TOP_BOUNDARY, all), "Excluded");
+  c.closeDomain(TOP_BOUNDARY);
+  assert.equal(c.evaluate([all]).localStatus(TOP_BOUNDARY, all), "Excluded");
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -1519,3 +1563,4 @@ test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted
 test("unverified cover keeps No-Gluts query-conservative", test_unverified_cover_keeps_no_gluts_query_conservative);
 test("observations are many-sorted", test_observations_are_many_sorted);
 test("boundary edits become Declare stages", test_boundary_edits_become_declare_stages);
+test("top domain ranges over every declared handle", test_top_domain_ranges_over_every_declared_handle);

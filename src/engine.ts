@@ -11,7 +11,7 @@
  * model; they explain records and never decide them.
  */
 
-import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY, type MeetStatus } from "./boundary.ts";
+import { BOT_BOUNDARY, BoundarySystem, type MeetStatus } from "./boundary.ts";
 import {
   and,
   atom,
@@ -469,8 +469,11 @@ export class InquiryEngine {
   readonly #theorems = new Map<string, RecordedTheorem>();
   readonly #incompatibilities: IncompatibilityConstraint[] = [];
   readonly #structuralCollapses: StructuralCollapse[] = [];
-  /** CloseDomain closures in force: constraint identifier to domain. */
-  readonly #closures = new Map<string, string>();
+  /**
+   * CloseDomain closures in C_B: constraint identifier to the domain and the handle set of Dom(D)
+   * the closure witnessed. A closure gates enumeration only while Dom(D) equals that set.
+   */
+  readonly #closures = new Map<string, { readonly domain: string; readonly handles: string }>();
   /** Every constraint of C_B in force, by identifier. */
   readonly #constraintKinds = new Map<string, ConstraintKind>();
   /** Identifiers ever given to a constraint; Withdraw does not free them for reuse. */
@@ -743,18 +746,31 @@ export class InquiryEngine {
     if (domain === BOT_BOUNDARY) {
       throw new Error(`CloseDomain requires a boundary D ≠ "${BOT_BOUNDARY}".`);
     }
-    this.boundaries.handlesOf(domain);
+    const handles = handleSignature(this.boundaries, domain);
     const id = this.#claimConstraintId(constraintId, "closure");
-    this.#closures.set(id, domain);
+    this.#closures.set(id, { domain, handles });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:CloseDomain(${domain})`);
     this.#captureStage();
     return id;
   }
 
-  /** True iff CloseDomain(domain) is registered in C_B at the current stage. */
+  /**
+   * True iff a closure of domain is in force at the current stage: registered in C_B and still
+   * witnessing Dom(domain), which only a Declare that widens Dom(⊤_B) changes (core.md §2 item 7).
+   */
   isDomainClosed(domain: string): boolean {
-    return [...this.#closures.values()].includes(domain);
+    this.#syncBoundaries();
+    return this.#closedDomains(this.boundaries).has(domain);
+  }
+
+  /** The domains whose closure in C_B witnesses their current handle set in `bounds`. */
+  #closedDomains(bounds: BoundarySystem): Set<string> {
+    return new Set(
+      [...this.#closures.values()]
+        .filter((c) => c.handles === handleSignature(bounds, c.domain))
+        .map((c) => c.domain),
+    );
   }
 
   /** The incompatibilities A ⊥_B C in force in C_B. */
@@ -1302,12 +1318,9 @@ export class InquiryEngine {
         );
       }
     }
-    // Observe± is many-sorted (core.md §2 item 6): every handle the item names belongs to Dom(B).
-    // ⊤_B keeps no handle registry and admits the handles of every declared boundary.
-    const domain =
-      boundary === TOP_BOUNDARY
-        ? new Set(this.boundaries.nonEmptyBoundaries().flatMap((b) => this.boundaries.handlesOf(b).map((h) => h.id)))
-        : new Set(this.boundaries.handlesOf(boundary).map((h) => h.id));
+    // Observe± is many-sorted (core.md §2 item 6): every handle the item names belongs to Dom(B),
+    // where Dom(⊤_B) is the union of the domains of the declared boundaries.
+    const domain = new Set(this.boundaries.handlesOf(boundary).map((h) => h.id));
     const foreign = [...collectHandles(item)].find((h) => !domain.has(h));
     if (foreign !== undefined) {
       throw new Error(
@@ -1341,7 +1354,7 @@ export class InquiryEngine {
       theorems: new Map(this.#theorems),
       incompatibilities: [...this.#incompatibilities],
       structuralCollapses: [...this.#structuralCollapses],
-      closedDomains: new Set(this.#closures.values()),
+      closedDomains: this.#closedDomains(this.boundaries),
       refinements: [...this.#refinements],
       trackedItems: new Map(this.#trackedItems),
       boundarySnapshot: this.boundaries.clone(),
@@ -1356,6 +1369,15 @@ export class InquiryEngine {
       this.#trackedItems.set(key, item);
     }
   }
+}
+
+/** The handle set of Dom(domain) in `bounds`, as a signature a closure anchors. */
+function handleSignature(bounds: BoundarySystem, domain: string): string {
+  return bounds
+    .handlesOf(domain)
+    .map((h) => h.id)
+    .sort()
+    .join("\0");
 }
 
 /**
