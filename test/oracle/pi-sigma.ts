@@ -34,7 +34,12 @@
  * commit fe2b5cf (main at 826deb0), a derived cover is judged by the same rule and is not derived
  * when it is invalid (A37). Item 4 as amended in b5d5c5c makes a registered meet the greatest
  * lower bound of its pair; the oracle reads the inferred refinements through refines and
- * meetStatus, so its code is unchanged by it (A26, A39).
+ * meetStatus, so its code is unchanged by it (A26, A39). Items 5 and 14 as amended in e869e9b
+ * (branch b1-unverified above main at 306a2ff) make an unverified cover witness nothing, so the
+ * closure starts from the valid registered covers only (A33, A36, A37), and let an ambiguous meet
+ * stop Scoped Cut only for an instance whose Live premises are true in the least model of the
+ * program read with every obs atom false and the instances over ambiguous pairs left out (A31,
+ * A40).
  */
 
 import { BOT_BOUNDARY, type BoundarySystem, type MeetStatus } from "../../src/boundary.ts";
@@ -409,7 +414,7 @@ export function evaluatePi(state: PiState): PiModel {
   // A26: overlap is three-valued (item 4) and read from BoundarySystem.meetStatus. The oracle
   // never calls `meet`, which gives ⊥_B for an unknown overlap as well as for disjointness.
   // A31: an ambiguous meet (several maximal common sub-boundaries) is an error, raised only
-  // where a rule instance or the reporting needs that pair's status.
+  // where item 14's Role says a rule instance, a cover or the reporting needs that pair's status.
   type PairMeet =
     | { readonly kind: "overlap"; readonly meet: number }
     | { readonly kind: "disjoint" }
@@ -450,12 +455,12 @@ export function evaluatePi(state: PiState): PiModel {
   };
 
   // ---------------------------------------------------------------- witnessed covers (item 5)
-  // Item 5 as amended in a7377cf and fe2b5cf: every registered cover is judged against the current
-  // boundaries (A33), an invalid one witnesses nothing, and the witnessed covers are the registered
-  // covers that are not invalid, closed under Axioms 2–4, where a derived cover is judged by the
-  // same rule and is not derived when it is invalid (A36, A37). The oracle computes this itself
-  // from BoundarySystem.registeredCovers() and meetStatus (A26); it never calls the boundary
-  // system's own cover closure or validity check (A10 as superseded).
+  // Item 5 as amended in a7377cf, fe2b5cf and e869e9b: every registered cover is judged against
+  // the current boundaries (A33), an invalid or unverified one witnesses nothing, and the witnessed
+  // covers are the valid registered covers, closed under Axioms 2–4, where a derived cover is
+  // judged by the same rule and is not derived when it is invalid (A36, A37). The oracle computes
+  // this itself from BoundarySystem.registeredCovers() and meetStatus (A26); it never calls the
+  // boundary system's own cover closure or validity check (A10 as superseded).
   const byIndex = (x: number, y: number): number => x - y;
   const describeCover = (target: number, cells: readonly number[]): string =>
     `{${cells.map(boundaryName).join(", ")}} ▷ ${boundaryName(target)}`;
@@ -556,15 +561,17 @@ export function evaluatePi(state: PiState): PiModel {
         validity: "unverified",
         subBoundaries: unsettled.map(boundaryName),
       });
+      // e869e9b (audit-unverified-cover-authority): an unverified cover witnesses nothing either,
+      // and seeds no derived cover, while it keeps its obligation (A33, A36).
+      continue;
     }
-    seeds.push({ target, cells }); // an unverified cover still witnesses
+    seeds.push({ target, cells }); // only valid registered covers seed the closure
   }
 
-  // A36: the closure is computed in full. A superset of an invalid family can be valid, so a
-  // cover that a smaller cover of the same boundary contains can still derive covers that the
-  // smaller one cannot; the closure therefore keeps every witnessed cover, and only the rule
-  // instances and PiModel.witnessedCovers use the minimal ones. Each cover records the pass that
-  // admitted it, so every combination of Axiom 4 is formed once (semi-naive evaluation).
+  // A36: the closure is computed in full, from the valid registered covers and the identity
+  // covers. It keeps every witnessed cover, minimal or not, as item 5 defines the closure, and only
+  // the rule instances and PiModel.witnessedCovers use the minimal ones. Each cover records the
+  // pass that admitted it, so every combination of Axiom 4 is formed once (semi-naive evaluation).
   type CoverEntry = { readonly cells: readonly number[]; readonly pass: number };
   const coverKey = (cells: readonly number[]): string => cells.join(",");
   // Axiom 2 (Identity): {B} ▷ B for every B ∈ 𝔅(Σ); it is valid, since every B' ⊑ B refines B.
@@ -600,8 +607,9 @@ export function evaluatePi(state: PiState): PiModel {
   }
   /**
    * A37: a derived cover, from Transitivity or a base change, joins the closure unless item 5's
-   * rule judges it invalid, whatever its source; item 5's sentence that covers derived from valid
-   * registered covers are valid is not relied on (A39).
+   * rule judges it invalid, whatever its source. Since e869e9b every source is valid, and item 5
+   * states that covers derived from valid registered covers are valid, so the check should never
+   * reject one; the oracle keeps it rather than rely on that sentence (A37, A39).
    * Admission never needs an ambiguous meet, since an ambiguous pair never refutes (A35).
    */
   const admitDerived = (target: number, cells: readonly number[]): boolean => {
@@ -852,6 +860,15 @@ export function evaluatePi(state: PiState): PiModel {
   }
 
   // Item-shape rules.
+  /** A Scoped Cut instance over an ambiguous pair: Live (b1, +, antecedent), Live (b2, +, implication). */
+  type AmbiguousCut = {
+    readonly b1: number;
+    readonly b2: number;
+    readonly antecedent: number;
+    readonly implication: number;
+    readonly reason: string;
+  };
+  const ambiguousCuts: AmbiguousCut[] = [];
   type Equiv = Extract<Item, { kind: "equiv" }>;
   type RelAtom = Extract<Item, { kind: "atom" }>;
   const equivs: { readonly item: Equiv; readonly a: number }[] = [];
@@ -936,11 +953,15 @@ export function evaluatePi(state: PiState): PiModel {
         const consequent = idx(item.consequent);
         // Scoped Cut: (B₁ ⊓ B₂, +, C) from Live (B₁, +, A), Live (B₂, +, A → C), only when B₁
         // and B₂ are known to overlap; a disjoint or unknown overlap licenses nothing (A26, A27).
+        // An instance over an ambiguous pair has no conclusion boundary; it is left out of the
+        // program and checked once the program is built (A31, A40).
         for (const b1 of allB) {
           for (const b2 of allB) {
-            const m = neededMeet(b1, b2, "Scoped Cut");
+            const m = pairMeet(b1, b2);
             if (m.kind === "overlap") {
               emit(m.meet, "+", consequent, each(L(b1, "+", antecedent), L(b2, "+", a)));
+            } else if (m.kind === "ambiguous" && antecedent !== undefined) {
+              ambiguousCuts.push({ b1, b2, antecedent, implication: a, reason: m.reason });
             }
           }
         }
@@ -1188,6 +1209,27 @@ export function evaluatePi(state: PiState): PiModel {
   };
   let over = gamma(under.obs);
   let rounds = 1;
+
+  // A31, A40 (item 14, Role, as amended in e869e9b): a Scoped Cut instance over an ambiguous pair
+  // needs the meet when its Live premises are true in the least model of the program read with
+  // every obs atom false and with the instances over ambiguous pairs left out. Γ(∅) is that model:
+  // the program built above holds no such instance, and under ∅ every `not obs` holds. Every atom
+  // true or undefined in the well-founded model is true in Γ(∅), and adding instances whose bodies
+  // fail there changes no least model, so an instance whose premises are not both true there can
+  // never fire, and its meet decides nothing.
+  for (const cut of ambiguousCuts) {
+    const antecedentLive = over.truth[liveAtom("+", slot(cut.b1, cut.antecedent))] === 1;
+    const implicationLive = over.truth[liveAtom("+", slot(cut.b2, cut.implication))] === 1;
+    if (antecedentLive && implicationLive) {
+      const b1 = boundaryName(cut.b1);
+      const b2 = boundaryName(cut.b2);
+      const premise = (b: string, a: number): string =>
+        `Live (${b}, +, ${itemKey(universe[a] ?? bottom())})`;
+      throw new Error(
+        `Π(Σ) oracle: Scoped Cut from ${premise(b1, cut.antecedent)} and ${premise(b2, cut.implication)} needs the meet of "${b1}" and "${b2}", which is ambiguous (${cut.reason}).`,
+      );
+    }
+  }
   for (;;) {
     const next = gamma(over.obs);
     rounds += 1;
