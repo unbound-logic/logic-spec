@@ -3,7 +3,49 @@ import { test } from "node:test";
 import { BoundarySystem } from "../src/boundary.ts";
 import { verifyDerivation } from "../src/deduction.ts";
 import { InquiryEngine } from "../src/engine.ts";
-import { atom, forall, implies, refl, reflStatus } from "../src/syntax.ts";
+import { atom, forall, implies, ref, refl, reflStatus } from "../src/syntax.ts";
+
+function test_reflection_values_and_formal_layer_syntax(): void {
+  // audit-reflection-authority-flattening (R13): a stage-indexed reflection takes + for a Live
+  // record, - for a Quarantined or absent one, and no value for an Undetermined one.
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("B_sub", { parents: ["B"] });
+  const e = new InquiryEngine(b);
+  const [P, Q, R, X] = [atom("P"), atom("Q"), atom("R"), atom("X")];
+  e.observePositive("B", P, "wp");
+  e.observePositive("B", Q, "wq");
+  e.addIncompatibility("B", P, Q); // symmetric conflict: +P is Undetermined
+  e.observePositive("B", R, "wr");
+  e.observeNegative("B_sub", R, "wnr"); // the collision on B_sub quarantines +R on B
+  e.observePositive("B", X, "wx"); // +X is Live
+  const t = e.stage;
+  const at = e.evaluateAtStage(t, [P, R, X]);
+  assert.equal(at.authorityOf("B", "+", P), "Undetermined");
+  assert.equal(at.authorityOf("B", "+", R), "Quarantined");
+  assert.equal(at.authorityOf("B", "+", X), "Live");
+  e.observePositive("B", atom("Later"), "later");
+  const reflections = [refl(1, "B", "+", P, t), refl(1, "B", "+", R, t), refl(1, "B", "+", X, t), refl(1, "B", "-", X, t)];
+  const snap = e.evaluate(reflections);
+  assert.deepEqual(
+    reflections.map((r) => snap.localStatus("B", r)),
+    ["Open", "Excluded", "Grounded", "Excluded"],
+  );
+  // refl-intro refuses to give the undetermined record a value.
+  const undetermined = verifyDerivation(e, { kind: "refl-intro", boundary: "B", reflItem: refl(1, "B", "+", P, t) });
+  assert.equal(undetermined.ok ? "accepted" : undetermined.violation, "ground-not-live");
+
+  // audit-unexecuted-syntax: a stage-less reflection and a recursive reference belong to the formal
+  // layer: they are well-formed items, but evaluation gives them no value, and refl-intro refuses a
+  // stage-less reflection.
+  const stageless = refl(1, "B", "+", X);
+  const recursive = ref("Loop");
+  const formal = e.evaluate([stageless, recursive]);
+  assert.equal(formal.localStatus("B", stageless), "Open");
+  assert.equal(formal.localStatus("B", recursive), "Open");
+  const stagelessIntro = verifyDerivation(e, { kind: "refl-intro", boundary: "B", reflItem: stageless });
+  assert.equal(stagelessIntro.ok, false);
+}
 
 function test_cross_stage_reflection_trace_and_historical_immutability(): void {
   const b = new BoundarySystem();
@@ -231,3 +273,4 @@ test(
   "cross-stage reflection rejects post-stage boundaries",
   test_cross_stage_reflection_rejects_post_stage_boundaries,
 );
+test("reflection values and formal-layer syntax", test_reflection_values_and_formal_layer_syntax);
