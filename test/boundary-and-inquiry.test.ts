@@ -263,6 +263,10 @@ function test_observations_are_many_sorted(): void {
   // HandleAuth still checks the criterion of an admitted handle.
   assert.throws(() => e.observePositive("Swan", white("s2"), "w8", { handle: "s2", criterion: "wrong" }), /Anti-Equivocation/);
   assert.equal(e.evaluate([white("s1")]).localStatus("Swan", white("s1")), "Grounded");
+  // HandleAuth authenticates a handle of the observed boundary's own domain: a sibling's handle is
+  // refused there, and ⊤_B, whose domain is the union, admits it.
+  assert.throws(() => e.observePositive("Swan", white("s1"), "w9", { handle: "l1", criterion: "I(l1)" }), /Anti-Equivocation/);
+  e.observePositive(TOP_BOUNDARY, white("s1"), "w10", { handle: "l1", criterion: "I(l1)" });
 }
 
 function test_boundary_edits_become_declare_stages(): void {
@@ -339,6 +343,64 @@ function test_monotone_declare_refuses_revocation(): void {
   assert.equal(one.e.stage, stage + 1);
   assert.match(one.e.transitionLog.at(-1) ?? "", /Declare/);
 
+  // Registering a cover again under its identifier with another target or other cells withdraws it;
+  // the same cells in another order are the same cover.
+  const moved = covered(true);
+  moved.b.withdrawCover(moved.id);
+  moved.b.registerCover(TOP_BOUNDARY, ["C1", "C2"], moved.id);
+  assert.throws(() => moved.e.evaluate([P]), new RegExp(`withdraw the cover "${moved.id}"`));
+  moved.b.withdrawCover(moved.id);
+  moved.b.registerCover("T", ["C1", "C2"], moved.id);
+  assert.equal(moved.e.evaluate([P]).localStatus("T", P), "Grounded");
+  const shrunk = covered(true);
+  shrunk.b.withdrawCover(shrunk.id);
+  shrunk.b.registerCover("T", ["C1"], shrunk.id);
+  assert.throws(() => shrunk.e.evaluate([P]), new RegExp(`withdraw the cover "${shrunk.id}"`));
+  shrunk.b.withdrawCover(shrunk.id);
+  shrunk.b.registerCover("T", ["C1", "C2"], shrunk.id);
+  assert.equal(shrunk.e.evaluate([P]).localStatus("T", P), "Grounded");
+  const reordered = covered(true);
+  const reorderedStage = reordered.e.stage;
+  reordered.b.withdrawCover(reordered.id);
+  reordered.b.registerCover("T", ["C2", "C1"], reordered.id);
+  assert.equal(reordered.e.evaluate([P]).localStatus("T", P), "Grounded");
+  assert.equal(reordered.e.stage, reorderedStage + 1);
+  // Cells are compared name by name: {X, YZ} and {XY, Z} are different covers.
+  const named = new BoundarySystem();
+  named.defineBoundary("W");
+  for (const cell of ["X", "YZ", "XY", "Z"]) {
+    named.defineBoundary(cell, { parents: ["W"] });
+  }
+  const ne = new InquiryEngine(named, { monotoneOnly: true });
+  const split = ne.witnessCover("W", ["X", "YZ"]);
+  named.withdrawCover(split);
+  named.registerCover("W", ["XY", "Z"], split);
+  assert.throws(() => ne.stage, new RegExp(`withdraw the cover "${split}"`));
+
+  // An edit that makes a meet the judgment of a cover needs ambiguous leaves the covers unjudged,
+  // which revokes them; settling the meet restores the witness.
+  const unjudged = covered(true);
+  unjudged.b.defineBoundary("X", { parents: ["T"] });
+  unjudged.b.defineBoundary("Y1", { parents: ["X", "C1"] });
+  unjudged.b.defineBoundary("Y2", { parents: ["X", "C1"] });
+  assert.throws(() => unjudged.e.evaluate([P]), /leave the covers of "[^"]+" unjudged: Ambiguous meet for "C1" and "X"/);
+  unjudged.b.defineMeet("X", "C1", "Y1");
+  assert.equal(unjudged.e.evaluate([P]).localStatus("T", P), "Grounded");
+  // Covers the current stage could not judge ground nothing, so an edit that leaves them unjudged
+  // revokes nothing.
+  const unjudgeable = new BoundarySystem();
+  unjudgeable.defineBoundary("T");
+  unjudgeable.defineBoundary("C1", { parents: ["T"] });
+  unjudgeable.defineBoundary("C2", { parents: ["T"] });
+  unjudgeable.defineBoundary("X", { parents: ["T"] });
+  unjudgeable.defineBoundary("Y1", { parents: ["X", "C1"] });
+  unjudgeable.defineBoundary("Y2", { parents: ["X", "C1"] });
+  unjudgeable.registerCover("T", ["C1", "C2"]);
+  const ue = new InquiryEngine(unjudgeable, { monotoneOnly: true });
+  const unjudgeableStage = ue.stage;
+  unjudgeable.defineBoundary("Z");
+  assert.equal(ue.stage, unjudgeableStage + 1);
+
   // A new sub-boundary of the target, of unknown overlap with both cells, leaves the cover
   // unwitnessed; a boundary below it and a cell settles the overlap and restores the witness.
   const two = covered(true);
@@ -399,6 +461,22 @@ function test_top_domain_ranges_over_every_declared_handle(): void {
   assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "h2", "I(h2)"), true);
   assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "h2", "I(h1)"), false);
   assert.equal(b.isAdmissibleHandle(TOP_BOUNDARY, "ghost"), false);
+  // Only ⊤_B reads the union: a declared boundary admits and returns only its own handles.
+  assert.equal(b.isAdmissibleHandle("D", "h2"), false);
+  assert.equal(b.getHandle("D", "h2"), undefined);
+  assert.equal(b.getHandle(TOP_BOUNDARY, "h2")?.criterion, "I(h2)");
+  assert.equal(b.getHandle(TOP_BOUNDARY, "ghost"), undefined);
+  assert.throws(() => b.isAdmissibleHandle("Nowhere", "h1"), /Unknown boundary "Nowhere"/);
+  // A handle two domains declare under different criteria is listed once in Dom(⊤_B), with the spec
+  // of the first boundary that declares it; ⊤_B still admits it under either criterion.
+  const twice = new BoundarySystem();
+  twice.defineBoundary("G1", { handles: [{ id: "k", criterion: "I1", kind: "structural" }] });
+  twice.defineBoundary("G2", { handles: [{ id: "k", criterion: "I2", kind: "structural" }] });
+  assert.deepEqual(twice.handlesOf(TOP_BOUNDARY).map((x) => [x.id, x.criterion]), [["k", "I1"]]);
+  assert.equal(twice.getHandle(TOP_BOUNDARY, "k")?.criterion, "I1");
+  assert.equal(twice.getHandle("G2", "k")?.criterion, "I2");
+  assert.equal(twice.isAdmissibleHandle(TOP_BOUNDARY, "k", "I2"), true);
+  assert.equal(twice.isAdmissibleHandle(TOP_BOUNDARY, "k", "I3"), false);
 
   const e = new InquiryEngine(b);
   const closure = e.closeDomain(TOP_BOUNDARY);
