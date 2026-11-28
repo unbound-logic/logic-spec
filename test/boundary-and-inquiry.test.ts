@@ -1124,13 +1124,18 @@ function test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles()
 function test_m1_indirect_reference_through_registered_links(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Swan", {
-    nativeRelations: ["White", "Pale"],
+    nativeRelations: ["White", "Pale", "Alive"],
     handles: [
       { id: "swan_402", criterion: "I_Swan", kind: "contingent" },
       { id: "swan_101", criterion: "I_Swan", kind: "contingent" },
     ],
   });
   b.defineBoundary("Swan_Rest", { parents: ["Swan"], handleFilter: (h) => h.id !== "swan_402" });
+  // A regime unrelated to Swan, whose conditionals are out of the refinement's scope.
+  b.defineBoundary("Aviary", {
+    nativeRelations: ["White", "Pale"],
+    handles: [{ id: "swan_101", criterion: "I_Swan", kind: "contingent" }],
+  });
   const rel = (name: string, handle: string) => atom(name, [{ role: "subject", handle }]);
   const auth = (handle: string) => ({ handle, criterion: "I_Swan" });
   const gen = forall("x", "Swan", rel("White", "x"));
@@ -1152,16 +1157,35 @@ function test_m1_indirect_reference_through_registered_links(): void {
   // Without a registered link the split is admitted.
   assert.equal(base().refineBoundary(request).ok, true);
 
-  // A registered incompatibility ties Pale to White.
+  // M1(i) follows the direction of inference (core.md §2 item 7). An incompatibility Pale ⊥ White
+  // makes Pale entail the exclusion of White, which is no reference to White: M1(i) passes. The split
+  // is still refused, by M1(iii), since the survivor swan_101 now carries -White and is refuted ...
+  const viaExclusion = base();
+  viaExclusion.addIncompatibility("Swan", rel("Pale", "swan_101"), rel("White", "swan_101"));
+  const r0 = viaExclusion.refineBoundary(request);
+  assert.equal(r0.ok ? "admitted" : r0.violation, "M1-unwitnessed-proxy");
+
+  // ... while Pale ⊥ ~White makes Pale entail +White, through the exclusion of ~White.
   const viaIncompat = base();
-  viaIncompat.addIncompatibility("Swan", rel("Pale", "swan_101"), rel("White", "swan_101"));
+  viaIncompat.addIncompatibility("Swan", rel("Pale", "swan_101"), flip(rel("White", "swan_101")));
   const r1 = viaIncompat.refineBoundary(request);
   assert.equal(r1.ok, false);
   if (!r1.ok) {
     assert.equal(r1.violation, "M1-circular");
   }
 
-  // So does a Live conditional between them.
+  // Shared consequences do not link Pale to White (audit reproduction R10).
+  const shared = base();
+  shared.observePositive("Swan", implies(rel("Pale", "swan_101"), rel("Alive", "swan_101")), "pale_alive");
+  shared.observePositive("Swan", implies(rel("White", "swan_101"), rel("Alive", "swan_101")), "white_alive");
+  assert.equal(shared.refineBoundary(request).ok, true);
+
+  // A conditional Live only on a regime that Swan does not refine is out of scope.
+  const elsewhere = base();
+  elsewhere.observePositive("Aviary", implies(rel("Pale", "swan_101"), rel("White", "swan_101")), "aviary_rule");
+  assert.equal(elsewhere.refineBoundary(request).ok, true);
+
+  // A Live conditional on Swan from Pale to White is an indirect reference.
   const viaConditional = base();
   viaConditional.observePositive("Swan", implies(rel("Pale", "swan_101"), rel("White", "swan_101")), "pale_white");
   const r2 = viaConditional.refineBoundary(request);
