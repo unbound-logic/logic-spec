@@ -1,83 +1,169 @@
 name: mutation
 
-# Kernel mutation testing with Stryker, started by hand. The mutation score is a reported metric,
-# not a gate (audit-evidence-label-integrity in docs/design-review.md): it shows which kernel
-# changes the test suite fails to notice. Shards run in parallel; the report job sums them.
+# Kernel mutation testing with Stryker, started by hand. The score is a reported metric, not a gate
+# (audit-evidence-label-integrity and mutation-triage-and-sharding in docs/design-review.md):
+# survivors never fail a run. A run fails when its plan fails, when a shard fails, or when the
+# shards' reports do not hold the plan's mutants, each once.
+#
+# Scopes:
+# - full: every mutant of src/.
+# - diff: the mutants that span a line of src/ changed since `base`, by default the latest v* tag
+#   reachable from the run's commit. Before a v* tag, the diff since the previous tag must leave
+#   no unexplained survivor (Survived or NoCoverage): each is killed by a test or ignored by a
+#   `// Stryker disable next-line <Mutator>: <reason>` comment.
+# - list: the mutants within `mutate`'s Stryker patterns, for a rerun after a change of tests alone.
+#
+# The plan job lists the mutants with Stryker's own instrumenter, times the tests once without a
+# mutant, and deals the mutants to as many shards as that time needs at 30 minutes each, at most 16,
+# so that each shard's count of mutants stays near the mean (scripts/mutation/plan.mjs). Each shard
+# runs exactly its share; the report job merges the shards and checks them against the plan
+# (scripts/mutation/report.mjs).
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "full: every mutant; diff: the lines of src/ changed since base; list: the mutants within mutate"
+        type: choice
+        options: [full, diff, list]
+        default: full
+      base:
+        description: "diff: the tag or commit to compare with; empty for the latest v* tag reachable from the run's commit"
+        type: string
+        default: ""
+      mutate:
+        description: "list: Stryker patterns, comma-separated: src/file.ts, or src/file.ts:startLine-endLine"
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+env:
+  # The mutants a shard runs at once: a standard GitHub-hosted runner of a public repository has
+  # four vCPUs, and each mutant's tests run one file at a time (scripts/mutation/run-tests.mjs).
+  CONCURRENCY: 4
+
 jobs:
-  mutate:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 345
-    strategy:
-      fail-fast: false
-      matrix:
-        shard:
-          - { name: boundary, mutate: "src/boundary.ts" }
-          - { name: deduction, mutate: "src/deduction.ts" }
-          - { name: engine-1, mutate: "src/engine.ts:1-1150" }
-          - { name: engine-2, mutate: "src/engine.ts:1151-9999" }
-          - { name: specializations-syntax, mutate: "src/specializations.ts,src/syntax.ts" }
+    timeout-minutes: 30
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The diff scope reads the history and the tags.
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx stryker run --mutate "${{ matrix.shard.mutate }}" --concurrency 4
+      - name: Run the tests once without a mutant, and time them
+        id: baseline
+        # The command every mutant runs, timed by the shell: what a mutant no test catches costs.
+        run: |
+          start=$(date +%s%N)
+          node scripts/mutation/run-tests.mjs --times="$RUNNER_TEMP/times.txt"
+          echo "seconds=$(( ($(date +%s%N) - start + 999999999) / 1000000000 ))" >> "$GITHUB_OUTPUT"
+          { echo "## Tests without a mutant"; echo '```text'; cat "$RUNNER_TEMP/times.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Deal the mutants to the shards the time needs
+        id: plan
+        env:
+          SCOPE: ${{ inputs.scope }}
+          BASE: ${{ inputs.base }}
+          MUTATE: ${{ inputs.mutate }}
+          BASELINE: ${{ steps.baseline.outputs.seconds }}
+        # The plan's directory lies outside the checkout, so that no file of it stands in the tree
+        # the tests judge.
+        run: |
+          node scripts/mutation/plan.mjs --scope "$SCOPE" --base "$BASE" --mutate "$MUTATE" --seconds "$BASELINE" --concurrency "$CONCURRENCY" --out "$RUNNER_TEMP/plan" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/plan/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutation-plan
+          path: ${{ runner.temp }}/plan
+          if-no-files-found: error
+
+  mutate:
+    name: shard ${{ matrix.shard }}
+    needs: plan
+    # GitHub runs no job of an empty matrix: a plan of no mutant skips the shards.
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # The plan sizes each shard to 30 minutes of mutants if no test caught any.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutation-plan
+          path: ${{ runner.temp }}/plan
+      - name: Mutate this shard's share
+        env:
+          SHARD: ${{ matrix.shard }}
+        # The ranges select the share's pieces; the shard ignorer, given the share, leaves what lies
+        # within them and was dealt to other shards (scripts/mutation/shard-ignorer.mjs).
+        run: |
+          case "$SHARD" in ''|*[!0-9]*) echo "::error::the shard the matrix gave is no number"; exit 1 ;; esac
+          export MUTATION_SHARD_FILE="$RUNNER_TEMP/plan/shard-$SHARD.json"
+          npx stryker run --mutate "$(cat "$RUNNER_TEMP/plan/shard-$SHARD.mutate")" --concurrency "$CONCURRENCY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutation-${{ matrix.shard.name }}
+          name: mutation-shard-${{ matrix.shard }}
           path: reports/mutation/
 
   report:
-    needs: mutate
+    needs: [plan, mutate]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
         with:
-          path: shards
-      - name: Summarize the mutation score
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        if: needs.plan.result == 'success'
+        with:
+          name: mutation-plan
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@v4
+        if: needs.plan.result == 'success' && needs.plan.outputs.count != '0'
+        # A shard that left no report is named by the report below.
+        continue-on-error: true
+        with:
+          pattern: mutation-shard-*
+          path: ${{ runner.temp }}/reports
+      - name: Merge the shards, check them against the plan, and report
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          SHARDS_RESULT: ${{ needs.mutate.result }}
         run: |
-          cat > summary.mjs <<'EOF'
-          import fs from "node:fs";
-          import path from "node:path";
-          const rows = new Map();
-          for (const shard of fs.readdirSync("shards")) {
-            const file = path.join("shards", shard, "mutation.json");
-            if (!fs.existsSync(file)) continue;
-            const report = JSON.parse(fs.readFileSync(file, "utf8"));
-            for (const [name, entry] of Object.entries(report.files)) {
-              const row = rows.get(name) ?? { killed: 0, timeout: 0, survived: 0, other: 0 };
-              for (const m of entry.mutants) {
-                if (m.status === "Killed") row.killed += 1;
-                else if (m.status === "Timeout") row.timeout += 1;
-                else if (m.status === "Survived" || m.status === "NoCoverage") row.survived += 1;
-                else row.other += 1;
-              }
-              rows.set(name, row);
-            }
-          }
-          const score = (r) => {
-            const valid = r.killed + r.timeout + r.survived;
-            return valid === 0 ? "n/a" : `${((100 * (r.killed + r.timeout)) / valid).toFixed(2)}%`;
-          };
-          const total = { killed: 0, timeout: 0, survived: 0, other: 0 };
-          const lines = ["## Kernel mutation score", "", "| File | Score | Killed | Timeout | Survived | Errors |", "| :--- | ---: | ---: | ---: | ---: | ---: |"];
-          for (const [name, r] of [...rows].sort()) {
-            for (const k of Object.keys(total)) total[k] += r[k];
-            lines.push(`| ${name} | ${score(r)} | ${r.killed} | ${r.timeout} | ${r.survived} | ${r.other} |`);
-          }
-          lines.push(`| **All** | **${score(total)}** | ${total.killed} | ${total.timeout} | ${total.survived} | ${total.other} |`);
-          console.log(lines.join("\n"));
-          EOF
-          node summary.mjs >> "$GITHUB_STEP_SUMMARY"
-          node summary.mjs
+          status=0
+          node scripts/mutation/report.mjs --plan "$RUNNER_TEMP/plan" --reports "$RUNNER_TEMP/reports" --out "$RUNNER_TEMP/report" --plan-result "$PLAN_RESULT" --shards-result "$SHARDS_RESULT" > /dev/null || status=$?
+          cat "$RUNNER_TEMP/report/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: ${{ runner.temp }}/report
+          if-no-files-found: ignore

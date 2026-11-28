@@ -3,15 +3,18 @@
   "packageManager": "npm",
   "testRunner": "command",
   "commandRunner": {
-    "command": "node --test \"test/*.test.ts\""
+    "command": "node scripts/mutation/run-tests.mjs"
   },
   "mutate": ["src/**/*.ts"],
+  "appendPlugins": ["./scripts/mutation/shard-ignorer.mjs"],
+  "ignorers": ["mutation-shard"],
   "coverageAnalysis": "off",
   "reporters": ["clear-text", "progress", "json", "html"],
   "jsonReporter": { "fileName": "reports/mutation/mutation.json" },
   "htmlReporter": { "fileName": "reports/mutation/mutation.html" },
   "thresholds": { "high": 80, "low": 60, "break": null },
-  "timeoutMS": 120000,
+  "timeoutMS": 30000,
+  "timeoutFactor": 1.5,
   "tempDirName": ".stryker-tmp",
   "ignorePatterns": [".wt", "reports", ".stryker-tmp"]
 }
