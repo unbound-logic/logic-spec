@@ -508,6 +508,45 @@ const RULE_CASES: { readonly [K in ProofNode["kind"]]: RuleCases } = {
           requiredCovers: [{ boundary: "K", cells: ["K1", "K2"] }],
         },
       },
+      {
+        // W is split two ways over the parts Wa ⊑ X ⊓ XY, Wb ⊑ YZ ⊓ XY and Wc ⊑ YZ ⊓ Z: the covers
+        // {X, YZ} and {XY, Z} are different, though their cell names run together alike.
+        name: "two covers of one boundary whose cell names run together",
+        build: () => {
+          const b = new BoundarySystem();
+          b.defineBoundary("W");
+          for (const cell of ["X", "YZ", "XY", "Z"]) {
+            b.defineBoundary(cell, { parents: ["W"] });
+          }
+          b.defineBoundary("Wa", { parents: ["X", "XY"] });
+          b.defineBoundary("Wb", { parents: ["YZ", "XY"] });
+          b.defineBoundary("Wc", { parents: ["YZ", "Z"] });
+          const e = new InquiryEngine(b);
+          e.witnessCover("W", ["X", "YZ"]);
+          e.witnessCover("W", ["XY", "Z"]);
+          for (const cell of ["X", "YZ", "XY", "Z"]) {
+            e.observePositive(cell, A, `a_${cell}`);
+          }
+          const glue = (cells: readonly string[]): ProofNode => ({
+            kind: "cover-glue",
+            boundary: "W",
+            item: A,
+            cellProofs: cells.map((cell) => ({ cell, proof: live(cell, A) })),
+          });
+          return built(e, { kind: "and-intro", left: glue(["X", "YZ"]), right: glue(["XY", "Z"]) });
+        },
+        expect: {
+          boundary: "W",
+          polarity: "+",
+          item: and(A, A),
+          requiredBaseIds: [],
+          requiredGrounds: [g("X", A), g("YZ", A), g("XY", A), g("Z", A)],
+          requiredCovers: [
+            { boundary: "W", cells: ["X", "YZ"] },
+            { boundary: "W", cells: ["XY", "Z"] },
+          ],
+        },
+      },
     ],
     reject: [
       { name: "a left conjunct that fails", build: () => built(given([o("+", "B", C)]), { kind: "and-intro", left: live("B", A), right: live("B", C) }), violation: "ground-not-live" },
@@ -1121,6 +1160,12 @@ const RULE_CASES: { readonly [K in ProofNode["kind"]]: RuleCases } = {
           }),
         expect: { boundary: "B", polarity: "+", item: forall("x", "H", pos("x"), pos("x")), requiredBaseIds: [], requiredGrounds: [] },
       },
+      {
+        name: "a derived body",
+        build: () =>
+          built(given([o("+", "B", P)]), { kind: "forall-intro", boundary: "B", variable: "x", domain: "H", eigenvar: "e1", templateBody: P, body: viaFlip("B", P) }),
+        expect: { boundary: "B", polarity: "+", item: forall("x", "H", P), requiredBaseIds: [], requiredGrounds: [g("B", flip(P), "-")] },
+      },
     ],
     reject: [
       {
@@ -1685,6 +1730,35 @@ const RULE_CASES: { readonly [K in ProofNode["kind"]]: RuleCases } = {
           built(given([o("+", "B", X), o("+", "B", P)]), { kind: "exists-elim", existential: viaFlip("B", X), witnessVar: "w1", assumptionId: "hw", body: viaFlip("B", P) }),
         expect: { boundary: "B", polarity: "+", item: P, requiredBaseIds: [], requiredGrounds: [g("B", flip(X), "-"), g("B", flip(P), "-")] },
       },
+      {
+        // The constraint names g, but without a constraint identifier it is no open assumption of
+        // the body, so g is fresh there.
+        name: "a constrained existential whose constraint the body leaves unbound",
+        build: () =>
+          built(given([o("+", "B", r("h1")), o("+", "B", pos("h1")), o("+", "B", P)]), {
+            kind: "exists-elim",
+            existential: {
+              kind: "exists-intro",
+              witnessTerm: "h1",
+              variable: "x",
+              domain: "H",
+              templateBody: r("x"),
+              witnessProof: live("B", r("h1")),
+              domainConstraint: implies(r("g"), pos("x")),
+              constraintProof: intro("B", "hg", r("g"), live("B", pos("h1"))),
+            },
+            witnessVar: "w1",
+            assumptionId: "hw",
+            body: { kind: "forall-intro", boundary: "B", variable: "y", domain: "H", eigenvar: "g", templateBody: P, body: live("B", P) },
+          }),
+        expect: {
+          boundary: "B",
+          polarity: "+",
+          item: forall("y", "H", P),
+          requiredBaseIds: [],
+          requiredGrounds: [g("B", r("h1")), g("B", pos("h1")), g("B", P)],
+        },
+      },
     ],
     reject: [
       {
@@ -1836,6 +1910,11 @@ const RULE_CASES: { readonly [K in ProofNode["kind"]]: RuleCases } = {
         name: "a negative premise",
         build: () => built(given([o("-", "B", N)]), { kind: "flip-intro", inner: live("B", N, { polarity: "-" }) }),
         expect: { boundary: "B", polarity: "+", item: flip(N), requiredBaseIds: [], requiredGrounds: [g("B", N, "-")] },
+      },
+      {
+        name: "a derived premise",
+        build: () => built(given([o("+", "B", P)]), { kind: "flip-intro", inner: viaFlip("B", P) }),
+        expect: { boundary: "B", polarity: "-", item: flip(P), requiredBaseIds: [], requiredGrounds: [g("B", flip(P), "-")] },
       },
     ],
     reject: [{ name: "a premise that fails", build: () => built(given([]), { kind: "flip-intro", inner: live("B", P) }), violation: "ground-not-live" }],
@@ -2250,6 +2329,9 @@ function test_mode_precondition_comes_before_every_rule(): void {
   const clean = given([o("+", "B", P)], { monotoneOnly: true });
   const outcome = (e: InquiryEngine, mode: DeductionMode): string => {
     const res = verifyDerivation(e, proof, mode);
+    if (!res.ok) {
+      assert.ok(res.reason.length > 0, "a rejection gives a reason");
+    }
     return res.ok ? "accepted" : res.violation;
   };
   assert.equal(outcome(plain, "UL-Core"), "accepted");
@@ -2286,9 +2368,64 @@ function test_admission_records_only_what_the_checker_accepts(): void {
   const mStage = m.stage;
   const efq = admitVerifiedDerivation(m, proof, "thm", "UL-Intuitionistic");
   assert.equal(efq.ok ? "admitted" : efq.violation, "mode-only-rule");
+  assert.ok(!efq.ok && efq.reason.length > 0, "a refusal gives a reason");
   assert.equal(m.stage, mStage);
+}
+
+/** The proof rules that have premises, so that a step can lie beneath them. */
+type InnerKind = Exclude<ProofNode["kind"], "live-ground" | "assume" | "equiv-refl" | "refl-intro" | "ex-falso-bottom">;
+
+function test_admission_finds_ex_falso_under_every_rule_with_premises(): void {
+  // Admission looks for ex-falso-bottom through every node of the proof: an ex-falso step beneath a
+  // step of any rule with premises keeps the verified UL-Intuitionistic result out of Σ. Each proof
+  // discharges h : A on B (on K for the cover rules), and ef proves its target from h and A → ⊥.
+  const ef = (target: Item, boundary = "B"): ProofNode => ({ kind: "ex-falso-bottom", bottomProof: elim(hyp("h", boundary), live(boundary, NB)), target });
+  const onB = (body: ProofNode): ProofNode => intro("B", "h", A, body);
+  const UNDER: { readonly [K in InnerKind]: ProofNode } = {
+    "weaken-boundary": onB({ kind: "weaken-boundary", proof: ef(C), toBoundary: "B" }),
+    "implies-intro": onB(intro("B", "h2", S, ef(C))),
+    "implies-elim": onB(elim(hyp("h"), ef(implies(A, C)))),
+    "and-intro": onB({ kind: "and-intro", left: ef(C), right: hyp("h") }),
+    "and-elim": onB({ kind: "and-elim", pair: ef(and(C, S)), side: "left" }),
+    "or-intro": onB({ kind: "or-intro", witness: ef(C), side: "left", other: S }),
+    "or-cover-intro": intro("K", "h", A, {
+      kind: "or-cover-intro",
+      boundary: "K",
+      left: C,
+      right: S,
+      cellProofs: [
+        { cell: "K1", proof: ef(C, "K1") },
+        { cell: "K2", proof: ef(S, "K2") },
+      ],
+    }),
+    "or-elim": onB(orElim(ef(or(C, C)), hyp("hl"), hyp("hr"))),
+    "cover-glue": intro("K", "h", A, {
+      kind: "cover-glue",
+      boundary: "K",
+      item: C,
+      cellProofs: [
+        { cell: "K1", proof: ef(C, "K1") },
+        { cell: "K2", proof: ef(C, "K2") },
+      ],
+    }),
+    "forall-intro": onB({ kind: "forall-intro", boundary: "B", variable: "x", domain: "H", eigenvar: "e1", templateBody: C, body: ef(C) }),
+    "forall-elim": onB({ kind: "forall-elim", universal: ef(U), term: "h1" }),
+    "exists-intro": onB({ kind: "exists-intro", witnessTerm: "h1", variable: "x", domain: "H", templateBody: r("x"), witnessProof: ef(r("h1")) }),
+    "exists-elim": onB({ kind: "exists-elim", existential: ef(X), witnessVar: "w1", assumptionId: "hw", body: ef(C) }),
+    "flip-intro": onB({ kind: "flip-elim", inner: { kind: "flip-intro", inner: ef(C) } }),
+    "flip-elim": onB({ kind: "flip-elim", inner: { kind: "flip-intro", inner: ef(C) } }),
+    "equiv-subst": onB({ kind: "equiv-subst", equivProof: live("B", EQ), targetProof: ef(rel("h1", "zz")), direction: "left-to-right" }),
+  };
+  for (const [kind, proof] of Object.entries(UNDER)) {
+    const e = given([o("+", "B", NB), o("+", "K1", NB), o("+", "K2", NB), o("+", "B", EQ)], { monotoneOnly: true });
+    const verified = verifyDerivation(e, proof, "UL-Intuitionistic");
+    assert.equal(verified.ok ? "accepted" : `${verified.violation}: ${verified.reason}`, "accepted", kind);
+    const admitted = admitVerifiedDerivation(e, proof, `thm_${kind}`, "UL-Intuitionistic");
+    assert.equal(admitted.ok ? "admitted" : admitted.violation, "mode-only-rule", kind);
+  }
 }
 
 test_every_proof_rule_accepts_its_proofs_and_rejects_each_near_miss();
 test("verifyDerivation checks the mode precondition before any rule", test_mode_precondition_comes_before_every_rule);
 test("admission records only what the checker accepts", test_admission_records_only_what_the_checker_accepts);
+test("admission finds ex-falso under every rule with premises", test_admission_finds_ex_falso_under_every_rule_with_premises);
