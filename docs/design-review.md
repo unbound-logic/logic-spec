@@ -67,7 +67,7 @@ Rules for `decided` entries:
 
 ## 7. Open Design Problems
 
-No Phase 1 (Layers 1–8) question remains open. The entries below were found on 2026-11-25 by a Claude Code audit of `spec/` against the reference kernel at commit `785b74e`, using read-only probes. Implementation entries state a reproduction, with an executable snippet for each under [Audit Reproductions](design-review.md#audit-reproductions); claim and governance entries cite the passages concerned. The maintainer ratified a resolution for each on 2026-11-25 (`decided`); each closes as `done` once the specification and kernel changes land. `audit-metatheorem-overclaim` closed as `done` on 2026-11-26. `audit-universal-existential-import` was found later, during the maintainer's review of the MT-9 proof at commit `7fd4c6d`, and was ratified on 2026-11-26 (`decided`). The entries from `audit-unverified-cover-authority` on were raised by an external review of commit `dfa0fb9` on 2026-11-27 and reproduced against the kernel at commit `2713cba` with read-only probes (`audit-terminology-drift` also records drift found while checking it). The maintainer ratified a resolution for each on 2026-11-28 (`decided`).
+No Phase 1 (Layers 1–8) question remains open. The entries below were found on 2026-11-25 by a Claude Code audit of `spec/` against the reference kernel at commit `785b74e`, using read-only probes. Implementation entries state a reproduction, with an executable snippet for each under [Audit Reproductions](design-review.md#audit-reproductions); claim and governance entries cite the passages concerned. The maintainer ratified a resolution for each on 2026-11-25 (`decided`); each closes as `done` once the specification and kernel changes land. `audit-metatheorem-overclaim` closed as `done` on 2026-11-26. `audit-universal-existential-import` was found later, during the maintainer's review of the MT-9 proof at commit `7fd4c6d`, and was ratified on 2026-11-26 (`decided`). The entries from `audit-unverified-cover-authority` on were raised by an external review of commit `dfa0fb9` on 2026-11-27 and reproduced against the kernel at commit `2713cba` with read-only probes (`audit-terminology-drift` also records drift found while checking it). The maintainer ratified a resolution for each on 2026-11-28 (`decided`). `audit-declare-monotone-revocation` and `audit-top-domain-quantifiers` were found on 2026-11-28 while closing `audit-evidence-label-integrity`, reproduced against the kernel at commit `ea8198d`, and ratified the same day (`decided`).
 
 | Key | Problem | Resolution | Status |
 | :--- | :--- | :--- | :--- |
@@ -93,10 +93,12 @@ No Phase 1 (Layers 1–8) question remains open. The entries below were found on
 | `audit-unexecuted-syntax` | **Stage-less reflection and recursive references have syntax but no evaluation.** `core.md` §1 items 2 and 3 admit stage-less `Refl_k(J)` and `ref(name)`. The kernel leaves stage-less reflection permanently `Open`, the proof checker refuses it, and `ref` is checked statically by `checkRecursiveDefinitionSystem` but unfolded nowhere. The specification should say which of them belong only to a formal layer and which execute, or give them evaluation rules. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 8). | **Decided (Norman, 2026-11-28).** Stage-less `Refl_k(J)` and `ref(name)` belong to the formal layer only: they are checked for well-formedness and stratification (the Curry firewall of §1 item 3) and receive no value in `UL-Core`, so they stay `Open`. §1 items 2 and 3 and the README say so. *Permits*: the syntax to keep its role in the Curry firewall without unused semantics. *Excludes*: reading them as evaluated items. *Rejected*: specifying finite unfolding or stage-less evaluation now (no ratified use, and it reopens self-reference risks). **Reopen if:** a ratified example needs a stage-less reflection or a recursive reference to carry a value. | done: [`core.md` §1](../spec/core.md#1-syntax-stratification--content-grammar) item 3, Formal-Layer Syntax (commit "spec: state reflection values by authority and the formal-layer syntax", commit "test: reflection values by authority and formal-layer syntax (R13)") |
 | `audit-oracle-readings-promotion` | **Load-bearing oracle readings exist only under `test/`.** The clean-room oracle records its readings A22–A39 of `core.md` §2 items 4, 5 and 7 and §5 item 14 in `test/oracle/AMBIGUITIES.md`, all `[Exploratory]`, and the kernel agrees with them on the differential suite. Under the process ruling of [`audit-spec-kernel-coupling`](design-review.md#audit-spec-kernel-coupling), a reading becomes specification only when written into `spec/`. Each reading needs a ruling, and the load-bearing ones need to be written into §2 and item 14 before v0.3.0. Raised by an external review of `dfa0fb9` (2026-11-27, pre-freeze checklist item 9). | **Decided (Norman, 2026-11-28).** Readings A22–A39 are ratified. Those that carry semantics are written into the specification: A28 and A29 (the shape and trigger of `OverlapUnknown`) into item 14; A31 and A35 (where an ambiguous meet is an error) into item 14 together with the kernel fix of `audit-eager-ambiguous-meet`; A32, A33 and A34 (a blocked base change owes nothing, the range of `B'`, the content of a cover obligation) into item 5; A37 and A39 are already there. A22–A27, A30, A36 and A38 describe the oracle's representation or follow from the text, and need no new text; A25's remark that domain monotonicity is not enforced is out of date (enforced since `2db33cd`) and is dropped. Under `audit-unverified-cover-authority`, the closure of A36 starts from valid covers only. *Permits*: a specification that holds every reading a result of `Π(Σ)` turns on. *Excludes*: semantics that live only under `test/`. *Rejected*: writing every reading into the specification (would put one implementation's representation choices into it). **Reopen if:** a reading kept out of the specification turns out to decide a result of `Π(Σ)`. | done: [`core.md` §2](../spec/core.md#2-boundary-algebra--inquiry-state-dynamics) item 5 and §5 item 14 (commit "spec: write ratified readings into items 5 and 14 and flag pending audits", commit "spec: state identifiers, refinement requests, freshness and needed meets") |
 | `audit-terminology-drift` | **Descriptive text lags the ratified semantics.** In `docs/glossary.md`, `Inference Quarantine` still cites source-SCC conflict locking instead of `Π(Σ)` and the two status axes, `Pure Cancellation (Retract)` omits `Withdraw`, `Boundary-Scoped Quantifiers` omits `CloseDomain`, and `Structural Anti-Immunization (M1)` lists M1(i)–(iii) without M1(iv) (external review, pre-freeze checklist item 10). In `core.md`, the Scoped Cut of §3 item 11 and the Meet Collision Corollary of item 9 still read the meet condition as `B₁ ⊓ B₂ ≠ ⊥_B`, where item 4 and item 14 now ask for a known overlap (found while checking the review). | **Decided (Norman, 2026-11-28).** Update the four glossary entries to the evaluation program `Π(Σ)` with the two status axes, `Withdraw`, `CloseDomain` and M1(iv), and make the meet conditions of §3 items 9 and 11 read "known to overlap", as items 4 and 14 do. *Permits*: descriptive text that agrees with the ratified items. *Excludes*: definitions that teach superseded mechanics. *Rejected*: deleting the glossary entries (they carry the terminology boundaries that AGENTS.md §2 item 3 asks to record). **Reopen if:** a descriptive passage again disagrees with a ratified item it describes. | done: [`core.md` §3](../spec/core.md#3-dual-polarity-semantics-provenance--derivation-calculus) items 9 and 11; [`glossary.md`](glossary.md) (commit "spec: write ratified readings into items 5 and 14 and flag pending audits", commit "docs: update four glossary entries to the ratified semantics") |
+| `audit-declare-monotone-revocation` | **Under `monotoneOnly`, a boundary edit can withdraw or disable a constraint that `Retract` and `Withdraw` may not touch.** `monotoneOnly` refuses `Retract` and `Withdraw` (`core.md` §4 item 13, "forbid `Retract` and `Withdraw`"), but `#syncBoundaries` in `src/engine.ts` stages every change of the boundary system as a `Declare` without checking what it removes. Three edits each lose a conclusion: `withdrawCover` on the boundary system removes a cover as `Withdraw` would; a new boundary below a cover's target, of unknown overlap with every cell, leaves the cover unverified; and a registered meet makes every boundary below both members of its pair refine it (item 4), which can give the meet, as a cover's target, such a new sub-boundary. In each case `T ⊩ P`, grounded through the cover, returns to `Open` in an engine created with `monotoneOnly`. Found on 2026-11-28 while closing `audit-evidence-label-integrity`, reproduced at commit `ea8198d`. Executable reproduction: R14 under [Audit Reproductions](design-review.md#audit-reproductions). | **Decided (Norman, 2026-11-28).** Under `monotoneOnly`, a `Declare` may only add to `Σ`. The kernel refuses to stage boundary edits that withdraw a registered cover, leave a cover witnessed at the current stage unwitnessed, or invalidate a closure ([`audit-top-domain-quantifiers`](design-review.md#audit-top-domain-quantifiers)); the error names the constraint, nothing is recorded, and the engine refuses every transition and evaluation until the boundary system restores it, for example by registering the cover again or by declaring structure that settles the new sub-boundary's overlap with a cell. A new `Collision` stays admitted, as after `Observe`, since `No-Gluts` governs it. *Permits*: `monotoneOnly` to mean that no constraint of `C_B` loses its standing, whichever route the change takes. *Excludes*: R14. *Rejected*: staging the edit and marking the inquiry as no longer monotone, so the closure checks of item 13 refuse it (the engine keeps running, but `monotoneOnly` guarantees nothing); refusing only `withdrawCover` and documenting the effect of new structure on cover validity as non-monotone (leaves two of the three reproductions). **Reopen if:** a `Declare` admitted under `monotoneOnly` removes a `Live` conclusion other than through a new `Collision`, or a refused `Declare` withdraws or invalidates nothing. | decided |
+| `audit-top-domain-quantifiers` | **Quantifiers over `⊤_B` range over no handle, so a closure of `⊤_B` grounds every universal over it.** Item 6 lets an observation on `⊤_B`, "which keeps no handle registry", name "the handles of every declared boundary", but `handlesOf(⊤_B)` in `src/boundary.ts` returns that empty registry, and the kernel and the oracle both enumerate a quantifier's instances through it. After `CloseDomain(⊤_B)`, `∀(x : ⊤_B) Q(x)` is `Grounded` with no witness, as over an empty domain, and stays `Grounded` beside a `Live` `−Q(h1)` on `⊤_B`, since no instance can serve as its counterexample. Item 7 states that a closure "anchors the handle set it witnessed and becomes invalid if `Dom(D)` changes", but the kernel records only the closed domain, so nothing would notice a change of `Dom(⊤_B)`, the one domain a `Declare` can change. Found on 2026-11-28 with [`audit-declare-monotone-revocation`](design-review.md#audit-declare-monotone-revocation), reproduced at commit `ea8198d`. Executable reproduction: R15 under [Audit Reproductions](design-review.md#audit-reproductions). | **Decided (Norman, 2026-11-28).** `Dom(⊤_B)` is the union of the domains of the declared boundaries, for quantifiers as for observations. A declared boundary's domain never changes, so `Dom(⊤_B)` is the only domain a transition changes: it grows when a `Declare` adds a boundary with a new handle. `CloseDomain(D)` records the handle set of `Dom(D)` it witnessed and gates enumeration only while `Dom(D)` equals that set; an invalid closure stays a constraint of `C_B` that `Withdraw` can name, and under `monotoneOnly` a `Declare` that invalidates one is refused. The kernel and the oracle both read `Dom(⊤_B)` through `handlesOf`. *Permits*: universals and existentials over the widest boundary, whose enumeration sees every handle an observation there may name. *Excludes*: R15. *Rejected*: refusing `⊤_B` as a quantifier or closure domain (loses quantification over the one boundary every observation may use). **Reopen if:** an observation on `⊤_B` may name a handle that a quantifier over `⊤_B` does not range over, or a closure gates enumeration over a handle set other than the one it witnessed. | decided |
 
 ### Audit Reproductions
 
-Each snippet reproduces the kernel behavior cited by an implementation entry above, at the commit that entry names (`785b74e` for R1–R3, `7fd4c6d` for R4, `2713cba` for R5–R13). Each is self-contained: save it as a `.ts` file in the repository root and run `node <file>.ts` with the Node version `npm test` uses (Node 22+ with type stripping). Every assertion records the current, defective behavior, so a snippet that starts failing means the behavior has changed.
+Each snippet reproduces the kernel behavior cited by an implementation entry above, at the commit that entry names (`785b74e` for R1–R3, `7fd4c6d` for R4, `2713cba` for R5–R13, `ea8198d` for R14–R15). Each is self-contained: save it as a `.ts` file in the repository root and run `node <file>.ts` with the Node version `npm test` uses (Node 22+ with type stripping). Every assertion records the current, defective behavior, so a snippet that starts failing means the behavior has changed.
 
 #### R1: M1 accepts a criterion that the excised counterexample satisfies
 
@@ -611,4 +613,71 @@ assert.equal(e.evaluateAtStage(t, [P]).authorityOf("B", "+", P), "Undetermined")
 e.observePositive("B", X, "later");
 const reflection = refl(1, "B", "+", P, t);
 assert.equal(e.evaluate([reflection]).localStatus("B", reflection), "Excluded"); // read as not Live
+```
+
+#### R14: Boundary edits under `monotoneOnly` withdraw or disable a cover
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom } from "./src/syntax.ts";
+
+const P = atom("P");
+function covered() {
+  const b = new BoundarySystem();
+  b.defineBoundary("T");
+  b.defineBoundary("C1", { parents: ["T"] });
+  b.defineBoundary("C2", { parents: ["T"] });
+  const e = new InquiryEngine(b, { monotoneOnly: true });
+  const id = e.witnessCover("T", ["C1", "C2"]);
+  e.observePositive("C1", P, "w1");
+  e.observePositive("C2", P, "w2");
+  assert.equal(e.evaluate([P]).localStatus("T", P), "Grounded"); // through the cover
+  return { b, e, id };
+}
+// Withdraw is refused, but withdrawing the cover on the boundary system is staged as a Declare.
+const one = covered();
+assert.throws(() => one.e.withdraw(one.id), /forbidden/);
+one.b.withdrawCover(one.id);
+assert.equal(one.e.evaluate([P]).localStatus("T", P), "Open");
+// A new sub-boundary of the target, of unknown overlap with both cells, leaves the cover unverified.
+const two = covered();
+two.b.defineBoundary("X", { parents: ["T"] });
+assert.equal(two.b.coverValidity(two.id).kind, "unverified");
+assert.equal(two.e.evaluate([P]).localStatus("T", P), "Open");
+// A registered meet makes X, below both A and Bb, refine M: the cover of M loses its witness.
+const b = new BoundarySystem();
+b.defineBoundary("A");
+b.defineBoundary("Bb");
+b.defineBoundary("M", { parents: ["A", "Bb"] });
+b.defineBoundary("C1", { parents: ["M"] });
+const e = new InquiryEngine(b, { monotoneOnly: true });
+e.witnessCover("M", ["C1"]);
+e.observePositive("C1", P, "w1");
+b.defineBoundary("X", { parents: ["A", "Bb"] });
+assert.equal(e.evaluate([P]).localStatus("M", P), "Grounded");
+b.defineMeet("A", "Bb", "M");
+assert.equal(e.evaluate([P]).localStatus("M", P), "Open");
+```
+
+#### R15: A closure of `⊤_B` grounds a universal over it with no witness and beside a counterexample
+
+```ts
+import assert from "node:assert/strict";
+import { BoundarySystem, TOP_BOUNDARY } from "./src/boundary.ts";
+import { InquiryEngine } from "./src/engine.ts";
+import { atom, forall } from "./src/syntax.ts";
+
+const h = (id: string) => ({ id, criterion: `I(${id})`, kind: "structural" as const });
+const Q = (x: string) => atom("Q", [{ role: "of", handle: x }]);
+const b = new BoundarySystem();
+b.defineBoundary("D", { handles: [h("h1")] });
+const e = new InquiryEngine(b);
+assert.deepEqual(b.handlesOf(TOP_BOUNDARY), []); // although observations on ⊤_B may name h1
+const all = forall("x", TOP_BOUNDARY, Q("x"));
+e.closeDomain(TOP_BOUNDARY);
+assert.equal(e.evaluate([all]).localStatus(TOP_BOUNDARY, all), "Grounded"); // no witness at all
+e.observeNegative(TOP_BOUNDARY, Q("h1"), "n1");
+assert.equal(e.evaluate([all]).localStatus(TOP_BOUNDARY, all), "Grounded"); // beside −Q(h1)
 ```
