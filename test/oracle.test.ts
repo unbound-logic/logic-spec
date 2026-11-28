@@ -974,8 +974,9 @@ function test_oracle_ambiguous_meet_is_an_error_where_needed(): void {
   assert.deepEqual(m.overlapObligations, []);
 
   // Registering the meet removes the ambiguity: the conflict collides on M, M1 and M2, and the
-  // known overlap of Lab and Field raises no obligation. M, M1 and M2 are pairwise of unknown
-  // overlap and each holds both records, so each of their pairs carries one (A29).
+  // known overlap of Lab and Field raises no obligation. The registered meet is the greatest lower
+  // bound (item 4 as amended in b5d5c5c), so M1 and M2 refine M: M1–M and M2–M are known
+  // overlaps, and only M1 and M2, each holding both records, carry an obligation (A29, A31).
   const resolvedSystem = ambiguous();
   resolvedSystem.defineBoundary("M", { parents: ["Lab", "Field"] });
   resolvedSystem.defineMeet("Lab", "Field", "M");
@@ -987,11 +988,7 @@ function test_oracle_ambiguous_meet_is_an_error_where_needed(): void {
     ],
   });
   assert.deepEqual(revisionKeys(resolved), [`M ${itemKey(P)}`, `M1 ${itemKey(P)}`, `M2 ${itemKey(P)}`]);
-  assert.deepEqual(overlapKeys(resolved), [
-    `M1 M2 ${itemKey(P)}`,
-    `M1 M ${itemKey(P)}`,
-    `M2 M ${itemKey(P)}`,
-  ]);
+  assert.deepEqual(overlapKeys(resolved), [`M1 M2 ${itemKey(P)}`]);
 }
 test("test_oracle_ambiguous_meet_is_an_error_where_needed", test_oracle_ambiguous_meet_is_an_error_where_needed);
 
@@ -1415,11 +1412,12 @@ test(
   test_oracle_derived_cover_composes_with_registered_covers,
 );
 
-function test_oracle_base_change_of_a_valid_cover_is_judged_too(): void {
-  // A39. {C1, C2} ▷ B is valid. Bp ⊑ B is disjoint from C2, and its meet with C1 is registered
-  // as M; Bpp ⊑ Bp meets C1 in N. The registry does not know that N ⊑ M, so Bpp and M have an
-  // unknown overlap. The base change {C1 ⊓ Bp} = {M} ▷ Bp is witnessed (unverified, but derived
-  // covers owe no obligation), and Cover-Gluing lifts +P from M to Bp.
+function test_oracle_base_change_through_a_registered_meet(): void {
+  // A39 as ruled. {C1, C2} ▷ B is valid. Bp ⊑ B is disjoint from C2, and its meet with C1 is
+  // registered as M; Bpp ⊑ Bp meets C1 in N. A registered meet is the greatest lower bound of its
+  // pair (item 4 as amended in b5d5c5c), and N refines both Bp and C1, so N ⊑ M: Bpp and M share
+  // N and are known to overlap. The base change {C1 ⊓ Bp} = {M} ▷ Bp is valid and witnessed, and
+  // Cover-Gluing lifts +P from M to Bp.
   const system = (): BoundarySystem => {
     const bs = twoCellCover();
     bs.defineBoundary("Bp", { parents: ["B"] });
@@ -1431,29 +1429,148 @@ function test_oracle_base_change_of_a_valid_cover_is_judged_too(): void {
     bs.registerCover("B", ["C1", "C2"], "cover-B");
     return bs;
   };
-  const observations = [{ boundary: "M", polarity: "+" as const, item: P }];
-  const derived = evaluatePi({ boundaries: system(), observations });
-  assert.deepEqual(derived.coverObligations, []);
-  assert.deepEqual(coversOf(derived, "Bp"), ["Bp", "M"]);
-  assert.deepEqual(coversOf(derived, "Bpp"), ["Bpp", "N"]);
-  expectRow(derived, "Bp", P, GROUNDED_LIVE);
-  expectRow(derived, "B", P, OPEN);
-
-  // The registry also admits declaring Bpp disjoint from M. The registered cover stays valid,
-  // but its base change {M} ▷ Bp is now refuted by Bpp: it is not derived, and +P stays on M.
-  const refuted = system();
-  refuted.declareDisjoint("Bpp", "M");
-  const m = evaluatePi({ boundaries: refuted, observations });
+  const bs = system();
+  // The oracle reads the inferred refinement through the boundary system's base query (A26).
+  assert.equal(bs.refines("N", "M"), true);
+  // +R on M and -R on Bpp meet on N, which lies below both, instead of facing each other across an
+  // unknown overlap: N collides, obstructing M and Bpp, and no pair has an unknown overlap.
+  const R = atom("R");
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      { boundary: "M", polarity: "+", item: P },
+      { boundary: "M", polarity: "+", item: R },
+      { boundary: "Bpp", polarity: "-", item: R },
+    ],
+  });
   assert.deepEqual(m.coverObligations, []);
-  assert.deepEqual(coversOf(m, "Bp"), ["Bp"]);
+  assert.deepEqual(coversOf(m, "Bp"), ["Bp", "M"]);
   assert.deepEqual(coversOf(m, "Bpp"), ["Bpp", "N"]);
-  expectRow(m, "M", P, GROUNDED_LIVE);
-  expectRow(m, "Bp", P, OPEN);
+  expectRow(m, "Bp", P, GROUNDED_LIVE);
+  expectRow(m, "B", P, OPEN);
+
+  expectRow(m, "N", R, {
+    rec: ["true", "true"],
+    live: ["false", "false"],
+    coll: "true",
+    obs: "true",
+    status: "Collision",
+    authority: ["Quarantined", "Quarantined"],
+    rev: true,
+  });
+  expectRow(m, "M", R, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  expectRow(m, "Bpp", R, {
+    rec: ["false", "true"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Excluded",
+    authority: [null, "Quarantined"],
+    rev: false,
+  });
+  // M's +R is Quarantined, so {M} ▷ Bp glues nothing of R onto Bp.
+  expectRow(m, "Bp", R, { ...OPEN, obs: "true" });
+  assert.deepEqual(revisionKeys(m), [`N ${itemKey(R)}`]);
+  assert.deepEqual(m.overlapObligations, []);
+
+  // At 1fcab3b the registry accepted declaring Bpp disjoint from M, which refuted {M} ▷ Bp; Bpp
+  // and M now share N, so that declaration is refused and the state of the original A39 cannot
+  // be built.
+  assert.throws(() => system().declareDisjoint("Bpp", "M"));
 }
-test(
-  "test_oracle_base_change_of_a_valid_cover_is_judged_too",
-  test_oracle_base_change_of_a_valid_cover_is_judged_too,
-);
+test("test_oracle_base_change_through_a_registered_meet", test_oracle_base_change_through_a_registered_meet);
+
+function test_oracle_registered_meet_settles_an_ambiguity(): void {
+  // A31, A39. M1 and M2 are two maximal common sub-boundaries of Lab and Field, so their meet is
+  // ambiguous, and Scoped Cut, which needs it once U(Σ, Q) holds an implication, is an error.
+  const bs = labAndField();
+  bs.defineBoundary("M1", { parents: ["Lab", "Field"] });
+  bs.defineBoundary("M2", { parents: ["Lab", "Field"] });
+  const cut = [
+    { boundary: "Lab", polarity: "+" as const, item: A },
+    { boundary: "Field", polarity: "+" as const, item: implies(A, C) },
+  ];
+  const ambiguity = /Scoped Cut needs the meet of "Lab" and "Field", which is ambiguous/;
+  assert.throws(() => evaluatePi({ boundaries: bs, observations: cut }), ambiguity);
+
+  // A third common sub-boundary M is one more maximal candidate and settles nothing.
+  bs.defineBoundary("M", { parents: ["Lab", "Field"] });
+  assert.equal(bs.refines("M1", "M"), false);
+  assert.throws(() => evaluatePi({ boundaries: bs, observations: cut }), ambiguity);
+
+  // Registering M as the meet settles the ambiguity, and as the greatest lower bound it lies above
+  // the earlier maximal common sub-boundaries: M1 ⊑ M and M2 ⊑ M (item 4 as amended in b5d5c5c).
+  bs.defineMeet("Lab", "Field", "M");
+  assert.equal(bs.refines("M1", "M"), true);
+  assert.equal(bs.refines("M2", "M"), true);
+  const R = atom("R");
+  const m = evaluatePi({
+    boundaries: bs,
+    observations: [
+      ...cut,
+      { boundary: "M", polarity: "-", item: Q },
+      { boundary: "M", polarity: "+", item: R },
+      { boundary: "M1", polarity: "-", item: R },
+    ],
+  });
+  assert.deepEqual(m.boundaries, [TOP_BOUNDARY, "Lab", "Field", "M1", "M2", "M"]);
+
+  // Scoped Cut fires at Lab ⊓ Field = M, and M1, M2 inherit +C from M.
+  for (const b of ["M", "M1", "M2"]) {
+    expectRow(m, b, C, GROUNDED_LIVE);
+  }
+  for (const b of [TOP_BOUNDARY, "Lab", "Field"]) {
+    expectRow(m, b, C, OPEN);
+  }
+  // A record on M descends to M1 and M2.
+  for (const b of ["M", "M1", "M2"]) {
+    expectRow(m, b, Q, EXCLUDED_LIVE);
+  }
+  expectRow(m, "Lab", Q, OPEN);
+  // A collision on M1 obstructs M: M's +R and the +R M2 inherits are Quarantined.
+  expectRow(m, "M1", R, {
+    rec: ["true", "true"],
+    live: ["false", "false"],
+    coll: "true",
+    obs: "true",
+    status: "Collision",
+    authority: ["Quarantined", "Quarantined"],
+    rev: true,
+  });
+  expectRow(m, "M", R, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "true",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  expectRow(m, "M2", R, {
+    rec: ["true", "false"],
+    live: ["false", "false"],
+    coll: "false",
+    obs: "false",
+    status: "Grounded",
+    authority: ["Quarantined", null],
+    rev: false,
+  });
+  for (const b of [TOP_BOUNDARY, "Lab", "Field"]) {
+    expectRow(m, b, R, { ...OPEN, obs: "true" });
+  }
+  assert.deepEqual(revisionKeys(m), [`M1 ${itemKey(R)}`]);
+  // M1 and M2 are the only pair of unknown overlap; M1's -R faces M2's +R across it.
+  assert.deepEqual(overlapKeys(m), [`M1 M2 ${itemKey(R)}`]);
+}
+test("test_oracle_registered_meet_settles_an_ambiguity", test_oracle_registered_meet_settles_an_ambiguity);
 
 function test_oracle_cover_needs_an_ambiguous_meet_only_where_it_decides(): void {
   // A35. M1 and M2 are two maximal common sub-boundaries of B3 and C1, so their meet is

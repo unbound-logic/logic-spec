@@ -32,7 +32,9 @@
  * Axioms 2–4, with a cell of unknown overlap blocking a base change, and reads Withdraw as
  * leaving a constraint out of the state while its items stay tracked (A33–A38). Since main
  * commit fe2b5cf (main at 826deb0), a derived cover is judged by the same rule and is not derived
- * when it is invalid (A37, A39).
+ * when it is invalid (A37). Item 4 as amended in b5d5c5c makes a registered meet the greatest
+ * lower bound of its pair; the oracle reads the inferred refinements through refines and
+ * meetStatus, so its code is unchanged by it (A26, A39).
  */
 
 import { BOT_BOUNDARY, type BoundarySystem, type MeetStatus } from "../../src/boundary.ts";
@@ -598,7 +600,8 @@ export function evaluatePi(state: PiState): PiModel {
   }
   /**
    * A37: a derived cover, from Transitivity or a base change, joins the closure unless item 5's
-   * rule judges it invalid; this holds for covers derived from valid registered covers too (A39).
+   * rule judges it invalid, whatever its source; item 5's sentence that covers derived from valid
+   * registered covers are valid is not relied on (A39).
    * Admission never needs an ambiguous meet, since an ambiguous pair never refutes (A35).
    */
   const admitDerived = (target: number, cells: readonly number[]): boolean => {
