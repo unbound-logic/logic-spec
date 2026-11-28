@@ -426,7 +426,7 @@ function test_coreference_multi_granularity_and_anti_equivocation(): void {
   );
 }
 
-function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
+function test_retract_is_pure_cancellation_and_vertically_non_commutative(): void {
   // Part A: Pure Cancellation Retract returns to Open without fabricating opposite polarity
   const b0 = new BoundarySystem();
   b0.defineBoundary("B", { handles: [{ id: "planet_x", criterion: "I(planet_x)", kind: "contingent" }] });
@@ -462,7 +462,9 @@ function test_inquiry_updates_retract_non_commutativity_and_m1_m2(): void {
   const snapRein = eRein.evaluate();
   assert.equal(snapRein.localStatus("B", planet), "Grounded");
   assert.equal(snapRein.isLive("B", "+", planet), true);
+}
 
+function test_m1_m2_admit_structural_singularities_and_refuse_contingent_excision(): void {
   // Part B: worked-examples §2 Case 2A — ℝ \ {0} passes M1 + M2
   const bMath = new BoundarySystem();
   bMath.defineBoundary("R", {
@@ -828,7 +830,7 @@ function test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_struc
   }
 }
 
-function test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency(): void {
+function test_semilattice_consistency_of_meets_disjointness_and_definitions(): void {
   // 1. Semilattice consistency checks between defineMeet / declareDisjoint / defineBoundary
   const bSem = new BoundarySystem();
   bSem.defineBoundary("A");
@@ -862,8 +864,30 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   assert.throws(() => bSem4.defineBoundary("U1V1", { parents: ["U1", "V1"] }), /disjoint/i);
   assert.equal(bSem4.meet("U1", "V1"), BOT_BOUNDARY);
   assert.equal(bSem4.overlaps("U1", "V1"), false);
+}
 
-  // 2. ≈_B reflexivity, symmetry, transitivity + engine-side ∀E + domainConstraint + Live-gated ∃I
+function test_congruence_laws_on_native_relations(): void {
+  const b = new BoundarySystem();
+  b.defineBoundary("D", {
+    nativeRelations: ["P", "Q", "Delta"],
+    handles: [
+      { id: "t1", criterion: "I(t1)", kind: "structural" },
+      { id: "t2", criterion: "I(t2)", kind: "structural" },
+      { id: "t3", criterion: "I(t3)", kind: "structural" },
+    ],
+  });
+  const e = new InquiryEngine(b);
+
+  // ≈_B laws
+  e.observePositive("D", equiv("D", "t1", "t2"), "w_12");
+  e.observePositive("D", equiv("D", "t2", "t3"), "w_23");
+  const snapEq = e.evaluate([equiv("D", "t1", "t1"), equiv("D", "t2", "t1"), equiv("D", "t1", "t3")]);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t1")), true);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t2", "t1")), true);
+  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t3")), true);
+}
+
+function test_engine_forall_elim_domain_constraint_and_live_exists_intro(): void {
   const b = new BoundarySystem();
   b.defineBoundary("D", {
     nativeRelations: ["P", "Q", "Delta"],
@@ -877,14 +901,6 @@ function test_core_engine_congruence_forall_elim_domain_constraint_and_semilatti
   const p = (h: string) => atom("P", [{ role: "arg", handle: h }]);
   const q = (h: string) => atom("Q", [{ role: "arg", handle: h }]);
   const delta = (h: string) => atom("Delta", [{ role: "arg", handle: h }]);
-
-  // ≈_B laws
-  e.observePositive("D", equiv("D", "t1", "t2"), "w_12");
-  e.observePositive("D", equiv("D", "t2", "t3"), "w_23");
-  const snapEq = e.evaluate([equiv("D", "t1", "t1"), equiv("D", "t2", "t1"), equiv("D", "t1", "t3")]);
-  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t1")), true);
-  assert.equal(snapEq.isLive("D", "+", equiv("D", "t2", "t1")), true);
-  assert.equal(snapEq.isLive("D", "+", equiv("D", "t1", "t3")), true);
 
   // Engine-side ∀E
   e.observePositive("D", forall("x", "D", p("x")), "w_all_p");
@@ -1481,12 +1497,12 @@ function test_withdraw_cancels_constraints_purely(): void {
 test("boundary meet-semilattice and non-witnessing bottom", test_boundary_meet_semilattice_and_non_witnessing_bottom);
 test("finitary Grothendieck covers meet-stability and non-vacuity", test_finitary_grothendieck_covers_meet_stability_and_non_vacuity);
 test("co-reference multi-granularity isolation and anti-equivocation", test_coreference_multi_granularity_and_anti_equivocation);
-test("inquiry updates retract non-commutativity and M1/M2", test_inquiry_updates_retract_non_commutativity_and_m1_m2);
+test("Retract is pure cancellation and vertically non-commutative", test_retract_is_pure_cancellation_and_vertically_non_commutative);
+test("M1 and M2 admit structural singularities and refuse contingent excision", test_m1_m2_admit_structural_singularities_and_refuse_contingent_excision);
 test("M1(iii) excess content blocks disguised proxies and preserves structural singularities", test_m1_iii_excess_content_blocks_disguised_proxies_and_preserves_structural_singularities);
-test(
-  "core engine congruence forall-elim domainConstraint and semilattice consistency",
-  test_core_engine_congruence_forall_elim_domain_constraint_and_semilattice_consistency,
-);
+test("semilattice consistency of meets, disjointness and definitions", test_semilattice_consistency_of_meets_disjointness_and_definitions);
+test("congruence laws on native relations", test_congruence_laws_on_native_relations);
+test("engine forall-elim, domain constraint and Live exists-intro", test_engine_forall_elim_domain_constraint_and_live_exists_intro);
 test("domain monotonicity rejects sub-boundary handles", test_domain_monotonicity_rejects_sub_boundary_handles);
 test("CloseDomain gates enumerative quantifiers", test_close_domain_gates_enumerative_quantifiers);
 test("M1 binding rejects criteria not shown to exclude excised handles", test_m1_binding_rejects_criteria_not_shown_to_exclude_excised_handles);

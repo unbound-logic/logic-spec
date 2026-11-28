@@ -87,8 +87,8 @@ function theoremLive(e: InquiryEngine, theoremId: string, boundary: string, item
     .some((g) => g.provenance.kind === "derived" && g.provenance.rule === "theorem" && g.provenance.baseLeaves.includes(`@thm:${theoremId}`));
 }
 
-function test_recorded_theorems_follow_their_dependencies(): void {
-  // audit-theorem-dependency-gaps (R7).
+function test_recorded_theorem_holds_only_while_its_cover_is_witnessed(): void {
+  // audit-theorem-dependency-gaps (R7, a).
   const P = atom("P");
   const Q = atom("Q");
   const PQ = or(P, Q);
@@ -129,7 +129,12 @@ function test_recorded_theorems_follow_their_dependencies(): void {
   refuted.b.declareDisjoint("B3", "C1");
   refuted.b.declareDisjoint("B3", "C2");
   assert.equal(theoremLive(refuted.e, "thm", "B", PQ), false);
+}
 
+function test_recorded_theorem_authority_ignores_observation_order(): void {
+  // audit-theorem-dependency-gaps (R7, b).
+  const P = atom("P");
+  const Q = atom("Q");
   // (b) live-ground cites the slot's authority, so two observations of P react to Retract of one of
   // them alike in either order; a base observation the proof names is a dependency of its own.
   const run = (order: readonly string[], named?: string): string => {
@@ -154,7 +159,10 @@ function test_recorded_theorems_follow_their_dependencies(): void {
   assert.equal(run(["w2", "w1"]), "Grounded");
   assert.equal(run(["w1", "w2"], "w1"), "Open");
   assert.equal(run(["w2", "w1"], "w1"), "Open");
+}
 
+function test_ex_falso_derivations_are_not_admitted(): void {
+  // audit-theorem-dependency-gaps (R7, c).
   // (c) An ex-falso derivation is verified under UL-Intuitionistic but not admitted, so later
   // growth that breaks No-Gluts leaves an excluded C excluded.
   const A = atom("A");
@@ -1362,5 +1370,7 @@ test(
   test_deduction_quantifier_domain_constraint_enforcement,
 );
 test("eigenvariable freshness and one-position congruence", test_eigenvariable_freshness_and_one_position_congruence);
-test("recorded theorems follow their dependencies", test_recorded_theorems_follow_their_dependencies);
+test("recorded theorem holds only while its cover is witnessed", test_recorded_theorem_holds_only_while_its_cover_is_witnessed);
+test("recorded theorem authority ignores observation order", test_recorded_theorem_authority_ignores_observation_order);
+test("ex-falso derivations are not admitted", test_ex_falso_derivations_are_not_admitted);
 test("fuzz recorded theorem dependency soundness (MT-8b)", test_fuzz_recorded_theorem_dependency_soundness);
