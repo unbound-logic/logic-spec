@@ -151,6 +151,12 @@ export type RefinementObligation = {
   readonly criterionKey: string;
 };
 
+/** A cover a recorded theorem's derivation uses: the theorem holds only while it is witnessed. */
+export type CoverDependency = {
+  readonly boundary: string;
+  readonly cells: readonly string[];
+};
+
 export type GroundDependency = {
   readonly boundary: string;
   readonly polarity: Polarity;
@@ -434,6 +440,7 @@ type RecordedTheorem = {
   readonly item: Item;
   readonly requiredBaseIds: readonly string[];
   readonly requiredGrounds: readonly GroundDependency[];
+  readonly requiredCovers: readonly CoverDependency[];
 };
 
 type StructuralCollapse = { readonly id: string; readonly boundary: string; readonly item: Item };
@@ -537,6 +544,7 @@ export class InquiryEngine {
     theoremId: string,
     requiredBaseIds: readonly string[] = [],
     requiredGrounds: readonly GroundDependency[] = [],
+    requiredCovers: readonly CoverDependency[] = [],
   ): void {
     if (boundary === BOT_BOUNDARY) {
       throw new Error(
@@ -566,6 +574,7 @@ export class InquiryEngine {
       item,
       requiredBaseIds: [...requiredBaseIds],
       requiredGrounds: [...requiredGrounds],
+      requiredCovers: requiredCovers.map((c) => ({ boundary: c.boundary, cells: [...c.cells] })),
     });
     this.#stage += 1;
     this.#history.push(`Σ${this.#stage}:Theorem${polarity}(${boundary}, ${itemKey(item)}, ${theoremId})`);
@@ -1567,8 +1576,12 @@ function evaluatePi(input: PiInput): PiReport {
     });
   }
 
-  // Theorem: record premises are the base records it requires, Live premises the grounds.
+  // Theorem: record premises are the base records it requires, Live premises the grounds; it fires
+  // only while every cover its derivation used is witnessed (core.md §5 item 14).
   for (const thm of input.theorems) {
+    if (!thm.requiredCovers.every((c) => input.bounds.isWitnessedCover(c.boundary, c.cells))) {
+      continue;
+    }
     const prems: (Prem | undefined)[] = [];
     let complete = true;
     for (const baseId of thm.requiredBaseIds) {

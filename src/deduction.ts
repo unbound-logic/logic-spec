@@ -8,7 +8,7 @@
  */
 
 import { BOT_BOUNDARY, type BoundarySystem } from "./boundary.ts";
-import { type EvaluationSnapshot, type GroundDependency, type InquiryEngine } from "./engine.ts";
+import { type CoverDependency, type EvaluationSnapshot, type GroundDependency, type InquiryEngine } from "./engine.ts";
 import {
   and,
   collectAllIdentifiers,
@@ -44,6 +44,7 @@ export type ProofViolation =
   | "non-native-relation"
   | "stratification-violation"
   | "ex-falso-disallowed"
+  | "mode-only-rule"
   | "open-assumptions";
 
 export type ProofNode =
@@ -52,6 +53,8 @@ export type ProofNode =
       readonly boundary: string;
       readonly polarity: Polarity;
       readonly item: Item;
+      /** A base observation the proof cites by name; otherwise only the slot's authority counts. */
+      readonly baseId?: string;
     }
   | { readonly kind: "assume"; readonly assumptionId: string; readonly boundary: string }
   | { readonly kind: "weaken-boundary"; readonly proof: ProofNode; readonly toBoundary: string }
@@ -149,6 +152,8 @@ export type DerivationResult =
       readonly item: Item;
       readonly requiredBaseIds: readonly string[];
       readonly requiredGrounds: readonly GroundDependency[];
+      /** The covers the derivation uses (or-cover-intro, cover-glue); set by verifyDerivation. */
+      readonly requiredCovers?: readonly CoverDependency[];
     }
   | { readonly ok: false; readonly violation: ProofViolation; readonly reason: string };
 
@@ -252,11 +257,20 @@ function verifyRoot(
             reason: `Ground (${node.boundary} ⊩${node.polarity} ${itemKey(node.item)}) is absent or quarantined.`,
           };
         }
+        // The slot's authority is required, not the leaves of whichever entry came first, so the
+        // theorem does not depend on the order of observations (core.md §3 item 11). A base
+        // observation counts only when the proof names it.
         let requiredBaseIds: readonly string[] = [];
-        if (entry.provenance.kind === "base") {
-          requiredBaseIds = [entry.provenance.baseId];
-        } else if (entry.provenance.kind === "derived") {
-          requiredBaseIds = entry.provenance.baseLeaves.filter((l) => !l.startsWith("@"));
+        if (node.baseId !== undefined) {
+          const named = live.some((e) => e.provenance.kind === "base" && e.provenance.baseId === node.baseId);
+          if (!named) {
+            return {
+              ok: false,
+              violation: "ground-not-live",
+              reason: `Base observation "${node.baseId}" is not a Live witness of (${node.boundary} ⊩${node.polarity} ${itemKey(node.item)}).`,
+            };
+          }
+          requiredBaseIds = [node.baseId];
         }
         return {
           ok: true,
@@ -1332,7 +1346,47 @@ export function verifyDerivation(
     }
   }
   const stateHandles = engine.mentionedHandles();
-  return verifyRoot(engine, snapshot, stateHandles, mode, proof);
+  const res = verifyRoot(engine, snapshot, stateHandles, mode, proof);
+  return res.ok ? { ...res, requiredCovers: coversUsed(proof) } : res;
+}
+
+const PROOF_KINDS = new Set<string>([
+  "live-ground", "assume", "weaken-boundary", "implies-intro", "implies-elim", "and-intro", "and-elim",
+  "or-intro", "or-cover-intro", "or-elim", "cover-glue", "forall-intro", "forall-elim", "exists-intro",
+  "exists-elim", "flip-intro", "flip-elim", "equiv-refl", "equiv-subst", "refl-intro", "ex-falso-bottom",
+]);
+
+/** Every proof node of `proof`, depth first. */
+function proofNodes(proof: ProofNode): ProofNode[] {
+  const out: ProofNode[] = [];
+  const visit = (node: ProofNode): void => {
+    out.push(node);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const el of value) {
+          if (el !== null && typeof el === "object" && "proof" in el) {
+            visit((el as { readonly proof: ProofNode }).proof);
+          }
+        }
+      } else if (value !== null && typeof value === "object" && PROOF_KINDS.has((value as { kind?: unknown }).kind as string)) {
+        visit(value as ProofNode);
+      }
+    }
+  };
+  visit(proof);
+  return out;
+}
+
+/** The covers a derivation uses, each once. */
+function coversUsed(proof: ProofNode): readonly CoverDependency[] {
+  const seen = new Map<string, CoverDependency>();
+  for (const node of proofNodes(proof)) {
+    if (node.kind === "or-cover-intro" || node.kind === "cover-glue") {
+      const cells = [...new Set(node.cellProofs.map((cp) => cp.cell))].sort();
+      seen.set(`${node.boundary}\0${cells.join("\0")}`, { boundary: node.boundary, cells });
+    }
+  }
+  return [...seen.values()];
 }
 
 /**
@@ -1346,15 +1400,26 @@ export function admitVerifiedDerivation(
   mode: DeductionMode = "UL-Core",
 ): DerivationResult {
   const res = verifyDerivation(engine, proof, mode);
-  if (res.ok) {
-    engine.recordTheorem(
-      res.boundary,
-      res.polarity,
-      res.item,
-      theoremId,
-      res.requiredBaseIds,
-      res.requiredGrounds,
-    );
+  if (!res.ok) {
+    return res;
   }
+  // Ex falso lies outside UL-Core (core.md §3 item 10): a UL-Intuitionistic result that uses it is
+  // verified but not admitted into Σ, whose later growth could break No-Gluts.
+  if (proofNodes(proof).some((node) => node.kind === "ex-falso-bottom")) {
+    return {
+      ok: false,
+      violation: "mode-only-rule",
+      reason: "The derivation uses ex-falso-bottom, which lies outside UL-Core; it is verified but not admitted into Σ.",
+    };
+  }
+  engine.recordTheorem(
+    res.boundary,
+    res.polarity,
+    res.item,
+    theoremId,
+    res.requiredBaseIds,
+    res.requiredGrounds,
+    res.requiredCovers ?? [],
+  );
   return res;
 }
