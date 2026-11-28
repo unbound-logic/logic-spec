@@ -1,8 +1,8 @@
 ---
 title: Unbound Logic Core Specification (UL-Core)
-version: 0.2.0
+version: 0.3.0
 status: active
-date: 2026-11-25
+date: 2026-11-28
 ---
 
 # Unbound Logic Core Specification (`UL-Core`)

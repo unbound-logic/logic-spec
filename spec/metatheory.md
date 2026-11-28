@@ -1,13 +1,13 @@
 ---
 title: UL-Core Formal Metatheory & Open Proof-Theoretic Boundaries
-version: 0.2.0
+version: 0.3.0
 status: active
-date: 2026-11-25
+date: 2026-11-28
 ---
 
 # Formal Metatheory & Open Proof-Theoretic Boundaries (`UL-Core`)
 
-This document formalizes the metatheoretic invariants of [core.md](core.md) (`v0.2.0`) and [worked-examples.md](worked-examples.md), and labels each result on the claim status ladder of [AGENTS.md](../AGENTS.md) §2 item 5: a `Tested` result is exercised by bound tests but not proved, a `Decided` result is ratified but not yet met by the reference kernel, and an `Exploratory` result is open.
+This document formalizes the metatheoretic invariants of [core.md](core.md) (`v0.3.0`) and [worked-examples.md](worked-examples.md), and labels each result on the claim status ladder of [AGENTS.md](../AGENTS.md) §2 item 5: a `Tested` result is exercised by bound tests but not proved, a `Decided` result is ratified but not yet met by the reference kernel, and an `Exploratory` result is open.
 
 MT-9 is `Proved`: the maintainer approved its written proof on 2026-11-26 and, the same day, approved its revision for the closure conditions of [`audit-universal-existential-import`](../docs/design-review.md#audit-universal-existential-import). No other result is `Proved`; the proof sketches elsewhere are sketches, not proofs.
 

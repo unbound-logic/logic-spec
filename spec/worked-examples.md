@@ -1,8 +1,8 @@
 ---
 title: UL-Core Worked Derivations & Adversarial Stress-Tests
-version: 0.2.0
+version: 0.3.0
 status: active
-date: 2026-11-25
+date: 2026-11-28
 ---
 
 # Worked Derivations & Adversarial Stress-Tests (`UL-Core`)
