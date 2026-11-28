@@ -11,7 +11,7 @@
  * model; they explain records and never decide them.
  */
 
-import { BOT_BOUNDARY, BoundarySystem, type MeetStatus } from "./boundary.ts";
+import { BOT_BOUNDARY, BoundarySystem, TOP_BOUNDARY, type MeetStatus } from "./boundary.ts";
 import {
   and,
   atom,
@@ -1223,6 +1223,18 @@ export class InquiryEngine {
           `Anti-Equivocation violation: handle "${handleAuth.handle}" with criterion "${handleAuth.criterion}" is not admissible in "${boundary}".`,
         );
       }
+    }
+    // Observe± is many-sorted (core.md §2 item 6): every handle the item names belongs to Dom(B).
+    // ⊤_B keeps no handle registry and admits the handles of every declared boundary.
+    const domain =
+      boundary === TOP_BOUNDARY
+        ? new Set(this.boundaries.nonEmptyBoundaries().flatMap((b) => this.boundaries.handlesOf(b).map((h) => h.id)))
+        : new Set(this.boundaries.handlesOf(boundary).map((h) => h.id));
+    const foreign = [...collectHandles(item)].find((h) => !domain.has(h));
+    if (foreign !== undefined) {
+      throw new Error(
+        `Many-sorted observation: handle "${foreign}" of ${itemKey(item)} is not in Dom("${boundary}") (core.md §2 item 6).`,
+      );
     }
     this.#track(item);
     const key = itemKey(item);
