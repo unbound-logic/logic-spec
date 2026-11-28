@@ -146,9 +146,13 @@ function test_ambiguous_meets_are_errors_only_where_needed(): void {
   const quiet = new InquiryEngine(lab());
   quiet.observePositive("Lab", P, "w");
   assert.equal(quiet.evaluate().localStatus("M1", P), "Grounded"); // no rule needs Lab ⊓ Field
+  // Scoped Cut needs Lab ⊓ Field only when an instance over the pair can fire: a queried conditional
+  // that holds nowhere needs nothing, a Live conditional on Field does.
   const cut = new InquiryEngine(lab());
   cut.observePositive("Lab", P, "w");
-  assert.throws(() => cut.evaluate([implies(P, atom("C"))]), /Scoped Cut needs the meet of/);
+  assert.equal(cut.evaluate([implies(P, atom("C"))]).localStatus("Lab", P), "Grounded");
+  cut.observePositive("Field", implies(P, atom("C")), "wc");
+  assert.throws(() => cut.evaluate(), /Scoped Cut needs the meet of/);
   const crossed = new InquiryEngine(lab());
   crossed.observePositive("Lab", P, "w");
   crossed.observeNegative("Field", P, "nw");
@@ -212,6 +216,32 @@ function test_m1_refuses_mistargeted_and_empty_refinements(): void {
   assert.equal(split("Swan_Rest", "White", "Lake").ok, true);
 }
 
+function test_unverified_cover_keeps_no_gluts_query_conservative(): void {
+  // audit-unverified-cover-authority (R5): an unverified cover witnesses nothing, so querying P ∨ Q
+  // no longer creates a collision that Q = ∅ does not have.
+  const b = new BoundarySystem();
+  b.defineBoundary("B");
+  b.defineBoundary("C1", { parents: ["B"] });
+  b.defineBoundary("C2", { parents: ["B"] });
+  b.declareDisjoint("C1", "C2");
+  b.defineBoundary("B3", { parents: ["B"] });
+  const e = new InquiryEngine(b);
+  e.witnessCover("B", ["C1", "C2"]);
+  const P = atom("P");
+  const Q = atom("Q");
+  e.observePositive("C1", P, "p1");
+  e.observePositive("C2", Q, "q2");
+  e.observeNegative("B3", P, "np3");
+  e.observeNegative("B3", Q, "nq3");
+  const plain = e.evaluate();
+  const queried = e.evaluate([or(P, Q)]);
+  assert.equal(plain.coverObligations()[0]?.validity, "unverified");
+  assert.equal(plain.isCollisionFree(), true);
+  assert.equal(queried.isCollisionFree(), true);
+  assert.equal(queried.localStatus("B", or(P, Q)), "Open");
+  assert.equal(queried.localStatus("B3", or(P, Q)), "Excluded");
+}
+
 function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): void {
   const b = new BoundarySystem();
   b.defineBoundary("Z");
@@ -226,8 +256,13 @@ function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): voi
   b.defineBoundary("PosEven", { parents: ["Pos", "Even"] });
   b.defineBoundary("PosOdd", { parents: ["Pos", "Odd"] });
   b.declareDisjoint("PosEven", "PosOdd");
+  // NonPos meets both cells too, so the cover is valid (item 5): no sub-boundary of Z leaves it
+  // unsettled.
+  b.defineBoundary("NonPosEven", { parents: ["NonPos", "Even"] });
+  b.defineBoundary("NonPosOdd", { parents: ["NonPos", "Odd"] });
 
-  b.registerCover("Z", ["Even", "Odd"]);
+  const zCover = b.registerCover("Z", ["Even", "Odd"]);
+  assert.deepEqual(b.coverValidity(zCover), { kind: "valid" });
 
   // Axiom 1 (Refinement): cell outside target rejected
   assert.throws(() => b.registerCover("Pos", ["Odd"]), /Refinement violation/);
@@ -242,13 +277,20 @@ function test_finitary_grothendieck_covers_meet_stability_and_non_vacuity(): voi
 
   // Axiom 3 (Meet-Stability): {Even, Odd} ▷ Z pulls back along Pos ⊑ Z to {PosEven, PosOdd} ▷ Pos
   assert.equal(b.isWitnessedCover("Pos", ["PosEven", "PosOdd"]), true);
+  assert.equal(b.isWitnessedCover("NonPos", ["NonPosEven", "NonPosOdd"]), true);
 
   // Axiom 4 (Transitivity): refine Even into [EvenZero, EvenNonZero] and verify composed cover of Z
-  b.defineBoundary("EvenZero", { parents: ["Even"] });
-  b.defineBoundary("EvenNonZero", { parents: ["Even"] });
-  b.declareDisjoint("EvenZero", "EvenNonZero");
-  b.registerCover("Even", ["EvenZero", "EvenNonZero"]);
-  assert.equal(b.isWitnessedCover("Z", ["EvenZero", "EvenNonZero", "Odd"]), true);
+  const t = new BoundarySystem();
+  t.defineBoundary("Z");
+  t.defineBoundary("Even", { parents: ["Z"] });
+  t.defineBoundary("Odd", { parents: ["Z"] });
+  t.declareDisjoint("Even", "Odd");
+  t.defineBoundary("EvenZero", { parents: ["Even"] });
+  t.defineBoundary("EvenNonZero", { parents: ["Even"] });
+  t.declareDisjoint("EvenZero", "EvenNonZero");
+  t.registerCover("Z", ["Even", "Odd"]);
+  t.registerCover("Even", ["EvenZero", "EvenNonZero"]);
+  assert.equal(t.isWitnessedCover("Z", ["EvenZero", "EvenNonZero", "Odd"]), true);
 
   // Axiom 3 across an unknown overlap: Odd may hold part of X, so {Even, Odd} ▷ Z has no base change to X.
   const u = new BoundarySystem();
@@ -1221,8 +1263,8 @@ function test_cover_revalidation_marks_invalid_and_unverified_covers(): void {
   }
   assert.deepEqual(otherSnap.coverObligations(), snap.coverObligations());
 
-  // Unverified: B4 ⊑ B has an unknown overlap with both cells. The cover still witnesses, owes an
-  // obligation, and is left out when only verified covers are asked for.
+  // Unverified: B4 ⊑ B has an unknown overlap with both cells. The cover witnesses nothing until that
+  // overlap is settled, and owes an obligation naming B4.
   const u = new BoundarySystem();
   u.defineBoundary("B");
   u.defineBoundary("C1", { parents: ["B"] });
@@ -1232,24 +1274,26 @@ function test_cover_revalidation_marks_invalid_and_unverified_covers(): void {
   eu.witnessCover("B", ["C1", "C2"], "cov");
   u.defineBoundary("B4", { parents: ["B"] });
   assert.deepEqual(u.coverValidity("cov"), { kind: "unverified", witnesses: ["B4"] });
-  assert.equal(u.isWitnessedCover("B", ["C1", "C2"]), true);
-  assert.equal(u.isWitnessedCover("B", ["C1", "C2"], { verifiedOnly: true }), false);
+  assert.equal(u.isWitnessedCover("B", ["C1", "C2"]), false);
   eu.observePositive("C1", P, "p1");
   eu.observePositive("C2", Q, "q2");
   snap = eu.evaluate([PQ]);
-  assert.equal(snap.localStatus("B", PQ), "Grounded");
+  assert.equal(snap.localStatus("B", PQ), "Open");
   assert.deepEqual(
     snap.coverObligations().map((o) => [o.coverId, o.validity, o.witnesses]),
     [["cov", "unverified", ["B4"]]],
   );
-  // A registered common sub-boundary of B4 and C2 settles the overlap, and the cover is valid.
+  // A registered common sub-boundary of B4 and C2 settles the overlap: the cover is valid and witnesses.
   u.defineBoundary("B4C2", { parents: ["B4", "C2"] });
   assert.deepEqual(u.coverValidity("cov"), { kind: "valid" });
-  assert.deepEqual(eu.evaluate([PQ]).coverObligations(), []);
+  assert.equal(u.isWitnessedCover("B", ["C1", "C2"]), true);
+  snap = eu.evaluate([PQ]);
+  assert.deepEqual(snap.coverObligations(), []);
+  assert.equal(snap.localStatus("B", PQ), "Grounded");
 
-  // A derived cover is judged as a registered one is: {C1, C2} ▷ B is unverified and {D1} ▷ C1 is
-  // valid, but X refutes their composite {D1, C2} ▷ B, which is therefore not derived, and no base
-  // change to X comes out empty. The unverified source already names X in its obligation.
+  // The unverified {C1, C2} ▷ B witnesses nothing, so neither it nor its composite {D1, C2} ▷ B with the
+  // valid {D1} ▷ C1 (which X would refute) is witnessed, and no base change to X comes out empty. The
+  // unverified cover names X in its obligation.
   const t = new BoundarySystem();
   t.defineBoundary("B");
   t.defineBoundary("C1", { parents: ["B"] });
@@ -1263,7 +1307,7 @@ function test_cover_revalidation_marks_invalid_and_unverified_covers(): void {
   const inner = t.registerCover("C1", ["D1"]);
   assert.deepEqual(t.coverValidity(outer), { kind: "unverified", witnesses: ["X"] });
   assert.deepEqual(t.coverValidity(inner), { kind: "valid" });
-  assert.equal(t.isWitnessedCover("B", ["C1", "C2"]), true);
+  assert.equal(t.isWitnessedCover("B", ["C1", "C2"]), false);
   assert.equal(t.isWitnessedCover("C1", ["D1"]), true);
   assert.equal(t.isWitnessedCover("B", ["D1", "C2"]), false);
   assert.deepEqual(t.witnessedCoversOf("X"), [["X"]]);
@@ -1367,3 +1411,4 @@ test("registered meet is the greatest lower bound", test_registered_meet_is_the_
 test("identifiers are unique for the life of an inquiry", test_identifiers_are_unique_for_the_life_of_an_inquiry);
 test("ambiguous meets are errors only where needed", test_ambiguous_meets_are_errors_only_where_needed);
 test("M1 refuses mistargeted and empty refinements", test_m1_refuses_mistargeted_and_empty_refinements);
+test("unverified cover keeps No-Gluts query-conservative", test_unverified_cover_keeps_no_gluts_query_conservative);

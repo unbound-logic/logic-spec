@@ -16,7 +16,8 @@
  * status, the authority of each polarity, obstruction and the revision obligations; on the
  * OverlapUnknown and cover obligations; and on the ⊆-minimal witnessed covers of every boundary.
  * Where a meet the program needs is ambiguous, both must report an error (core.md §5 item 14,
- * Role); where no rule needs it, both must evaluate.
+ * Role); where no rule needs it, both must evaluate. When every handle the items name belongs to a
+ * domain, the kernel must also be query-conservative (item 14).
  * Recorded theorems and reflection values are not generated, since the oracle omits those two
  * rows (AMBIGUITIES.md A15).
  *
@@ -155,6 +156,49 @@ type RandomState = {
 
 function handleSpec(id: string): HandleSpec {
   return { id, criterion: `I(${id})`, kind: "structural" };
+}
+
+/** The handles an item names outside the quantifiers that bind them. */
+function freeHandles(item: Item, bound: ReadonlySet<string>, out: Set<string>): void {
+  switch (item.kind) {
+    case "atom":
+      for (const r of item.roles) {
+        if (!bound.has(r.handle)) {
+          out.add(r.handle);
+        }
+      }
+      return;
+    case "equiv":
+      for (const h of [item.left, item.right]) {
+        if (!bound.has(h)) {
+          out.add(h);
+        }
+      }
+      return;
+    case "flip":
+      freeHandles(item.inner, bound, out);
+      return;
+    case "and":
+    case "or":
+      freeHandles(item.left, bound, out);
+      freeHandles(item.right, bound, out);
+      return;
+    case "implies":
+      freeHandles(item.antecedent, bound, out);
+      freeHandles(item.consequent, bound, out);
+      return;
+    case "forall":
+    case "exists": {
+      const inner = new Set(bound).add(item.variable);
+      freeHandles(item.body, inner, out);
+      if (item.domainConstraint !== undefined) {
+        freeHandles(item.domainConstraint, inner, out);
+      }
+      return;
+    }
+    default:
+      return;
+  }
 }
 
 /** Build a random state through the kernel's inquiry transitions, recording it for the oracle. */
@@ -429,6 +473,7 @@ type Coverage = {
   allValidCoverStates: number;
   ambiguousErrors: number;
   ambiguousEvaluated: number;
+  queryConservative: number;
 };
 
 /** Assert kernel/oracle agreement on one state and accumulate what it exercised. */
@@ -466,6 +511,36 @@ function compareState(state: RandomState, ctx: string, coverage: Coverage): void
   }
   const snap = kernel.value as ReturnType<InquiryEngine["evaluate"]>;
   const model = oracle.value as ReturnType<typeof evaluatePi>;
+
+  // Query conservativity (core.md §5 item 14): when every handle the items name belongs to a domain
+  // of 𝔅(Σ), the queried items add slots and change neither the local status nor the authority of
+  // any slot of U(Σ, ∅), nor No-Gluts.
+  const named = new Set<string>();
+  const items = [
+    ...state.observations.map((o) => o.item),
+    ...state.incompatibilities.flatMap((c) => [c.left, c.right]),
+    ...state.collapses.map((c) => c.item),
+    ...state.historyItems,
+    ...state.queries,
+  ];
+  for (const it of items) {
+    freeHandles(it, new Set(), named);
+  }
+  const domains = new Set(state.boundaries.nonEmptyBoundaries().flatMap((b) => state.boundaries.handlesOf(b).map((h) => h.id)));
+  if ([...named].every((h) => domains.has(h))) {
+    const plain = state.engine.evaluate();
+    for (const item of plain.universe()) {
+      for (const b of model.boundaries) {
+        const where = `${ctx} query conservativity at (${b}, ${itemKey(item)})`;
+        assert.equal(snap.localStatus(b, item), plain.localStatus(b, item), `${where} local status`);
+        for (const p of ["+", "-"] as const) {
+          assert.equal(snap.authorityOf(b, p, item), plain.authorityOf(b, p, item), `${where} authority ${p}`);
+        }
+      }
+    }
+    assert.equal(snap.isCollisionFree(), plain.isCollisionFree(), `${ctx} query conservativity of No-Gluts`);
+    coverage.queryConservative += 1;
+  }
   if (state.ambiguous) {
     coverage.ambiguousEvaluated += 1;
   }
@@ -599,6 +674,7 @@ function runSuite(suiteId: number, name: string, defaultCount: number, profile: 
     allValidCoverStates: 0,
     ambiguousErrors: 0,
     ambiguousEvaluated: 0,
+    queryConservative: 0,
   };
   const { seeds, replay } = suiteSeeds(suiteId, defaultCount);
   for (const seed of seeds) {
@@ -624,6 +700,7 @@ function test_differential_general_states(): void {
     assert.ok(coverage.allValidCoverStates > 0, "[suite=general] some state has only valid registered covers");
     assert.ok(coverage.ambiguousEvaluated > 0, "[suite=general] some state with an ambiguous meet evaluates");
     assert.ok(coverage.ambiguousErrors > 0, "[suite=general] some state needs an ambiguous meet");
+    assert.ok(coverage.queryConservative > 0, "[suite=general] some state is checked for query conservativity");
   }
 }
 

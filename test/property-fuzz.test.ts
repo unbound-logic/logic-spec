@@ -323,16 +323,20 @@ function test_fuzz_semilattice_and_finitary_covers(): void {
     bs.defineBoundary(cLeftB, { parents: [cLeft] });
     bs.declareDisjoint(cLeftA, cLeftB);
 
-    bs.registerCover(target, [cLeft, cRight]);
-    bs.registerCover(cLeft, [cLeftA, cLeftB]);
-
+    const outer = bs.registerCover(target, [cLeft, cRight]);
+    const inner = bs.registerCover(cLeft, [cLeftA, cLeftB]);
+    // Only a valid cover witnesses (item 5): other sub-boundaries of target may leave the outer
+    // cover unverified or refute it.
+    const outerValid = bs.coverValidity(outer).kind === "valid";
+    const innerValid = bs.coverValidity(inner).kind === "valid";
+    assert.equal(bs.isWitnessedCover(target, [cLeft, cRight]), outerValid, `${ctx} only a valid cover witnesses`);
     assert.equal(
       bs.isWitnessedCover(target, [cLeftA, cLeftB, cRight]),
-      true,
+      outerValid && innerValid,
       `${ctx} Axiom 4 Transitivity`,
     );
 
-    for (const sub of bs.nonEmptySubBoundaries(target)) {
+    for (const sub of outerValid ? bs.nonEmptySubBoundaries(target) : []) {
       const statuses = [cLeft, cRight].map((cell) => bs.meetStatus(cell, sub));
       if (statuses.some((st) => st.kind === "unknown")) {
         // A cell of unknown overlap with sub may cover part of it: no cover of sub is derived.
