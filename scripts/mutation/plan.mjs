@@ -1,9 +1,9 @@
 // The plan of a kernel mutation run (.github/workflows/mutation.yml). It lists every mutant with
 // Stryker's own instrumenter, keeps those of the run's scope, sizes the number of shards from the
-// time the tests take once without a mutant, deals the mutants to the shards in pieces that keep
-// each shard's count near the mean, and checks, by instrumenting each shard's share as the shard
-// will, that every mutant of the scope lies in exactly one shard. Rules: `mutation-triage-and-
-// sharding` in docs/design-review.md.
+// time the tests take without a mutant as a shard runs them, deals the mutants to the shards in
+// pieces that keep each shard's count near the mean, and checks, by instrumenting each shard's
+// share as the shard will, that every mutant of the scope lies in exactly one shard. Rules:
+// `mutation-triage-and-sharding` in docs/design-review.md.
 //
 //   node scripts/mutation/plan.mjs --scope full|diff|list [--base REF] [--mutate PATTERNS]
 //        --seconds N --concurrency N --out DIR [--shards N]
@@ -11,8 +11,9 @@
 // --scope full takes every mutant; diff, the mutants that span a line of src/ changed between
 // --base (by default the latest v* tag reachable from HEAD) and HEAD; list, the mutants that
 // --mutate's Stryker patterns select (a file, or file:startLine[:startColumn]-endLine[:endColumn]).
-// --seconds is the time the test command took once without a mutant, --concurrency the mutants a
-// shard runs at once; --shards overrides the count the time gives. It writes plan.json, one
+// --concurrency is the number of mutants a shard runs at once, and --seconds the time the test
+// command took without a mutant when run that many times at once, which is what a mutant no test
+// catches costs in a shard; --shards overrides the count the time gives. It writes plan.json, one
 // shard-K.json and shard-K.mutate a shard, and summary.md into DIR, and prints the workflow's
 // outputs.
 
@@ -22,6 +23,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import {
   MAX_SHARDS,
+  PIECE_LIMIT,
   SHARD_IGNORE_REASON,
   SHARD_MINUTES,
   changedLines,
@@ -138,24 +140,13 @@ const planned = active.filter(inScope);
 const plannedIgnored = ignored.filter(inScope);
 
 // The shards the baseline's time needs: each mutant is taken to run every test, as one that no test
-// catches does, and a shard runs `concurrency` mutants at once.
+// catches does, `concurrency` at once, each taking the time the tests took so.
 const needed = planned.length === 0 ? 0 : Math.ceil((planned.length * seconds) / (concurrency * SHARD_MINUTES * 60));
 const wanted = planned.length === 0 ? 0 : Math.min(MAX_SHARDS, Math.max(1, forced ?? needed));
 
-// The pieces: of all the largest sizes a unit may take, the one whose dealing leaves the fullest
-// shard least full, and of those the largest.
-let best;
-if (wanted > 0) {
-  for (let limit = 1; ; limit *= 2) {
-    const list = pieces(active, inScope, limit);
-    const count = Math.min(wanted, list.length);
-    const dealt = dealPieces(list, count);
-    const fullest = Math.max(...dealt.map((s) => s.size));
-    if (!best || fullest <= best.fullest) best = { limit, list, count, dealt, fullest };
-    if (limit >= planned.length) break;
-  }
-}
-const shards = best ? best.dealt : [];
+// The pieces, dealt in source order to the shards.
+const list = wanted > 0 ? pieces(active, inScope, PIECE_LIMIT) : [];
+const shards = wanted > 0 ? dealPieces(list, Math.min(wanted, list.length)) : [];
 const shares = shards.map((s, k) => share(k, s));
 
 // Every planned mutant in exactly one shard, as the pieces say, and as each shard's own run of the
@@ -200,7 +191,7 @@ const plan = {
   shardMinutes: SHARD_MINUTES,
   needed,
   shards: shards.length,
-  limit: best?.limit ?? null,
+  pieceLimit: PIECE_LIMIT,
   mutants: planned.map((m) => ({ ...strip(m), shard: shardOf.get(mutantKey(m)) })),
   ignored: plannedIgnored.map((m) => ({ ...strip(m), reason: m.reason })),
 };
@@ -211,18 +202,20 @@ for (const s of shares) {
 }
 
 const sizes = shards.map((s) => s.size);
-const trees = best ? best.list.filter((p) => p.kind === "tree").length : 0;
+const trees = list.filter((p) => p.kind === "tree");
 const summary = [
   "## Mutation plan",
   "",
   `Scope: ${scope}, ${described}.`,
   "",
   `- Mutants: ${planned.length} to run, ${plannedIgnored.length} ignored by a comment with its reason.`,
-  `- Tests once without a mutant: ${seconds} s; ${concurrency} mutants at once in a shard.`,
+  `- Tests without a mutant, ${concurrency} at once as a shard runs them: ${seconds} s.`,
   planned.length === 0
     ? "- Shards: none, since the scope holds no mutant."
     : `- Shards: ${shards.length} (the time needs ${needed} of ${SHARD_MINUTES} minutes at most, if no test caught any mutant; at most ${MAX_SHARDS}${forced ? `; ${forced} asked for` : ""}).`,
-  planned.length === 0 ? "" : `- Mutants a shard: ${Math.min(...sizes)} to ${Math.max(...sizes)}, in ${best.list.length} pieces of at most ${best.limit} within one location, ${trees} of them the locations too large to deal whole.`,
+  planned.length === 0
+    ? ""
+    : `- Mutants a shard: ${Math.min(...sizes)} to ${Math.max(...sizes)}, dealt in source order in ${list.length} pieces: ${list.length - trees.length} of at most ${PIECE_LIMIT} mutants within one node, and ${trees.length} holding the own mutants of nodes too large to deal whole (${trees.reduce((n, p) => n + p.mutants.length, 0)} mutant(s)).`,
   "",
 ].join("\n");
 fs.writeFileSync(path.join(out, "summary.md"), summary);

@@ -13,9 +13,10 @@ name: mutation
 #   `// Stryker disable next-line <Mutator>: <reason>` comment.
 # - list: the mutants within `mutate`'s Stryker patterns, for a rerun after a change of tests alone.
 #
-# The plan job lists the mutants with Stryker's own instrumenter, times the tests once without a
-# mutant, and deals the mutants to as many shards as that time needs at 30 minutes each, at most 16,
-# so that each shard's count of mutants stays near the mean (scripts/mutation/plan.mjs). Each shard
+# The plan job lists the mutants with Stryker's own instrumenter, times the tests without a mutant
+# as a shard runs them, four at once, and deals the mutants to as many shards as that time needs at
+# 30 minutes each, at most 16, so that each shard's count of mutants stays near the mean
+# (scripts/mutation/plan.mjs). Each shard
 # runs exactly its share; the report job merges the shards and checks them against the plan
 # (scripts/mutation/report.mjs).
 
@@ -62,14 +63,25 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Run the tests once without a mutant, and time them
+      - name: Run the tests without a mutant, and time them as a shard runs them
         id: baseline
-        # The command every mutant runs, timed by the shell: what a mutant no test catches costs.
+        # The command every mutant runs: once alone, for each file's time, then CONCURRENCY times at
+        # once, timed by the shell, which is what a mutant no test catches costs in a shard. A run
+        # alone took 4 to 8 s on these runners; four at once take longer than one.
         run: |
-          start=$(date +%s%N)
           node scripts/mutation/run-tests.mjs --times="$RUNNER_TEMP/times.txt"
-          echo "seconds=$(( ($(date +%s%N) - start + 999999999) / 1000000000 ))" >> "$GITHUB_OUTPUT"
-          { echo "## Tests without a mutant"; echo '```text'; cat "$RUNNER_TEMP/times.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          start=$(date +%s%N)
+          pids=()
+          for k in $(seq 1 "$CONCURRENCY"); do
+            node scripts/mutation/run-tests.mjs > "$RUNNER_TEMP/baseline-$k.log" 2>&1 &
+            pids+=($!)
+          done
+          for k in "${!pids[@]}"; do
+            wait "${pids[$k]}" || { cat "$RUNNER_TEMP/baseline-$((k + 1)).log"; echo "::error::the tests failed without a mutant"; exit 1; }
+          done
+          seconds=$(( ($(date +%s%N) - start + 999999999) / 1000000000 ))
+          echo "seconds=$seconds" >> "$GITHUB_OUTPUT"
+          { echo "## Tests without a mutant"; echo '```text'; cat "$RUNNER_TEMP/times.txt"; echo "$CONCURRENCY at once: $seconds s"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Deal the mutants to the shards the time needs
         id: plan
         env:

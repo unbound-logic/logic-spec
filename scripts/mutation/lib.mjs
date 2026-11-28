@@ -17,6 +17,13 @@ export const SHARD_FILE_ENV = "MUTATION_SHARD_FILE";
 export const MAX_SHARDS = 16;
 /** The time the plan gives one shard's mutants, in minutes. */
 export const SHARD_MINUTES = 30;
+/**
+ * The most mutants a piece dealt whole may hold. Small pieces dealt in source order spread every
+ * region of the kernel over the shards: the mutants of some functions cost far more than others,
+ * and run 46172125302 dealt evaluatePi's 1,180 mutants whole to one shard, which ran longest.
+ * Pieces of 16 keep the nodes too large to deal whole to about 200 mutants of the full run.
+ */
+export const PIECE_LIMIT = 16;
 /** The files Stryker mutates, as stryker.config.json must list them. */
 export const MUTATE_PATTERNS = ["src/**/*.ts"];
 /** Stryker 10's mutator names, which a disable comment may name. */
@@ -314,12 +321,13 @@ function touching(a, b) {
 }
 
 /**
- * The run's pieces dealt to `count` shards, largest first to the shard with the fewest mutants so
- * far, so that each shard's count of mutants stays near the mean.
+ * The run's pieces dealt to `count` shards in source order, each to the shard with the fewest
+ * mutants so far: each shard's count stays within a piece of the mean, and neighbouring pieces, and
+ * so each region of the kernel, go to different shards.
  */
 export function dealPieces(list, count) {
   const shards = Array.from({ length: count }, () => ({ pieces: [], size: 0 }));
-  const order = [...list].sort((a, b) => b.mutants.length - a.mutants.length || locKey(a.root).localeCompare(locKey(b.root)));
+  const order = [...list].sort((a, b) => a.root.file.localeCompare(b.root.file) || a.root.sl - b.root.sl || a.root.sc - b.root.sc || b.root.el - a.root.el || b.root.ec - a.root.ec);
   for (const piece of order) {
     let target = shards[0];
     for (const s of shards) if (s.size < target.size) target = s;
