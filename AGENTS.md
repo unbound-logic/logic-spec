@@ -26,6 +26,8 @@ This repository is the living specification (`logic-spec`) under the `unbound-lo
 
    Definitions top out at `[Tested]`, since a definition has nothing to prove. Never silently treat an exploratory remark as a settled axiom or specification rule, and never present a named test as a proof.
 
+   Every claim carries a stable identifier at the start of its title: `CORE-n` in `spec/core.md`, `MT-n` in `spec/metatheory.md`, `WE-n` in `spec/worked-examples.md`. An identifier never changes when items are reordered or relabelled, and a new claim takes the next free number; cite claims by identifier rather than by position. Each `@assert-count` binding names a test that exercises its claim; a test that bundles separate parts for different claims is split along those parts.
+
 ## 3. Language Split
 
 - **Language Split**:
