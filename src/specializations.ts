@@ -167,29 +167,30 @@ export function evaluateClassicalSpecialization(
     return { ok: false, reason: "UL-Classical requires No-Gluts (zero collisions)." };
   }
 
-  // (C3): an atomic cover that is valid (resting on no unverified cover, item 5) and whose cells
-  // have known overlaps with one another (item 4).
+  // (C3): a witnessed atomic cover, hence valid (item 5), whose cells have known overlaps with one
+  // another (item 4).
   const bounds = engine.boundaries;
-  const atomicCovers = (verifiedOnly: boolean): readonly (readonly string[])[] =>
-    bounds
-      .witnessedCoversOf(boundary, { verifiedOnly })
-      .filter((cover) => cover.length > 0 && cover.every((c) => bounds.isAtomic(c)));
+  const witnessed = bounds
+    .witnessedCoversOf(boundary)
+    .filter((cover) => cover.length > 0 && cover.every((c) => bounds.isAtomic(c)));
   const settled = (cover: readonly string[]): boolean =>
     cover.every((a, i) => cover.slice(i + 1).every((b) => bounds.meetStatus(a, b).kind !== "unknown"));
-  const verified = atomicCovers(true);
-  const atomicCover = verified.find(settled);
+  const atomicCover = witnessed.find(settled);
 
   if (atomicCover === undefined) {
-    if (verified.length > 0) {
+    if (witnessed.length > 0) {
       return {
         ok: false,
         reason: `UL-Classical (C3) requires an atomic cover of "${boundary}" whose cells have known overlaps; register their disjointness.`,
       };
     }
-    if (atomicCovers(false).length > 0) {
+    const unverified = bounds
+      .registeredCovers()
+      .find((c) => c.target === boundary && bounds.coverValidity(c.id).kind === "unverified");
+    if (unverified !== undefined) {
       return {
         ok: false,
-        reason: `UL-Classical (C3) requires a valid cover; every atomic cover of "${boundary}" rests on an unverified cover.`,
+        reason: `UL-Classical (C3) requires a valid cover; the cover "${unverified.id}" of "${boundary}" is unverified and witnesses nothing.`,
       };
     }
     return {

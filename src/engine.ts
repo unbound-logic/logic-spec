@@ -1442,6 +1442,8 @@ function evaluatePi(input: PiInput): PiReport {
   const MEET_UNKNOWN = -3;
   const meetTable = new Int32Array(nb * nb);
   const meetErrors = new Map<number, string>();
+  // Scoped Cut instances over an ambiguous pair, left out of the program until shown needed.
+  const ambiguousCuts: { readonly key: number; readonly antecedent: number; readonly conditional: number }[] = [];
   for (let b1 = 0; b1 < nb; b1++) {
     for (let b2 = 0; b2 < nb; b2++) {
       const n1 = boundaries[b1] ?? BOT_BOUNDARY;
@@ -1465,15 +1467,6 @@ function evaluatePi(input: PiInput): PiReport {
             ? MEET_UNKNOWN
             : MEET_BOTTOM;
     }
-  }
-
-  // Scoped Cut needs the meet of every pair of 𝔅(Σ) once U(Σ, Q) holds an implication (item 14,
-  // Role), so an ambiguous pair is then an error; otherwise no rule consults it.
-  if (meetErrors.size > 0 && universe.some((it) => it.kind === "implies")) {
-    const [key, message] = [...meetErrors.entries()][0] as [number, string];
-    throw new Error(
-      `Π(Σ): Scoped Cut needs the meet of "${boundaries[Math.floor(key / nb)]}" and "${boundaries[key % nb]}", which is ambiguous (${message}).`,
-    );
   }
 
   // The witnessed covers of item 5.
@@ -1728,7 +1721,14 @@ function evaluatePi(input: PiInput): PiReport {
               continue;
             }
             if (m === MEET_AMBIGUOUS) {
-              continue; // unreachable: an ambiguous pair with an implication is reported above
+              if (antecedent !== undefined) {
+                ambiguousCuts.push({
+                  key: b1 * nb + b2,
+                  antecedent: slotOf(b1, antecedent),
+                  conditional: slotOf(b2, a),
+                });
+              }
+              continue;
             }
             emit(m, "+", consequent, [lv(b1, "+", antecedent), lv(b2, "+", a)], { rule: "mp" });
           }
@@ -2037,6 +2037,20 @@ function evaluatePi(input: PiInput): PiReport {
     obs: new Uint8Array(nS),
   };
   let over = gamma(under.obs);
+
+  // A Scoped Cut instance over an ambiguous pair needs the meet when its Live premises are true in
+  // the least model read with every obs atom false and without such instances (item 14, Role):
+  // otherwise it can never fire, and its conclusion boundary decides nothing.
+  for (const cut of ambiguousCuts) {
+    if (
+      over.truth[liveAtom("+", cut.antecedent)] === 1 &&
+      over.truth[liveAtom("+", cut.conditional)] === 1
+    ) {
+      throw new Error(
+        `Π(Σ): Scoped Cut needs the meet of "${boundaryOf(cut.antecedent)}" and "${boundaryOf(cut.conditional)}", which is ambiguous (${meetErrors.get(cut.key) ?? "ambiguous meet"}).`,
+      );
+    }
+  }
 
   const sameTruth = (x: Uint8Array, y: Uint8Array): boolean => {
     for (let i = 0; i < x.length; i++) {
