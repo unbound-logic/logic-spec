@@ -264,3 +264,4 @@ The maintainer ruled on every reading after the differential comparison with the
 - Ambiguity: the last sentence used to end the bullet that begins "`(B, A)` is in `Collision` when `coll(B, A)` is true or undefined in `M`"; the amendment inserted the new bullet before it, so "Otherwise" and "its" now have no antecedent.
 - Reading: the sentence still continues the `Collision` bullet, as before `e869e9b` (G4b, A21): a slot that is not in `Collision` is `Grounded`, `Excluded` or `Open` according to its present records. The oracle's code is unchanged. Reported to the maintainer as a text defect.
 - Alternative: none that gives the sentence a meaning where it now stands.
+- Status: item 14 as corrected on `b1-unverified` returns the sentence to the end of the `Collision` bullet and makes Query conservativity the last Reporting bullet, which is the reading recorded here; nothing is left to read.
